@@ -305,7 +305,7 @@ console.log('Sessions use worktrees');
 
 ---
 
-## 🧪 Testing Guidelines
+## 🧪 Testing & Hooks Guidelines
 
 ### Manual Testing
 
@@ -326,6 +326,12 @@ s9n-devops-agent start
 # Verify file coordination works
 # Close session successfully
 ```
+
+### Working with Husky / commit hooks
+
+- DevOps Agent commits *always* go through your local hooks (Husky, commitlint, lint-staged); the worker does not add `--no-verify`.
+- If a hook fails, rerun the same commands locally (for example `npm run validate`, `npm run type-check`, or project-specific scripts) and fix the issues before retrying.
+- In multi-agent setups, projects can optionally enforce declared edits in pre-commit by wiring a helper like `scripts/git-hooks/check-file-coordination.sh` into `.husky/pre-commit` in the target repo.
 
 ### Visual Testing
 

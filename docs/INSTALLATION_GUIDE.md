@@ -180,6 +180,14 @@ export AC_DEBUG=true
 
 ## CI/CD Setup
 
+### Using DevOps Agent in repositories with Husky/commit hooks
+
+Many teams already enforce quality via Husky, commitlint, and lint-staged. DevOps Agent is designed to work *with* those hooks, not around them:
+
+- Commits created by the worker run through your existing hooks because `git commit` is invoked without `--no-verify`.
+- When a hook fails, fix the underlying issue using your project’s commands (for example `npm run validate`, `npm run type-check`, Prisma migration scripts, etc.) and then let the worker retry.
+- For repositories that also use file-coordination, you can optionally add a pre-commit step that enforces declared edits by calling the FileCoordinator CLI via a helper script (see `scripts/git-hooks/check-file-coordination.sh` for a template that downstream repos can copy and wire into `.husky/pre-commit`).
+
 ### Automatic Setup in CI
 
 The DevOps Agent detects CI environments and auto-configures:

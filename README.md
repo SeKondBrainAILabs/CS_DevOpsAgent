@@ -121,6 +121,14 @@ s9n-devops-agent create --task ui --agent cursor
 - Git repository
 - Any AI assistant (Claude, Cursor, Copilot, Cline, etc.)
 
+## Working with Husky and git hooks
+
+DevOps Agent **never** bypasses your local git hooks:
+
+- `git commit` is invoked without `--no-verify`, so Husky, commitlint, and lint-staged all run as usual.
+- If a hook fails (lint, type-checks, Prisma rules, etc.), fix the reported issues (for example with `npm run validate` or your project’s documented commands) and then let DevOps Agent commit again.
+- Do not disable hooks (e.g., `HUSKY=0`, `--no-verify`) for work that is intended to be merged; the design assumes hooks are part of your safety net, for both humans and AI agents.
+
 ## Documentation
 
 📖 **Getting Started**
