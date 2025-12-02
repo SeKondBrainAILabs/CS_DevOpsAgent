@@ -1,0 +1,346 @@
+{
+  "contract_version": "1.0.0",
+  "last_updated": "2024-12-02",
+  "updated_by": "DevOps Agent",
+  "description": "SQL Contract - Stores all reusable SQL queries, their parameters, and module dependencies. Coding agents MUST check this before writing new SQL to reuse existing queries.",
+  "changelog": [
+    {
+      "date": "2024-12-02",
+      "version": "1.0.0",
+      "author": "DevOps Agent",
+      "changes": "Initial template creation",
+      "impact": "N/A - Template only"
+    }
+  ],
+  "queries": {
+    "example_get_user_by_email": {
+      "id": "example_get_user_by_email",
+      "name": "Get User By Email",
+      "description": "Retrieves a single user record by email address",
+      "created_date": "2024-01-15",
+      "last_modified": "2024-01-15",
+      "category": "user_management",
+      "sql": "SELECT id, email, username, is_active, created_at FROM users WHERE email = $1 AND is_active = true",
+      "database": "main",
+      "operation_type": "SELECT",
+      "parameters": [
+        {
+          "name": "email",
+          "type": "string",
+          "required": true,
+          "description": "User email address to search for",
+          "validation": "Must be valid email format",
+          "example": "user@example.com"
+        }
+      ],
+      "returns": {
+        "type": "single_row",
+        "columns": [
+          {
+            "name": "id",
+            "type": "integer",
+            "description": "User ID"
+          },
+          {
+            "name": "email",
+            "type": "string",
+            "description": "User email"
+          },
+          {
+            "name": "username",
+            "type": "string",
+            "description": "Username"
+          },
+          {
+            "name": "is_active",
+            "type": "boolean",
+            "description": "Account active status"
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp",
+            "description": "Account creation timestamp"
+          }
+        ]
+      },
+      "used_by_modules": [
+        {
+          "module": "auth-service",
+          "file": "src/auth/login.js",
+          "function": "authenticateUser",
+          "usage": "User lookup during login"
+        },
+        {
+          "module": "user-profile-api",
+          "file": "src/api/users.js",
+          "function": "getUserProfile",
+          "usage": "Profile retrieval endpoint"
+        }
+      ],
+      "depends_on_tables": [
+        "users"
+      ],
+      "performance_notes": "Uses idx_users_email index. Average execution time: 2ms",
+      "security_notes": "Returns only non-sensitive user data. Password hash excluded.",
+      "tags": [
+        "user",
+        "authentication",
+        "lookup"
+      ]
+    },
+    "example_insert_user": {
+      "id": "example_insert_user",
+      "name": "Insert New User",
+      "description": "Creates a new user account with hashed password",
+      "created_date": "2024-01-15",
+      "last_modified": "2024-01-15",
+      "category": "user_management",
+      "sql": "INSERT INTO users (email, password_hash, username, is_active) VALUES ($1, $2, $3, $4) RETURNING id, email, username, created_at",
+      "database": "main",
+      "operation_type": "INSERT",
+      "parameters": [
+        {
+          "name": "email",
+          "type": "string",
+          "required": true,
+          "description": "User email address",
+          "validation": "Must be valid email format and unique",
+          "example": "newuser@example.com"
+        },
+        {
+          "name": "password_hash",
+          "type": "string",
+          "required": true,
+          "description": "Bcrypt hashed password",
+          "validation": "Must be bcrypt hash (60 chars)",
+          "example": "$2b$10$..."
+        },
+        {
+          "name": "username",
+          "type": "string",
+          "required": true,
+          "description": "Unique username",
+          "validation": "3-100 characters, alphanumeric + underscore",
+          "example": "john_doe"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "required": false,
+          "description": "Initial account status",
+          "validation": "Boolean value",
+          "example": true
+        }
+      ],
+      "returns": {
+        "type": "single_row",
+        "columns": [
+          {
+            "name": "id",
+            "type": "integer",
+            "description": "Newly created user ID"
+          },
+          {
+            "name": "email",
+            "type": "string",
+            "description": "User email"
+          },
+          {
+            "name": "username",
+            "type": "string",
+            "description": "Username"
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp",
+            "description": "Account creation timestamp"
+          }
+        ]
+      },
+      "used_by_modules": [
+        {
+          "module": "auth-service",
+          "file": "src/auth/register.js",
+          "function": "registerUser",
+          "usage": "User registration endpoint"
+        }
+      ],
+      "depends_on_tables": [
+        "users"
+      ],
+      "performance_notes": "Triggers index updates on email and username. Average execution time: 5ms",
+      "security_notes": "CRITICAL: Password must be hashed before calling this query. Never pass plain text passwords.",
+      "error_handling": [
+        {
+          "error_code": "23505",
+          "description": "Unique constraint violation (duplicate email or username)",
+          "handling": "Return user-friendly error message"
+        }
+      ],
+      "tags": [
+        "user",
+        "registration",
+        "insert"
+      ]
+    }
+  },
+  "query_categories": {
+    "user_management": {
+      "description": "Queries related to user CRUD operations",
+      "queries": [
+        "example_get_user_by_email",
+        "example_insert_user"
+      ]
+    },
+    "authentication": {
+      "description": "Queries for authentication and authorization",
+      "queries": [
+        "example_get_user_by_email"
+      ]
+    }
+  },
+  "usage_instructions": {
+    "for_coding_agents": [
+      "ALWAYS search this contract before writing new SQL queries",
+      "REUSE existing queries whenever possible - do not duplicate SQL",
+      "If a query is similar but not exact, consider parameterizing the existing query",
+      "When adding new queries, follow the exact JSON schema structure",
+      "Update 'used_by_modules' array when reusing a query in a new module",
+      "Increment contract_version (patch for additions, minor for modifications)",
+      "Add entry to changelog with date, version, author, changes, and impact",
+      "Cross-reference DATABASE_SCHEMA_CONTRACT.md for table structures",
+      "Use parameterized queries ($1, $2, etc.) to prevent SQL injection",
+      "Document performance characteristics and index usage",
+      "Include security notes for sensitive operations",
+      "Tag queries appropriately for easy searching"
+    ],
+    "before_writing_new_sql": [
+      "1. Search this contract by category and tags",
+      "2. Check if similar query exists that can be reused",
+      "3. If exact match found, use it and add your module to 'used_by_modules'",
+      "4. If similar query found, consider adding parameters to make it reusable",
+      "5. If no match, create new query following the template structure",
+      "6. Document all parameters, return values, and dependencies",
+      "7. Add security and performance notes",
+      "8. Update changelog and version number"
+    ],
+    "query_naming_convention": {
+      "pattern": "{operation}_{entity}_{by_condition}",
+      "examples": [
+        "get_user_by_email",
+        "get_user_by_id",
+        "insert_user",
+        "update_user_password",
+        "delete_user_by_id",
+        "list_active_users",
+        "count_users_by_status"
+      ]
+    },
+    "search_tips": [
+      "Search by category for related queries",
+      "Search by tags for functional grouping",
+      "Search by table name in 'depends_on_tables'",
+      "Search by module name in 'used_by_modules'",
+      "Use operation_type to filter SELECT/INSERT/UPDATE/DELETE"
+    ]
+  },
+  "template_for_new_query": {
+    "id": "unique_query_identifier",
+    "name": "Human Readable Query Name",
+    "description": "Detailed description of what this query does",
+    "created_date": "YYYY-MM-DD",
+    "last_modified": "YYYY-MM-DD",
+    "category": "category_name",
+    "sql": "SELECT ... FROM ... WHERE ...",
+    "database": "database_name",
+    "operation_type": "SELECT|INSERT|UPDATE|DELETE",
+    "parameters": [
+      {
+        "name": "param_name",
+        "type": "string|integer|boolean|timestamp|json",
+        "required": true,
+        "description": "Parameter description",
+        "validation": "Validation rules",
+        "example": "example_value"
+      }
+    ],
+    "returns": {
+      "type": "single_row|multiple_rows|affected_count|void",
+      "columns": [
+        {
+          "name": "column_name",
+          "type": "data_type",
+          "description": "Column description"
+        }
+      ]
+    },
+    "used_by_modules": [
+      {
+        "module": "module_name",
+        "file": "relative/path/to/file.js",
+        "function": "functionName",
+        "usage": "How this query is used"
+      }
+    ],
+    "depends_on_tables": [
+      "table1",
+      "table2"
+    ],
+    "performance_notes": "Index usage, execution time, optimization notes",
+    "security_notes": "Security considerations, data sensitivity, access control",
+    "error_handling": [
+      {
+        "error_code": "code",
+        "description": "Error description",
+        "handling": "How to handle this error"
+      }
+    ],
+    "tags": [
+      "tag1",
+      "tag2"
+    ]
+  },
+  "initial_population_instructions": {
+    "for_devops_agent": [
+      "1. Scan entire codebase for SQL queries using patterns:",
+      "   - Raw SQL strings: SELECT, INSERT, UPDATE, DELETE",
+      "   - ORM query builders: .query(), .find(), .where()",
+      "   - Database client calls: db.query(), pool.query(), connection.execute()",
+      "2. Extract each unique SQL query",
+      "3. Identify parameters (?, $1, :param, etc.)",
+      "4. Find all files/modules that use each query",
+      "5. Document return types by analyzing code usage",
+      "6. Add performance and security notes based on query complexity",
+      "7. Categorize queries by domain (user, product, order, etc.)",
+      "8. Tag queries for easy searching",
+      "9. Cross-reference with DATABASE_SCHEMA_CONTRACT.md for table info"
+    ],
+    "search_patterns": [
+      "*.sql files in the repository",
+      "db.query(, pool.query(, connection.execute(",
+      "SELECT, INSERT, UPDATE, DELETE (case insensitive)",
+      "ORM methods: .find(, .findOne(, .create(, .update(, .delete(",
+      "Raw SQL in template literals: sql`...`",
+      "Query builder chains: .select().from().where()"
+    ],
+    "file_locations_to_check": [
+      "src/**/repositories/**",
+      "src/**/models/**",
+      "src/**/services/**",
+      "src/**/api/**",
+      "database/queries/**",
+      "db/**/*.sql",
+      "migrations/**"
+    ]
+  },
+  "benefits": {
+    "code_reuse": "Avoid duplicating SQL queries across modules",
+    "consistency": "Ensure all modules use the same optimized queries",
+    "maintenance": "Update query in one place, all modules benefit",
+    "documentation": "Self-documenting SQL with parameters and usage",
+    "onboarding": "New developers can discover existing queries easily",
+    "refactoring": "Know exactly which modules are affected by query changes",
+    "performance": "Track and optimize frequently used queries",
+    "security": "Centralized review of SQL for injection vulnerabilities"
+  }
+}

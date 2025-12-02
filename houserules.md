@@ -76,6 +76,187 @@
 
 ---
 
+## 🚨 CRITICAL: Contract System (MUST FOLLOW)
+
+**ADDED: 2024-12-02**
+
+**To prevent duplicate features, conflicting changes, and wasted work, ALL coding agents MUST follow the Contract System.**
+
+### What is the Contract System?
+
+The Contract System is a **single source of truth** for all project components. Before making ANY changes to:
+- Database schema
+- SQL queries
+- API endpoints
+- Third-party integrations
+- Features
+- Infrastructure/environment variables
+
+**You MUST check the relevant contract file first.**
+
+### Contract Files Location
+
+**All contract files are stored in:** `House_Rules_Contracts/`
+
+| Contract File | Purpose | Check Before... |
+|---------------|---------|----------------|
+| `DATABASE_SCHEMA_CONTRACT.md` | Database tables, columns, indexes, migrations | Creating/modifying database schema |
+| `SQL_CONTRACT.json` | Reusable SQL queries with parameters | Writing any SQL query |
+| `API_CONTRACT.md` | All API endpoints and specifications | Creating/modifying API endpoints |
+| `THIRD_PARTY_INTEGRATIONS.md` | External service integrations | Integrating third-party services |
+| `FEATURES_CONTRACT.md` | All features and specifications | Implementing any feature |
+| `INFRA_CONTRACT.md` | Environment variables and infrastructure | Adding configuration/env vars |
+
+### 🚨 MANDATORY Workflow for ALL Coding Agents
+
+**BEFORE making ANY changes, you MUST:**
+
+```
+1. IDENTIFY what you're about to change:
+   - Database? → Read DATABASE_SCHEMA_CONTRACT.md
+   - SQL query? → Read SQL_CONTRACT.json
+   - API endpoint? → Read API_CONTRACT.md
+   - Third-party service? → Read THIRD_PARTY_INTEGRATIONS.md
+   - Feature? → Read FEATURES_CONTRACT.md
+   - Config/env var? → Read INFRA_CONTRACT.md
+
+2. SEARCH the contract for existing implementation:
+   - Does this table/query/endpoint/feature already exist?
+   - Can I reuse existing code instead of creating new?
+   - Will my change conflict with existing code?
+
+3. DECIDE based on what you found:
+   
+   IF existing implementation found:
+   ✅ REUSE it - Add your module to "Used By" section
+   ✅ EXTEND it - If it needs enhancement
+   ❌ DO NOT duplicate it
+   ❌ DO NOT create a new version
+   
+   IF no existing implementation:
+   ✅ CREATE new following contract template
+   ✅ DOCUMENT thoroughly in contract
+   ✅ CROSS-REFERENCE other contracts
+   ✅ UPDATE version number and changelog
+
+4. AFTER making changes:
+   ✅ UPDATE the relevant contract file immediately
+   ✅ ADD changelog entry with date
+   ✅ INCREMENT version number
+   ✅ CROSS-REFERENCE related contracts
+```
+
+### Why This Prevents Chaos
+
+**Without contracts, multiple agents will:**
+❌ Create duplicate features with different names  
+❌ Create duplicate API endpoints for same functionality  
+❌ Create duplicate SQL queries doing the same thing  
+❌ Integrate the same third-party service multiple times  
+❌ Create conflicting database schema changes  
+❌ Create duplicate environment variables  
+❌ Overwrite each other's code  
+❌ Break existing functionality unknowingly  
+
+**With contracts, agents will:**
+✅ Discover existing functionality before building  
+✅ Reuse existing code instead of duplicating  
+✅ Know exactly what exists and how to use it  
+✅ Avoid conflicts and breaking changes  
+✅ Coordinate changes across the codebase  
+✅ Maintain consistency and quality  
+✅ Save time by not rebuilding what exists  
+
+### Contract Update Requirements
+
+**Every contract update MUST include:**
+
+1. **Date stamp:** When the change was made (YYYY-MM-DD)
+2. **Version increment:** Following semver (1.0.0 → 1.0.1 or 1.1.0)
+3. **Changelog entry:** What changed and why
+4. **Impact assessment:** Breaking change? Which modules affected?
+5. **Cross-references:** Links to related contracts
+
+**Example changelog entry:**
+```markdown
+| Date | Version | Agent/Author | Changes | Impact |
+|------|---------|--------------|---------|--------|
+| 2024-12-02 | 1.1.0 | Coding Agent Alpha | Added user_preferences table | Non-breaking, new feature |
+```
+
+### Cross-Referencing Contracts
+
+**Contracts are interconnected. Always check related contracts:**
+
+- **DATABASE_SCHEMA_CONTRACT.md** ↔️ **SQL_CONTRACT.json**  
+  (Tables ↔️ Queries that use them)
+
+- **SQL_CONTRACT.json** ↔️ **API_CONTRACT.md**  
+  (Queries ↔️ Endpoints that call them)
+
+- **API_CONTRACT.md** ↔️ **FEATURES_CONTRACT.md**  
+  (Endpoints ↔️ Features that use them)
+
+- **THIRD_PARTY_INTEGRATIONS.md** ↔️ **INFRA_CONTRACT.md**  
+  (Services ↔️ API keys/config)
+
+- **FEATURES_CONTRACT.md** ↔️ **ALL CONTRACTS**  
+  (Features use everything)
+
+**When updating one contract, check if related contracts need updates too.**
+
+### Initial Contract Population
+
+**If contracts are empty/incomplete, the DevOps Agent can generate them:**
+
+See the "Initial Population Instructions" section in each contract file for:
+- Search patterns to find existing code
+- File locations to check
+- How to extract and document information
+- Automated script approaches
+
+**DevOps Agent can execute coding agent scripts to:**
+1. Scan the entire codebase
+2. Identify all features, APIs, database tables, etc.
+3. Generate contract files automatically
+4. Iteratively improve contracts
+
+### Enforcement
+
+**This is NOT optional. This is MANDATORY.**
+
+**If you are a coding agent and you:**
+- Create a feature without checking FEATURES_CONTRACT.md first
+- Write SQL without checking SQL_CONTRACT.json first
+- Create an API endpoint without checking API_CONTRACT.md first
+- Integrate a service without checking THIRD_PARTY_INTEGRATIONS.md first
+- Modify database without checking DATABASE_SCHEMA_CONTRACT.md first
+- Add env vars without checking INFRA_CONTRACT.md first
+
+**You are violating house rules and creating technical debt.**
+
+**The user should reject your changes and require you to:**
+1. Read the relevant contract(s)
+2. Check for existing implementation
+3. Reuse or properly document your changes
+4. Update contracts appropriately
+
+### Quick Reference
+
+**Before you code, ask yourself:**
+
+- 📋 "Does this feature already exist?" → Check `FEATURES_CONTRACT.md`
+- 🔌 "Does this API endpoint already exist?" → Check `API_CONTRACT.md`
+- 🗄️ "Does this database table already exist?" → Check `DATABASE_SCHEMA_CONTRACT.md`
+- 📝 "Does this SQL query already exist?" → Check `SQL_CONTRACT.json`
+- 🌐 "Is this service already integrated?" → Check `THIRD_PARTY_INTEGRATIONS.md`
+- ⚙️ "Does this env variable already exist?" → Check `INFRA_CONTRACT.md`
+
+**If the answer is YES → REUSE IT**  
+**If the answer is NO → CREATE IT and DOCUMENT IT**
+
+---
+
 ## Project Structure
 **Current Directory Layout:**
 ```
