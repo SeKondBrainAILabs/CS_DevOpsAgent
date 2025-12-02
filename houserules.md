@@ -767,3 +767,272 @@ Before committing, verify:
 - Suggest potential fixes or workarounds
 - Provide links to documentation when relevant
 - Include error codes for support reference
+
+
+---
+
+## 🤖 DevOps Agent Automation (NEW: 2024-12-02)
+
+**The DevOps Agent can now automatically generate, validate, and maintain contract files.**
+
+### Automation Scripts
+
+All automation scripts are located in `scripts/contract-automation/`:
+
+1. **generate-contracts.js** - Scan codebase and extract contract information
+2. **analyze-with-llm.js** - Use Groq LLM for intelligent analysis
+3. **validate-commit.js** - Validate commit messages with contract flags
+4. **check-compliance.js** - Check if contracts are in sync with code
+
+See `scripts/contract-automation/README.md` for detailed documentation.
+
+### Contract Generation Workflow
+
+**Step 1: Local Scanning**
+
+```bash
+node scripts/contract-automation/generate-contracts.js --verbose
+```
+
+This scans the codebase and extracts:
+- Features from `src/features/` and `src/modules/`
+- API endpoints from route files
+- Database tables from migrations
+- SQL queries from code
+- Third-party integrations from package.json
+- Environment variables from code
+
+Output: `House_Rules_Contracts/contract-scan-results.json`
+
+**Step 2: LLM Analysis (Optional but Recommended)**
+
+```bash
+node scripts/contract-automation/analyze-with-llm.js \
+  --scan-results=House_Rules_Contracts/contract-scan-results.json
+```
+
+This uses Groq LLM to:
+- Generate human-readable descriptions
+- Create user stories and acceptance criteria
+- Infer API request/response formats
+- Provide security and performance recommendations
+- Validate contract completeness
+
+Output: `House_Rules_Contracts/llm-analysis-results.json`
+
+**Step 3: Manual Population**
+
+Review the generated JSON files and manually populate the contract markdown files with the discovered information. Use the templates already in place.
+
+### Commit Message Contract Flags (MANDATORY)
+
+**All commits MUST include contract flags in this format:**
+
+```
+feat(api): add user profile endpoint
+
+Contracts: [SQL:T, API:T, DB:F, 3RD:F, FEAT:T, INFRA:F]
+
+[WHY] Users need to view and update their profile information.
+
+[WHAT]
+- File(s): src/api/profile.js - Added GET /api/v1/profile endpoint
+- File(s): House_Rules_Contracts/API_CONTRACT.md - Documented new endpoint
+```
+
+**Contract Flags:**
+- `SQL:T/F` - SQL_CONTRACT.json modified
+- `API:T/F` - API_CONTRACT.md modified
+- `DB:T/F` - DATABASE_SCHEMA_CONTRACT.md modified
+- `3RD:T/F` - THIRD_PARTY_INTEGRATIONS.md modified
+- `FEAT:T/F` - FEATURES_CONTRACT.md modified
+- `INFRA:T/F` - INFRA_CONTRACT.md modified
+
+**Validation:**
+
+Before committing, run:
+
+```bash
+node scripts/contract-automation/validate-commit.js --check-staged --auto-fix
+```
+
+This will:
+- ✅ Check if claimed contract flags match actual file changes
+- ✅ Detect false positives (claimed T but not modified)
+- ✅ Detect false negatives (modified but not claimed)
+- ✅ Generate corrected commit message if --auto-fix used
+
+**The DevOps Agent will alert the user if:**
+- Contract flags are missing
+- Contract flags don't match actual changes
+- Contract files should have been updated but weren't
+
+### Compliance Checking
+
+**Run periodic compliance checks:**
+
+```bash
+node scripts/contract-automation/check-compliance.js
+```
+
+This checks if:
+- Features in code are documented in FEATURES_CONTRACT.md
+- API endpoints in code are documented in API_CONTRACT.md
+- Database tables in migrations are documented in DATABASE_SCHEMA_CONTRACT.md
+- Third-party services in package.json are documented in THIRD_PARTY_INTEGRATIONS.md
+- Environment variables in code are documented in INFRA_CONTRACT.md
+
+**Output:**
+- List of items in code but missing from contracts
+- List of items in contracts but missing from code
+- Compliance status (pass/fail)
+
+**Strict mode for CI/CD:**
+
+```bash
+node scripts/contract-automation/check-compliance.js --strict
+```
+
+Exits with error code 1 if any discrepancies found.
+
+### DevOps Agent Responsibilities
+
+**The DevOps Agent MUST:**
+
+1. **Generate contracts** when setting up a new project or after major changes
+2. **Validate commit messages** before allowing commits
+3. **Alert users** if contract flags don't match actual changes
+4. **Run compliance checks** periodically (weekly recommended)
+5. **Report discrepancies** between code and contracts
+6. **Suggest fixes** when validation fails
+
+**The DevOps Agent CAN:**
+
+1. **Execute local scanning** without LLM for fast discovery
+2. **Use Groq LLM** for intelligent analysis and recommendations
+3. **Auto-fix commit messages** with correct contract flags
+4. **Generate JSON reports** for programmatic processing
+5. **Integrate with CI/CD** pipelines for automated validation
+
+### LLM Integration (Groq)
+
+**The DevOps Agent can use Groq LLM via OpenAI-compatible API:**
+
+**Available Models:**
+- `llama-3.1-70b-versatile` (default) - Best for complex analysis
+- `llama-3.1-8b-instant` - Faster, good for simple tasks
+- `mixtral-8x7b-32768` - Alternative with large context window
+- `gemini-2.5-flash` - Fast and efficient
+
+**Environment Variable:**
+- `OPENAI_API_KEY` - Set to Groq API key (already configured in sandbox)
+
+**Use Cases:**
+- Analyze code files and extract documentation
+- Generate feature descriptions and user stories
+- Infer API request/response formats
+- Validate contract completeness
+- Provide security and performance recommendations
+
+**Cost Optimization:**
+- Use local scanning first (free, fast)
+- Use LLM only for enhancement and validation
+- Cache LLM results to avoid redundant calls
+
+### Hybrid Approach (Recommended)
+
+**Combine local scanning + LLM analysis for best results:**
+
+1. **Local scanning** (fast, deterministic)
+   - Extract structured data (tables, endpoints, queries)
+   - Pattern matching and regex
+   - File system operations
+
+2. **LLM analysis** (intelligent, contextual)
+   - Generate human-readable descriptions
+   - Infer relationships and dependencies
+   - Provide recommendations
+   - Validate completeness
+
+3. **Manual review** (human oversight)
+   - Review generated content
+   - Fill in gaps
+   - Verify accuracy
+   - Make final decisions
+
+### CI/CD Integration Example
+
+```yaml
+# .github/workflows/contract-validation.yml
+name: Contract Validation
+
+on: [pull_request]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+      
+      - name: Install Dependencies
+        run: npm install
+      
+      - name: Check Contract Compliance
+        run: node scripts/contract-automation/check-compliance.js --strict --report=json
+      
+      - name: Validate Commit Message
+        run: |
+          git log -1 --pretty=%B > commit-msg.txt
+          node scripts/contract-automation/validate-commit.js --commit-msg=commit-msg.txt --check-staged
+```
+
+### Troubleshooting
+
+**Issue: "Contract directory not found"**
+
+Solution: Merge the contract system branch first:
+```bash
+git merge origin/0212_SDD_Manus_HouseFilesUpgrade
+```
+
+**Issue: "OPENAI_API_KEY not set"**
+
+Solution: Already set in sandbox environment. For local development:
+```bash
+export OPENAI_API_KEY="your-groq-api-key"
+```
+
+**Issue: "No files found"**
+
+Solution: Run from repository root:
+```bash
+cd /path/to/CS_DevOpsAgent
+node scripts/contract-automation/generate-contracts.js
+```
+
+### Best Practices
+
+1. **Run contract generation** after major feature additions
+2. **Validate commits** before pushing to prevent issues
+3. **Check compliance weekly** to keep contracts up-to-date
+4. **Use LLM sparingly** to minimize API costs
+5. **Review auto-generated content** before committing
+6. **Document exceptions** when automation can't handle something
+7. **Keep scripts updated** as codebase evolves
+
+### Future Enhancements
+
+**Planned features:**
+- Auto-fix for compliance issues
+- Visual HTML reports with charts
+- Git hooks for pre-commit validation
+- VSCode extension for real-time validation
+- Contract versioning and diff tool
+- Dependency graph visualization
+- Dashboard for contract status
+
+---
+
+**Last Updated:** 2024-12-02  
+**Status:** ✅ Ready for use
