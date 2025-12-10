@@ -472,9 +472,28 @@ Populate `INFRA_CONTRACT.md`:
 
 ---
 
-## Phase 2: Automated Contract Generation Script
+## Phase 2: Automated Contract Generation & Validation Script
 
-### Create a Coding Agent Script
+### Task: Create `validate-contracts` Automation
+
+**Objective:** Create a script that strictly validates that the code matches the contracts. This script will eventually be part of the CI/CD pipeline and pre-commit hooks.
+
+**Script Name:** `scripts/validate-contracts.js`
+
+**Requirements:**
+1.  **Drift Detection:**
+    *   Fail if an API endpoint exists in code but not in `API_CONTRACT.md`.
+    *   Fail if a database table exists in migrations but not in `DATABASE_SCHEMA_CONTRACT.md`.
+    *   Fail if a Feature ID is referenced in code but missing from `FEATURES_CONTRACT.md`.
+2.  **Schema Validation:**
+    *   Verify JSON contracts (`SQL_CONTRACT.json`) are valid JSON.
+3.  **Cross-Reference Validation:**
+    *   Verify that links between contracts point to existing items.
+
+**Execution:**
+`npm run validate-contracts`
+
+### Task: Create `generate-contracts` Script
 
 The DevOps Agent can invoke a Coding Agent to automate contract generation:
 
@@ -535,7 +554,28 @@ python scripts/generate_contracts.py
 
 ---
 
-## Phase 4: Ongoing Maintenance
+## Phase 5: Test Coverage Tracking
+
+**Goal:** Explicitly track which Contracts are validated by tests.
+
+### Create `TEST_COVERAGE.md`
+Create a file to map contracts to their test suites.
+
+**Template:**
+```markdown
+# Test Coverage Matrix
+
+| Contract Item | Test File | Test Status | Last Verified |
+|---------------|-----------|-------------|---------------|
+| **Features** | | | |
+| F-001 | `test_cases/features/auth.test.js` | ✅ Passing | 2024-12-10 |
+| **API** | | | |
+| GET /api/v1/users | `test_cases/api/users.test.js` | ✅ Passing | 2024-12-10 |
+```
+
+### Repo Hygiene
+- Ensure `House_Rules_Contracts/` only contains active contracts.
+- Move deprecated or superseded contracts to `House_Rules_Contracts/archive/`.
 
 ### When Code Changes:
 

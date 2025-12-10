@@ -151,6 +151,38 @@ END;
 
 ---
 
+## Migration Policy
+
+**All database changes must strictly adhere to these Continuous Delivery principles:**
+
+### 1. Idempotency
+*   **Requirement:** All migration scripts MUST be idempotent (runnable multiple times without error or side effects).
+*   **Implementation:**
+    *   Use `IF NOT EXISTS` for creating tables/columns/indexes.
+    *   Use `IF EXISTS` for dropping (though dropping is discouraged).
+    *   Check for existing data before inserting.
+
+### 2. Separation of Concerns (DDL vs DML)
+*   **Requirement:** Schema changes (DDL) and Data changes (DML) MUST be in separate migration files.
+*   **Reasoning:** Mixing them causes locking issues and makes rollbacks complex.
+*   **DDL:** `CREATE`, `ALTER`, `DROP` (Schema definitions).
+*   **DML:** `INSERT`, `UPDATE`, `DELETE` (Data manipulation).
+
+### 3. Non-Destructive Changes
+*   **Requirement:** **NEVER drop columns or tables in a live environment.**
+*   **Deprecation Workflow:**
+    1.  Mark column as deprecated in this contract.
+    2.  Stop writing to it in the application.
+    3.  Stop reading from it.
+    4.  (Optional) Backfill/migrate data to new structure.
+    5.  Drop column only after N+1 releases when it is confirmed unused.
+
+### 4. Online-Safe Patterns
+*   **Avoid:** Long-running locks on busy tables.
+*   **Strategy:** For large tables, use techniques like:
+    *   Add column nullable first, then backfill, then add NOT NULL constraint.
+    *   Create index concurrently (`CREATE INDEX CONCURRENTLY`).
+
 ## Breaking Change Protocol
 
 ### Before Making Schema Changes:
@@ -282,6 +314,10 @@ When populating this template for the first time:
 ---
 
 ## Example Entry
+
+<!-- ======================================================================= -->
+<!-- NOTE: The following is an EXAMPLE ONLY. Do not treat as real schema.    -->
+<!-- ======================================================================= -->
 
 ### Table: users
 

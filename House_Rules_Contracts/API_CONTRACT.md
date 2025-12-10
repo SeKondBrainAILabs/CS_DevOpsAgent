@@ -222,6 +222,10 @@ curl -X PUT "https://api.example.com/api/v1/users/123" \
 
 ## Example Endpoints
 
+<!-- ======================================================================= -->
+<!-- NOTE: The following is an EXAMPLE ONLY. Do not treat as real API.       -->
+<!-- ======================================================================= -->
+
 ### User Management
 
 #### `GET /api/v1/users/{id}`

@@ -76,6 +76,23 @@
 
 ---
 
+## Architecture Decision Records (ADRs)
+
+**We treat architectural decisions as code.** 
+Any "Architecturally Significant" change MUST be documented in an ADR.
+
+**What is Architecturally Significant?**
+- Adding a new persistence layer (e.g., adding Redis)
+- Changing the multi-agent coordination protocol
+- Adding a new major component or service
+- Changing the testing strategy
+- Introducing the Contract System itself
+
+**Workflow:**
+1.  **Create:** Create a new file in `adr/` named `XXXX-title-of-decision.md` (e.g., `0002-switch-to-postgres.md`).
+2.  **Format:** Use the standard ADR template (Context, Decision, Consequences).
+3.  **Review:** Submit as part of your PR.
+
 ## 🚨 CRITICAL: Contract System (MUST FOLLOW)
 
 **ADDED: 2024-12-02**
@@ -221,11 +238,21 @@ See the "Initial Population Instructions" section in each contract file for:
 3. Generate contract files automatically
 4. Iteratively improve contracts
 
-### Enforcement
+### Enforcement & Quality Gates
 
-**This is NOT optional. This is MANDATORY.**
+**1. Automated Validation (Coming Soon)**
+We are moving towards "Executable Specifications". Soon, build scripts will validate that contracts match the codebase.
+*   **Drift Check:** `npm run validate-contracts` will fail if code and contracts diverge.
+*   **Pre-commit Hook:** Will prevent commits that violate contracts.
 
-**If you are a coding agent and you:**
+**2. TDD is Paramount**
+**Contracts do NOT replace Test-Driven Development (TDD).**
+*   **Tests** are the executable specification of *behavior*.
+*   **Contracts** are the executable specification of *architecture/schema*.
+*   **Rule:** You must write tests AND update contracts. One does not substitute for the other.
+
+**3. Manual Rejection (Temporary)**
+Until automation is fully in place, the user should reject your changes if you:
 - Create a feature without checking FEATURES_CONTRACT.md first
 - Write SQL without checking SQL_CONTRACT.json first
 - Create an API endpoint without checking API_CONTRACT.md first
