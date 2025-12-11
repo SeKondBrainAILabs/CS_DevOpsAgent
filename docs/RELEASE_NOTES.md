@@ -1,3 +1,10 @@
+# Release Notes - s9n-devops-agent v2.0.11-dev.0
+
+## 🐛 Fixed
+- **Bin Path**: Fixed incorrect `bin` path in `package.json` to ensure the executable works correctly.
+
+---
+
 # Release Notes - CS_DevOpsAgent v2.0.0
 
 ## 🚀 Major Release: Multi-Agent Worktree Support & Infrastructure Tracking
