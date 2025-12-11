@@ -84,23 +84,23 @@ export class CredentialsManager {
   }
 
   /**
-   * Injects the Groq API Key into process.env.OPENAI_API_KEY
-   * This ensures compatibility with existing scripts that rely on env vars
+   * Injects the Groq API Key into process.env
+   * Sets both OPENAI_API_KEY (legacy/compat) and GROQ_API_KEY (native)
    * @returns {boolean} true if key was injected or already existed
    */
   injectEnv() {
-    // If already set in environment, don't overwrite unless empty
-    if (process.env.OPENAI_API_KEY) {
-      return true;
-    }
-
     const key = this.getGroqApiKey();
+    if (!key && !process.env.OPENAI_API_KEY && !process.env.GROQ_API_KEY) {
+      return false;
+    }
+
     if (key) {
-      process.env.OPENAI_API_KEY = key;
+      if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = key;
+      if (!process.env.GROQ_API_KEY) process.env.GROQ_API_KEY = key;
       return true;
     }
 
-    return false;
+    return true; // Env vars existed
   }
 }
 

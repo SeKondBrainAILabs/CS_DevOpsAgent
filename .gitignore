@@ -100,3 +100,6 @@ SESSION_README.md
 
 # Coordination alert files
 .coordination-alert-*.md
+
+# Test artifacts
+test_cases/contract-automation/temp_test_env/

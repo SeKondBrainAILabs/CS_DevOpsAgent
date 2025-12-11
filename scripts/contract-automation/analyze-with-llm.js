@@ -26,28 +26,18 @@
  * ============================================================================
  */
 
-const fs = require('fs');
-const path = require('path');
-const OpenAI = require('openai');
+import fs from 'fs';
+import path from 'path';
+import Groq from 'groq-sdk';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+import { credentialsManager } from '../../src/credentials-manager.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Attempt to load credentials manager for local key injection
-try {
-  // We need to use dynamic import or require compatible approach since this is a CJS script
-  // but credentials-manager is ESM. For now, we'll implement a simple reader here
-  // to avoid complex interop issues in this script.
-  const credentialsPath = path.join(process.cwd(), 'local_deploy', 'credentials.json');
-  if (fs.existsSync(credentialsPath)) {
-    const creds = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
-    if (creds.groqApiKey && !process.env.OPENAI_API_KEY) {
-      // Deobfuscate: base64 -> utf8
-      const key = Buffer.from(creds.groqApiKey, 'base64').toString('utf8');
-      process.env.OPENAI_API_KEY = key;
-      // console.log('[INFO] Loaded Groq API Key from local credentials');
-    }
-  }
-} catch (e) {
-  // Ignore errors, fallback to standard env vars
-}
+credentialsManager.injectEnv();
 
 // Configuration
 const CONFIG = {
@@ -60,10 +50,9 @@ const CONFIG = {
   model: getArgValue('--model') || 'llama-3.1-70b-versatile'
 };
 
-// Initialize OpenAI client (configured for Groq via env)
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  // Base URL is already configured in environment
+// Initialize Groq client
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY
 });
 
 // Helper: Get command line argument value
@@ -110,7 +99,7 @@ async function callLLM(prompt, systemPrompt = 'You are a helpful assistant.') {
   try {
     log(`Calling LLM (${CONFIG.model})...`, 'debug');
     
-    const response = await openai.chat.completions.create({
+    const response = await groq.chat.completions.create({
       model: CONFIG.model,
       messages: [
         { role: 'system', content: systemPrompt },
@@ -431,8 +420,8 @@ async function main() {
   log('='.repeat(80));
   
   // Check API key
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY environment variable is required. Please set it or run "s9n-devops-agent setup" to configure your Groq API key.');
+  if (!process.env.GROQ_API_KEY && !process.env.OPENAI_API_KEY) {
+    throw new Error('GROQ_API_KEY environment variable is required. Please set it or run "s9n-devops-agent setup" to configure your Groq API key.');
   }
   
   let results = {};

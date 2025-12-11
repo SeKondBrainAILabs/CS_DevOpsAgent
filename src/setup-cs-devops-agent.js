@@ -153,6 +153,74 @@ This structure is compatible with the DevOps Agent's automation tools.
   return missingFolders;
 }
 
+function checkContractsExist(projectRoot) {
+  const contractsDir = path.join(projectRoot, 'House_Rules_Contracts');
+  if (!fs.existsSync(contractsDir)) return false;
+  
+  const requiredContracts = [
+    'FEATURES_CONTRACT.md',
+    'API_CONTRACT.md',
+    'DATABASE_SCHEMA_CONTRACT.md',
+    'SQL_CONTRACT.json',
+    'THIRD_PARTY_INTEGRATIONS.md',
+    'INFRA_CONTRACT.md'
+  ];
+  
+  return requiredContracts.every(file => fs.existsSync(path.join(contractsDir, file)));
+}
+
+async function generateContracts(projectRoot) {
+  log.header();
+  log.title('📜 Generating Contracts');
+  
+  const scriptsDir = path.join(projectRoot, 'scripts', 'contract-automation');
+  const generateScript = path.join(scriptsDir, 'generate-contracts.js');
+  const analyzeScript = path.join(scriptsDir, 'analyze-with-llm.js');
+  
+  if (!fs.existsSync(generateScript)) {
+    log.error('Contract generation scripts not found!');
+    return;
+  }
+  
+  try {
+    // 1. Run local scan
+    info('Running local codebase scan...');
+    execSync(`node "${generateScript}"`, { cwd: projectRoot, stdio: 'inherit' });
+    success('Scan complete.');
+    
+    // 2. Run LLM analysis if key exists
+    if (credentialsManager.hasGroqApiKey()) {
+      info('Enhancing contracts with AI analysis...');
+      try {
+        // Inject env for the child process
+        const env = { ...process.env };
+        credentialsManager.injectEnv(); // Ensure current process has it
+        // Note: execSync inherits env by default, but explicit is safer if we modified it
+        if (!env.GROQ_API_KEY && credentialsManager.getGroqApiKey()) {
+           env.GROQ_API_KEY = credentialsManager.getGroqApiKey();
+           env.OPENAI_API_KEY = credentialsManager.getGroqApiKey();
+        }
+
+        execSync(`node "${analyzeScript}" --scan-results=House_Rules_Contracts/contract-scan-results.json`, { 
+          cwd: projectRoot, 
+          stdio: 'inherit',
+          env
+        });
+        success('AI analysis complete.');
+      } catch (err) {
+        warn(`AI analysis failed: ${err.message}`);
+        warn('Contracts generated but without AI enhancements.');
+      }
+    } else {
+      warn('Skipping AI analysis (no Groq API Key).');
+      warn('Run "s9n-devops-agent creds set-groq-key <key>" later to enable this.');
+    }
+    
+  } catch (error) {
+    log.error(`Contract generation failed: ${error.message}`);
+  }
+}
+
 // ===========================================================================
 // SETUP FUNCTIONS
 // ===========================================================================
@@ -1055,7 +1123,8 @@ ${colors.bright}Security:${colors.reset} Stored locally in ${colors.yellow}local
     `${status.checkmark} NPM packages and scripts`,
     `${status.checkmark} Commit message files`,
     `${status.checkmark} House rules for AI agents`,
-    `${status.folder} Standard folder structure check`
+    `${status.folder} Standard folder structure check`,
+    `${status.checkmark} Contract files check`
   ]);
   console.log();
   
@@ -1082,6 +1151,23 @@ ${colors.bright}Security:${colors.reset} Stored locally in ${colors.yellow}local
         });
       } else {
         log.warn('Skipping folder creation.');
+      }
+    }
+
+    // Check for contracts
+    if (!checkContractsExist(projectRoot)) {
+      log.header();
+      log.title('📜 Contract Files Missing');
+      explain(`
+${colors.bright}Contract System:${colors.reset}
+This project uses a Contract System to coordinate multiple AI agents.
+It seems like this is a fresh setup or contracts are missing.
+We can scan your codebase and generate them now.
+      `);
+      
+      const shouldGenerate = await confirm('Generate contract files now?', true);
+      if (shouldGenerate) {
+        await generateContracts(projectRoot);
       }
     }
 

@@ -50,7 +50,8 @@
   "license": "MIT",
   "dependencies": {
     "chokidar": "^3.5.3",
-    "execa": "^7.1.1"
+    "execa": "^7.1.1",
+    "groq-sdk": "^0.37.0"
   },
   "devDependencies": {
     "jest": "^29.7.0"
