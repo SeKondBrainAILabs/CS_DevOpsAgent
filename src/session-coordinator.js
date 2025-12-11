@@ -21,9 +21,13 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { execSync, spawn, fork } from 'child_process';
-import crypto from 'crypto';
-import readline from 'readline';
+import { spawn, execSync, exec } from 'child_process';
+import { credentialsManager } from './credentials-manager.js';
+
+// Inject credentials immediately
+credentialsManager.injectEnv();
+
+const __filename = fileURLToPath(import.meta.url);
 import { hasDockerConfiguration } from './docker-utils.js';
 import HouseRulesManager from './house-rules-manager.js';
 

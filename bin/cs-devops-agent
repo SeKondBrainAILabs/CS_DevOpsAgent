@@ -9,6 +9,10 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { spawn } from 'child_process';
 import fs from 'fs';
+import { credentialsManager } from '../src/credentials-manager.js';
+
+// Inject credentials immediately
+credentialsManager.injectEnv();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -113,6 +117,28 @@ switch(command) {
     }
     break;
     
+  case 'creds':
+    const subCmd = args[1];
+    if (subCmd === 'set-groq-key') {
+      const key = args[2];
+      if (!key) {
+        console.error('Error: Please provide a key. Usage: cs-devops-agent creds set-groq-key <key>');
+        process.exit(1);
+      }
+      credentialsManager.setGroqApiKey(key);
+      console.log('✅ Groq API Key saved securely.');
+    } else if (subCmd === 'status') {
+      console.log('Credentials Status:');
+      console.log(`- Groq API Key: ${credentialsManager.hasGroqApiKey() ? '✅ Configured' : '❌ Missing'}`);
+      console.log(`- Storage: ${credentialsManager.hasGroqApiKey() ? 'local_deploy/credentials.json' : 'N/A'}`);
+    } else if (subCmd === 'clear') {
+      credentialsManager.clearAll();
+      console.log('✅ All credentials cleared.');
+    } else {
+      console.log('Usage: cs-devops-agent creds [set-groq-key <key> | status | clear]');
+    }
+    break;
+
   case 'tutorial':
     // Run interactive tutorial
     runScript(join(rootDir, 'src', 'tutorial-mode.js'), args.slice(1));
@@ -153,6 +179,7 @@ Commands:
   create             Create a new session
   close              Close an active session
   cleanup            Clean up stale sessions
+  creds              Manage API credentials
   version            Show version information
   help               Show this help message
 
@@ -163,6 +190,7 @@ Examples:
   cs-devops-agent help-topics        # Browse comprehensive help
   cs-devops-agent list               # List active sessions
   cs-devops-agent create --task api  # Create new session for API work
+  cs-devops-agent creds status       # Check API credential status
 
 Environment Variables:
   AC_BRANCH_PREFIX     Branch prefix for daily branches

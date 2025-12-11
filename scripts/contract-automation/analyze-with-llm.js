@@ -30,6 +30,25 @@ const fs = require('fs');
 const path = require('path');
 const OpenAI = require('openai');
 
+// Attempt to load credentials manager for local key injection
+try {
+  // We need to use dynamic import or require compatible approach since this is a CJS script
+  // but credentials-manager is ESM. For now, we'll implement a simple reader here
+  // to avoid complex interop issues in this script.
+  const credentialsPath = path.join(process.cwd(), 'local_deploy', 'credentials.json');
+  if (fs.existsSync(credentialsPath)) {
+    const creds = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+    if (creds.groqApiKey && !process.env.OPENAI_API_KEY) {
+      // Deobfuscate: base64 -> utf8
+      const key = Buffer.from(creds.groqApiKey, 'base64').toString('utf8');
+      process.env.OPENAI_API_KEY = key;
+      // console.log('[INFO] Loaded Groq API Key from local credentials');
+    }
+  }
+} catch (e) {
+  // Ignore errors, fallback to standard env vars
+}
+
 // Configuration
 const CONFIG = {
   rootDir: process.cwd(),
@@ -413,7 +432,7 @@ async function main() {
   
   // Check API key
   if (!process.env.OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY environment variable is required');
+    throw new Error('OPENAI_API_KEY environment variable is required. Please set it or run "s9n-devops-agent setup" to configure your Groq API key.');
   }
   
   let results = {};

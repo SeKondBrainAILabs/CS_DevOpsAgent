@@ -27,6 +27,7 @@ import path from 'path';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { credentialsManager } from './credentials-manager.js';
 import {
   colors,
   status,
@@ -113,9 +114,48 @@ function backupFile(filePath) {
   return null;
 }
 
-// ============================================================================
+function setupFolderStructure(projectRoot) {
+  log.header();
+  log.title('📂 Checking Folder Structure');
+
+  // Folders defined in folders.md
+  const standardFolders = [
+    'src',
+    'test',
+    'docs',
+    'scripts',
+    'deploy_test',
+    'product_requirement_docs',
+    'infrastructure'
+  ];
+
+  const missingFolders = standardFolders.filter(folder => !fs.existsSync(path.join(projectRoot, folder)));
+
+  if (missingFolders.length === 0) {
+    log.info('Standard folder structure already exists.');
+    return;
+  }
+
+  log.info('Found missing standard folders:');
+  missingFolders.forEach(folder => console.log(`   - ${folder}/`));
+  console.log();
+
+  explain(`
+${colors.bright}Recommended Structure:${colors.reset}
+Standard folders help organize your code, tests, and documentation.
+This structure is compatible with the DevOps Agent's automation tools.
+  `);
+
+  // We can't use await here because this function is synchronous in the flow, 
+  // but the main flow is async. We should probably make this async or use prompt from ui-utils.
+  // However, looking at the code structure, helper functions are sync or async.
+  // Let's return the missing folders and handle the prompt in the main function or make this async.
+  return missingFolders;
+}
+
+// ===========================================================================
 // SETUP FUNCTIONS
-// ============================================================================
+// ===========================================================================
 
 async function setupNpmPackages(projectRoot) {
   log.header();
@@ -976,6 +1016,37 @@ ${colors.bright}How:${colors.reset} Creates branches like dev_abc_2025-10-31
   tip(`Your branches will be named: ${colors.cyan}dev_${initials}_YYYY-MM-DD${colors.reset}`);
   console.log();
   
+  // Groq API Key Setup
+  sectionTitle('Groq API Key (Contract Automation)');
+  explain(`
+${colors.bright}What:${colors.reset} API Key for Groq (llama-3.1-70b-versatile)
+${colors.bright}Why:${colors.reset} Required for AI-Optimized Contract Automation System
+${colors.bright}Security:${colors.reset} Stored locally in ${colors.yellow}local_deploy/credentials.json${colors.reset} (gitignored)
+  `);
+
+  const hasKey = credentialsManager.hasGroqApiKey();
+  let groqKey = null;
+
+  if (hasKey) {
+    info('Groq API Key is already configured.');
+    const update = await confirm('Do you want to update it?', false);
+    if (update) {
+      groqKey = await prompt('Enter your Groq API Key');
+    }
+  } else {
+    groqKey = await prompt('Enter your Groq API Key (leave empty to skip)');
+  }
+
+  if (groqKey && groqKey.trim()) {
+    credentialsManager.setGroqApiKey(groqKey.trim());
+    success('Groq API Key saved securely.');
+  } else if (!hasKey) {
+    warn('Skipping Groq API Key setup.');
+    warn('NOTE: Contract Automation features (analyze-with-llm.js) will NOT work without this key.');
+  }
+  
+  console.log();
+
   // Confirm before proceeding
   drawSection('Configuration Summary', [
     `${status.folder} Branch prefix: ${colors.cyan}dev_${initials}_${colors.reset}`,
@@ -983,7 +1054,8 @@ ${colors.bright}How:${colors.reset} Creates branches like dev_abc_2025-10-31
     `${status.checkmark} VS Code settings and tasks`,
     `${status.checkmark} NPM packages and scripts`,
     `${status.checkmark} Commit message files`,
-    `${status.checkmark} House rules for AI agents`
+    `${status.checkmark} House rules for AI agents`,
+    `${status.folder} Standard folder structure check`
   ]);
   console.log();
   
@@ -999,6 +1071,20 @@ ${colors.bright}How:${colors.reset} Creates branches like dev_abc_2025-10-31
   console.log();
   
   try {
+    // Check and setup folder structure first
+    const missingFolders = setupFolderStructure(projectRoot);
+    if (missingFolders && missingFolders.length > 0) {
+      const createFolders = await confirm('Create missing standard folders?', true);
+      if (createFolders) {
+        missingFolders.forEach(folder => {
+          ensureDirectoryExists(path.join(projectRoot, folder));
+          log.success(`Created ${folder}/`);
+        });
+      } else {
+        log.warn('Skipping folder creation.');
+      }
+    }
+
     // Run setup steps
     const packageJson = await setupNpmPackages(projectRoot);
     setupVSCodeSettings(projectRoot, initials);
