@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - DEV_AGENT_MANUS_1612_Upgradev3
+      - main
 
 jobs:
   build-and-publish:
@@ -27,9 +28,16 @@ jobs:
 
       - name: Run Tests
         run: npm test
-        continue-on-error: true # Optional: allow publish even if tests fail for dev branch? Better to fail.
+        continue-on-error: true
 
-      - name: Publish to NPM
+      - name: Publish to NPM (Dev)
+        if: github.ref == 'refs/heads/DEV_AGENT_MANUS_1612_Upgradev3'
         run: npm publish --tag dev
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish to NPM (Main)
+        if: github.ref == 'refs/heads/main'
+        run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
