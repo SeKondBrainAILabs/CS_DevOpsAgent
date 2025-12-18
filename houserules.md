@@ -76,6 +76,23 @@
 
 ---
 
+## Architecture Decision Records (ADRs)
+
+**We treat architectural decisions as code.** 
+Any "Architecturally Significant" change MUST be documented in an ADR.
+
+**What is Architecturally Significant?**
+- Adding a new persistence layer (e.g., adding Redis)
+- Changing the multi-agent coordination protocol
+- Adding a new major component or service
+- Changing the testing strategy
+- Introducing the Contract System itself
+
+**Workflow:**
+1.  **Create:** Create a new file in `adr/` named `XXXX-title-of-decision.md` (e.g., `0002-switch-to-postgres.md`).
+2.  **Format:** Use the standard ADR template (Context, Decision, Consequences).
+3.  **Review:** Submit as part of your PR.
+
 ## 🚨 CRITICAL: Contract System (MUST FOLLOW)
 
 **ADDED: 2024-12-02**
@@ -221,11 +238,21 @@ See the "Initial Population Instructions" section in each contract file for:
 3. Generate contract files automatically
 4. Iteratively improve contracts
 
-### Enforcement
+### Enforcement & Quality Gates
 
-**This is NOT optional. This is MANDATORY.**
+**1. Automated Validation (Coming Soon)**
+We are moving towards "Executable Specifications". Soon, build scripts will validate that contracts match the codebase.
+*   **Drift Check:** `npm run validate-contracts` will fail if code and contracts diverge.
+*   **Pre-commit Hook:** Will prevent commits that violate contracts.
 
-**If you are a coding agent and you:**
+**2. TDD is Paramount**
+**Contracts do NOT replace Test-Driven Development (TDD).**
+*   **Tests** are the executable specification of *behavior*.
+*   **Contracts** are the executable specification of *architecture/schema*.
+*   **Rule:** You must write tests AND update contracts. One does not substitute for the other.
+
+**3. Manual Rejection (Temporary)**
+Until automation is fully in place, the user should reject your changes if you:
 - Create a feature without checking FEATURES_CONTRACT.md first
 - Write SQL without checking SQL_CONTRACT.json first
 - Create an API endpoint without checking API_CONTRACT.md first
@@ -1216,4 +1243,102 @@ node scripts/contract-automation/generate-contracts.js
 ---
 
 **Last Updated:** 2024-12-02  
+**Status:** ✅ Ready for use
+
+
+---
+
+## 📋 DevOps Agent Change Workflow (NEW: 2024-12-16)
+
+**This section provides a step-by-step workflow for DevOps Agents to handle change requests while adhering to the House Rules Contract System.**
+
+### Objective
+
+Implement changes to the codebase while strictly adhering to the House Rules Contract System to prevent conflicts and ensure consistency across all development activities.
+
+### Context
+
+As a DevOps Agent, you are responsible for maintaining the integrity of the microservices architecture. Before writing any code, you MUST follow the contract system to ensure coordination with other agents and prevent duplicate work.
+
+### Step-by-Step Change Process
+
+See the comprehensive workflow documentation in `House_Rules_Contracts/README.md` for detailed examples including:
+
+- How to understand change requests
+- How to consult contracts before coding
+- How to analyze and decide whether to reuse or create
+- How to implement changes following contracts
+- How to update contracts after changes
+- How to commit with proper contract flags
+
+### Quick Reference
+
+**Before you code, ask yourself:**
+
+- 📋 "Does this feature already exist?" → Check `FEATURES_CONTRACT.md`
+- 🔌 "Does this API endpoint already exist?" → Check `API_CONTRACT.md`
+- 🗄️ "Does this database table already exist?" → Check `DATABASE_SCHEMA_CONTRACT.md`
+- 📝 "Does this SQL query already exist?" → Check `SQL_CONTRACT.json`
+- 🌐 "Is this service already integrated?" → Check `THIRD_PARTY_INTEGRATIONS.md`
+- ⚙️ "Does this env variable already exist?" → Check `INFRA_CONTRACT.md`
+
+**If YES → REUSE IT**  
+**If NO → CREATE IT and DOCUMENT IT**
+
+### Mandatory Commit Format
+
+```
+<type>(<scope>): <subject>
+
+Contracts: [SQL:T/F, API:T/F, DB:T/F, 3RD:T/F, FEAT:T/F, INFRA:T/F]
+
+[WHY]
+<explanation of motivation>
+
+[WHAT]
+- File(s): <path> - <description>
+- File(s): <path> - <description>
+
+Resolves: [Task ID or Issue Number]
+Part of: House Rules Contract System
+```
+
+### Validation Before Commit
+
+```bash
+# Validate commit message and contract flags
+node scripts/contract-automation/validate-commit.js --check-staged --auto-fix
+
+# If validation passes, commit and push
+git commit -F .claude-commit-msg
+git push origin <branch-name>
+```
+
+### Critical Reminders
+
+**DO:**
+
+✅ Always check contracts BEFORE coding  
+✅ Reuse existing components when possible  
+✅ Document ALL changes in contracts immediately  
+✅ Use the mandatory commit message format  
+✅ Validate commits before pushing  
+✅ Increment version numbers appropriately  
+✅ Add comprehensive changelog entries  
+✅ Cross-reference related contracts  
+
+**DON'T:**
+
+❌ Create duplicate features/APIs/queries  
+❌ Skip contract consultation  
+❌ Forget to update contracts after coding  
+❌ Use incorrect commit message format  
+❌ Push without validation  
+❌ Make breaking changes without documentation  
+❌ Ignore existing implementations  
+❌ Work in isolation from other agents  
+
+---
+
+**Last Updated:** 2024-12-16  
 **Status:** ✅ Ready for use
