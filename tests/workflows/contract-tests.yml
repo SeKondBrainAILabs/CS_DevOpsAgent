@@ -1,0 +1,240 @@
+name: Contract Automation Tests
+
+on:
+  push:
+    branches:
+      - 'DEV_*'
+      - 'development'
+      - 'dev/**'
+  pull_request:
+    branches:
+      - main
+      - development
+
+jobs:
+  test-contracts:
+    name: Run Contract Automation Tests
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run unit tests
+        run: npm run test:contracts:unit
+      
+      - name: Run integration tests
+        run: npm run test:contracts:integration
+      
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage/lcov.info
+          flags: contract-tests
+          name: contract-coverage-${{ matrix.node-version }}
+      
+      - name: Archive test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results-${{ matrix.node-version }}
+          path: |
+            coverage/
+            test-results/
+
+  validate-contracts:
+    name: Validate Contract Compliance
+    runs-on: ubuntu-latest
+    needs: test-contracts
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Check contract compliance
+        run: npm run validate-contracts
+        continue-on-error: true
+        id: compliance
+      
+      - name: Generate compliance report
+        if: always()
+        run: |
+          node scripts/contract-automation/check-compliance.js --report=json > compliance-report.json
+      
+      - name: Upload compliance report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: compliance-report
+          path: compliance-report.json
+      
+      - name: Comment PR with compliance status
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('compliance-report.json', 'utf8'));
+            
+            let comment = '## 📋 Contract Compliance Report\n\n';
+            
+            const categories = ['features', 'api', 'database', 'sql', 'integrations', 'envVars'];
+            let allCompliant = true;
+            
+            for (const category of categories) {
+              const result = report.results[category];
+              const icon = result.compliant ? '✅' : '❌';
+              comment += `${icon} **${category.toUpperCase()}**: `;
+              
+              if (result.compliant) {
+                comment += 'Compliant\n';
+              } else {
+                allCompliant = false;
+                comment += `${result.missing.length} missing, ${result.extra.length} extra\n`;
+                
+                if (result.missing.length > 0) {
+                  comment += `  - Missing: ${result.missing.slice(0, 3).map(m => m.name || m).join(', ')}`;
+                  if (result.missing.length > 3) comment += ` (+${result.missing.length - 3} more)`;
+                  comment += '\n';
+                }
+              }
+            }
+            
+            comment += '\n---\n';
+            comment += allCompliant 
+              ? '✅ All contracts are in compliance!' 
+              : '⚠️ Some contracts need attention. Please review and update.';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  validate-commit-messages:
+    name: Validate Commit Messages
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Get commit messages
+        id: commits
+        run: |
+          git log --format=%B origin/${{ github.base_ref }}..${{ github.sha }} > commits.txt
+      
+      - name: Validate each commit
+        run: |
+          echo "Validating commit messages..."
+          
+          # Split commits and validate each one
+          csplit -z commits.txt '/^$/' '{*}' 2>/dev/null || true
+          
+          for file in xx*; do
+            if [ -s "$file" ]; then
+              echo "Validating commit in $file..."
+              node scripts/contract-automation/validate-commit.js --commit-msg="$file" || true
+            fi
+          done
+      
+      - name: Check for validation errors
+        run: |
+          if grep -q "ERROR" validation-results.txt 2>/dev/null; then
+            echo "❌ Commit message validation failed"
+            cat validation-results.txt
+            exit 1
+          else
+            echo "✅ All commit messages are valid"
+          fi
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Run npm audit
+        run: npm audit --audit-level=moderate
+        continue-on-error: true
+      
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+      
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [test-contracts, validate-contracts, validate-commit-messages]
+    if: always()
+    
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## 🧪 Contract Automation Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit & Integration Tests | ${{ needs.test-contracts.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Contract Compliance | ${{ needs.validate-contracts.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit Message Validation | ${{ needs.validate-commit-messages.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.test-contracts.result }}" == "success" ] && \
+             [ "${{ needs.validate-contracts.result }}" == "success" ] && \
+             [ "${{ needs.validate-commit-messages.result }}" == "success" ]; then
+            echo "✅ All checks passed!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Some checks failed. Please review the logs." >> $GITHUB_STEP_SUMMARY
+          fi
