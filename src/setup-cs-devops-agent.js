@@ -865,6 +865,47 @@ function printInstructions(initials) {
   log.header();
 }
 
+async function setupEnvFile(projectRoot) {
+  log.header();
+  log.title('🔑 Setting up Environment Variables');
+  
+  const envPath = path.join(projectRoot, '.env');
+  let envContent = '';
+  
+  if (fs.existsSync(envPath)) {
+    envContent = fs.readFileSync(envPath, 'utf8');
+    log.info('.env file already exists');
+  } else {
+    log.info('Creating .env file');
+  }
+  
+  // Check for OPENAI_API_KEY
+  if (!envContent.includes('OPENAI_API_KEY=')) {
+    console.log();
+    explain(`
+${colors.bright}Groq API Key Setup${colors.reset}
+The contract automation features use Groq LLM (via OpenAI compatibility).
+You can enter your API key now, or set it later in the .env file.
+    `);
+    
+    const apiKey = await prompt('Enter Groq API Key (leave empty to skip)');
+    
+    if (apiKey) {
+      const newLine = envContent.endsWith('\n') || envContent === '' ? '' : '\n';
+      envContent += `${newLine}# Groq API Key for Contract Automation\nOPENAI_API_KEY=${apiKey}\n`;
+      fs.writeFileSync(envPath, envContent);
+      log.success('Added OPENAI_API_KEY to .env');
+    } else {
+      log.warn('Skipped Groq API Key. Contract automation features may not work.');
+      if (!fs.existsSync(envPath)) {
+        fs.writeFileSync(envPath, '# Environment Variables\n');
+      }
+    }
+  } else {
+    log.info('OPENAI_API_KEY is already configured in .env');
+  }
+}
+
 // ============================================================================
 // CLEANUP FUNCTIONS
 // ============================================================================
@@ -1005,6 +1046,9 @@ ${colors.bright}How:${colors.reset} Creates branches like dev_abc_2025-10-31
     setupVSCodeTasks(projectRoot, initials);
     setupCommitFiles(projectRoot, initials);
     createRunScripts(projectRoot, initials, packageJson);
+    
+    // Setup .env with API keys
+    await setupEnvFile(projectRoot);
     
     // Clean up DevOpsAgent files to avoid duplicates
     cleanupDevOpsAgentFiles(projectRoot);

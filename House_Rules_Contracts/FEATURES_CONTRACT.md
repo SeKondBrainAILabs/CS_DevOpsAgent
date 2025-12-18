@@ -224,6 +224,10 @@ As a [user type], I want to [action] so that [benefit].
 
 ## Example Features
 
+<!-- ======================================================================= -->
+<!-- NOTE: The following is an EXAMPLE ONLY. Do not treat as real features.  -->
+<!-- ======================================================================= -->
+
 ### Feature ID: F-001 - User Authentication
 
 **Added:** 2024-01-15  
