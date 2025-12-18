@@ -144,8 +144,12 @@ Need new endpoint.
   describe('Compliance Checking Workflow', () => {
     test('should detect code-contract discrepancies', () => {
       // Add a new feature to code but not to contract
+      const analyticsDir = path.join(testRepoDir, 'src/features/analytics');
+      if (!fs.existsSync(analyticsDir)) {
+        fs.mkdirSync(analyticsDir, { recursive: true });
+      }
       fs.writeFileSync(
-        path.join(testRepoDir, 'src/features/analytics/index.js'),
+        path.join(analyticsDir, 'index.js'),
         '// Analytics feature\nexport default function trackEvent() {}'
       );
 
@@ -316,8 +320,13 @@ function createContractTemplates(contractsDir) {
 }
 
 function createSampleCodebase(baseDir) {
+  const userAuthDir = path.join(baseDir, 'src/features/user-auth');
+  if (!fs.existsSync(userAuthDir)) {
+    fs.mkdirSync(userAuthDir, { recursive: true });
+  }
+
   fs.writeFileSync(
-    path.join(baseDir, 'src/features/user-auth/index.js'),
+    path.join(userAuthDir, 'index.js'),
     '// User authentication\nexport default function authenticate() {}'
   );
 
@@ -359,6 +368,7 @@ function populateAPIContract(endpoints) {
   for (const endpoint of endpoints) {
     contract += `### \`${endpoint.method} ${endpoint.path}\`\n\n`;
     contract += `**Source:** ${endpoint.source}\n\n`;
+    contract += `**Used By:**\n\n`;
   }
 
   return contract;
@@ -540,9 +550,12 @@ function addModuleToUsedBy(contractContent, endpoint, moduleInfo) {
   const usedByMarker = '**Used By:**';
 
   if (contractContent.includes(endpointSection)) {
-    const newEntry = `\n- ${moduleInfo.module} - ${moduleInfo.usage}`;
+    const newEntry = `\n- ${moduleInfo.module} (${moduleInfo.file}) - ${moduleInfo.usage}`;
+    const escapedUsedBy = usedByMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escapedEndpoint = endpointSection.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    
     contractContent = contractContent.replace(
-      new RegExp(`(${endpointSection}[\\s\\S]*?${usedByMarker})`),
+      new RegExp(`(${escapedEndpoint}[\\s\\S]*?${escapedUsedBy})`),
       `$1${newEntry}`
     );
   }

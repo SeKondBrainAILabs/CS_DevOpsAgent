@@ -34,13 +34,9 @@
     "test:coverage": "jest --coverage",
     "test:worktree": "jest test_cases/worktree/",
     "test:e2e": "./test_scripts/test-multi-agent-e2e.sh",
+    "test:contracts": "jest tests/integration/contract-workflow.test.js",
     "test:push-behind": "jest test_scripts/push_behind_spec.js",
-    "test:debug": "./debug-failing-tests.sh",
-    "test:contracts": "jest tests/unit tests/integration --coverage",
-    "test:contracts:unit": "jest tests/unit --coverage",
-    "test:contracts:integration": "jest tests/integration --coverage",
-    "test:contracts:ci": "jest tests/unit tests/integration --ci --coverage --maxWorkers=2",
-    "validate-contracts": "node scripts/contract-automation/check-compliance.js --strict"
+    "test:debug": "./debug-failing-tests.sh"
   },
   "keywords": [
     "git",

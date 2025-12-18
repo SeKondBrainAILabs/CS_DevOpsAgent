@@ -1,0 +1,30 @@
+name: Contract Automation Tests
+
+on:
+  push:
+    branches:
+      - DEV_AGENT_MANUS_1612_Upgradev3
+      - main
+  pull_request:
+    branches:
+      - DEV_AGENT_MANUS_1612_Upgradev3
+      - main
+
+jobs:
+  test-contracts:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Contract Tests
+        run: npm run test:contracts
