@@ -1,0 +1,91 @@
+{
+  "valid_commits": [
+    {
+      "name": "valid_api_feature",
+      "message": "feat(api): add user profile endpoint\n\nContracts: [SQL:F, API:T, DB:F, 3RD:F, FEAT:T, INFRA:F]\n\n[WHY]\nUsers need to view and update their profile information.\n\n[WHAT]\n- File(s): src/api/profile.js - Added GET /api/v1/users/:id/profile\n- File(s): House_Rules_Contracts/API_CONTRACT.md - Documented endpoint\n- File(s): House_Rules_Contracts/FEATURES_CONTRACT.md - Added feature\n\nResolves: #123\nPart of: House Rules Contract System",
+      "stagedFiles": [
+        "src/api/profile.js",
+        "House_Rules_Contracts/API_CONTRACT.md",
+        "House_Rules_Contracts/FEATURES_CONTRACT.md"
+      ]
+    },
+    {
+      "name": "valid_database_change",
+      "message": "feat(database): add user preferences table\n\nContracts: [SQL:T, API:F, DB:T, 3RD:F, FEAT:F, INFRA:F]\n\n[WHY]\nNeed to store user notification and UI preferences.\n\n[WHAT]\n- File(s): migrations/003_add_preferences.sql - Created preferences table\n- File(s): House_Rules_Contracts/DATABASE_SCHEMA_CONTRACT.md - Documented schema\n- File(s): House_Rules_Contracts/SQL_CONTRACT.json - Added queries\n\nResolves: #456",
+      "stagedFiles": [
+        "migrations/003_add_preferences.sql",
+        "House_Rules_Contracts/DATABASE_SCHEMA_CONTRACT.md",
+        "House_Rules_Contracts/SQL_CONTRACT.json"
+      ]
+    },
+    {
+      "name": "valid_integration",
+      "message": "feat(integration): add Twilio SMS integration\n\nContracts: [SQL:F, API:F, DB:F, 3RD:T, FEAT:T, INFRA:T]\n\n[WHY]\nNeed to send SMS notifications to users.\n\n[WHAT]\n- File(s): src/integrations/TwilioClient.js - Created Twilio binding module\n- File(s): House_Rules_Contracts/THIRD_PARTY_INTEGRATIONS.md - Documented integration\n- File(s): House_Rules_Contracts/FEATURES_CONTRACT.md - Added SMS feature\n- File(s): House_Rules_Contracts/INFRA_CONTRACT.md - Added TWILIO_API_KEY env var\n\nResolves: #789",
+      "stagedFiles": [
+        "src/integrations/TwilioClient.js",
+        "House_Rules_Contracts/THIRD_PARTY_INTEGRATIONS.md",
+        "House_Rules_Contracts/FEATURES_CONTRACT.md",
+        "House_Rules_Contracts/INFRA_CONTRACT.md"
+      ]
+    }
+  ],
+  "invalid_commits": [
+    {
+      "name": "missing_contract_flags",
+      "message": "feat(api): add endpoint\n\n[WHY]\nNeed new endpoint.\n\n[WHAT]\n- File(s): src/api/test.js - Added endpoint",
+      "error": "Missing contract flags",
+      "stagedFiles": ["src/api/test.js"]
+    },
+    {
+      "name": "false_positive_sql",
+      "message": "feat(api): add endpoint\n\nContracts: [SQL:T, API:T, DB:F, 3RD:F, FEAT:F, INFRA:F]\n\n[WHY]\nNeed new endpoint.\n\n[WHAT]\n- File(s): src/api/test.js - Added endpoint\n- File(s): House_Rules_Contracts/API_CONTRACT.md - Documented",
+      "error": "Claimed SQL:T but SQL_CONTRACT.json not modified",
+      "stagedFiles": [
+        "src/api/test.js",
+        "House_Rules_Contracts/API_CONTRACT.md"
+      ]
+    },
+    {
+      "name": "false_negative_database",
+      "message": "feat(database): add table\n\nContracts: [SQL:F, API:F, DB:F, 3RD:F, FEAT:F, INFRA:F]\n\n[WHY]\nNeed new table.\n\n[WHAT]\n- File(s): migrations/004_add_table.sql - Created table\n- File(s): House_Rules_Contracts/DATABASE_SCHEMA_CONTRACT.md - Documented",
+      "error": "DATABASE_SCHEMA_CONTRACT.md modified but claimed DB:F",
+      "stagedFiles": [
+        "migrations/004_add_table.sql",
+        "House_Rules_Contracts/DATABASE_SCHEMA_CONTRACT.md"
+      ]
+    },
+    {
+      "name": "malformed_flags",
+      "message": "feat(api): add endpoint\n\nContracts: [SQL:T API:T]\n\n[WHY]\nNeed endpoint.\n\n[WHAT]\n- File(s): src/api/test.js - Added",
+      "error": "Invalid contract flags format",
+      "stagedFiles": ["src/api/test.js"]
+    }
+  ],
+  "edge_cases": [
+    {
+      "name": "all_contracts_modified",
+      "message": "feat(system): major refactor\n\nContracts: [SQL:T, API:T, DB:T, 3RD:T, FEAT:T, INFRA:T]\n\n[WHY]\nMajor system refactor affecting all contracts.\n\n[WHAT]\n- File(s): Multiple files across all modules\n- File(s): All contract files updated\n\nResolves: #999",
+      "stagedFiles": [
+        "House_Rules_Contracts/SQL_CONTRACT.json",
+        "House_Rules_Contracts/API_CONTRACT.md",
+        "House_Rules_Contracts/DATABASE_SCHEMA_CONTRACT.md",
+        "House_Rules_Contracts/THIRD_PARTY_INTEGRATIONS.md",
+        "House_Rules_Contracts/FEATURES_CONTRACT.md",
+        "House_Rules_Contracts/INFRA_CONTRACT.md"
+      ]
+    },
+    {
+      "name": "no_contracts_modified",
+      "message": "docs: update README\n\nContracts: [SQL:F, API:F, DB:F, 3RD:F, FEAT:F, INFRA:F]\n\n[WHY]\nImprove documentation.\n\n[WHAT]\n- File(s): README.md - Updated documentation",
+      "stagedFiles": ["README.md"]
+    },
+    {
+      "name": "extra_whitespace",
+      "message": "feat(api): add endpoint\n\nContracts: [ SQL:F ,  API:T , DB:F , 3RD:F , FEAT:F , INFRA:F ]\n\n[WHY]\nNeed endpoint.\n\n[WHAT]\n- File(s): src/api/test.js - Added\n- File(s): House_Rules_Contracts/API_CONTRACT.md - Documented",
+      "stagedFiles": [
+        "src/api/test.js",
+        "House_Rules_Contracts/API_CONTRACT.md"
+      ]
+    }
+  ]
+}

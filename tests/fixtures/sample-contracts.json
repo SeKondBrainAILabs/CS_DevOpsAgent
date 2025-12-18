@@ -1,0 +1,263 @@
+{
+  "features": [
+    {
+      "id": "F-001",
+      "name": "User Authentication",
+      "status": "Active",
+      "description": "Handles user login, logout, and session management",
+      "version": "1.2.0",
+      "usedBy": ["auth-service", "api-gateway"],
+      "changelog": [
+        {
+          "date": "2024-12-16",
+          "version": "1.2.0",
+          "change": "Added OAuth2 support",
+          "author": "sachmans"
+        },
+        {
+          "date": "2024-12-01",
+          "version": "1.0.0",
+          "change": "Initial implementation",
+          "author": "devops-agent"
+        }
+      ]
+    },
+    {
+      "id": "F-002",
+      "name": "Payment Processing",
+      "status": "Active",
+      "description": "Handles payment transactions via Stripe",
+      "version": "1.0.0",
+      "usedBy": ["payment-service"],
+      "changelog": [
+        {
+          "date": "2024-12-10",
+          "version": "1.0.0",
+          "change": "Initial implementation",
+          "author": "payment-agent"
+        }
+      ]
+    }
+  ],
+  "api": [
+    {
+      "id": "API-001",
+      "method": "GET",
+      "path": "/api/v1/users",
+      "description": "Retrieve all users",
+      "version": "1.0.0",
+      "request": {
+        "query": {
+          "page": "integer (optional)",
+          "limit": "integer (optional)"
+        }
+      },
+      "response": {
+        "success": {
+          "status": 200,
+          "body": {
+            "success": true,
+            "data": "User[]"
+          }
+        },
+        "error": {
+          "status": 500,
+          "body": {
+            "success": false,
+            "error": "string"
+          }
+        }
+      },
+      "usedBy": ["admin-dashboard", "user-service"]
+    },
+    {
+      "id": "API-002",
+      "method": "POST",
+      "path": "/api/v1/users",
+      "description": "Create a new user",
+      "version": "1.0.0",
+      "request": {
+        "body": {
+          "email": "string (required)",
+          "name": "string (required)",
+          "password": "string (required)"
+        }
+      },
+      "response": {
+        "success": {
+          "status": 201,
+          "body": {
+            "success": true,
+            "data": "User"
+          }
+        }
+      },
+      "usedBy": ["registration-service"]
+    }
+  ],
+  "database": [
+    {
+      "name": "users",
+      "version": "1.1.0",
+      "schema": {
+        "id": "SERIAL PRIMARY KEY",
+        "email": "VARCHAR(255) UNIQUE NOT NULL",
+        "name": "VARCHAR(255) NOT NULL",
+        "password_hash": "VARCHAR(255) NOT NULL",
+        "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "updated_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+      },
+      "indexes": [
+        "CREATE INDEX idx_users_email ON users(email)"
+      ],
+      "relationships": [
+        {
+          "table": "posts",
+          "type": "one-to-many",
+          "foreignKey": "user_id"
+        }
+      ],
+      "usedBy": ["auth-service", "user-service"]
+    },
+    {
+      "name": "posts",
+      "version": "1.0.0",
+      "schema": {
+        "id": "SERIAL PRIMARY KEY",
+        "user_id": "INTEGER REFERENCES users(id)",
+        "title": "VARCHAR(500) NOT NULL",
+        "content": "TEXT",
+        "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+      },
+      "indexes": [
+        "CREATE INDEX idx_posts_user_id ON posts(user_id)"
+      ],
+      "usedBy": ["blog-service"]
+    }
+  ],
+  "sql": {
+    "get_user_by_id": {
+      "id": "get_user_by_id",
+      "sql": "SELECT * FROM users WHERE id = $1",
+      "parameters": [
+        {
+          "name": "id",
+          "type": "integer",
+          "description": "User ID"
+        }
+      ],
+      "returns": "User object or null",
+      "version": "1.0.0",
+      "usedBy": ["auth-service", "user-service"]
+    },
+    "get_user_by_email": {
+      "id": "get_user_by_email",
+      "sql": "SELECT * FROM users WHERE email = $1",
+      "parameters": [
+        {
+          "name": "email",
+          "type": "string",
+          "description": "User email address"
+        }
+      ],
+      "returns": "User object or null",
+      "version": "1.0.0",
+      "usedBy": ["auth-service"]
+    },
+    "create_user": {
+      "id": "create_user",
+      "sql": "INSERT INTO users (email, name, password_hash) VALUES ($1, $2, $3) RETURNING *",
+      "parameters": [
+        {
+          "name": "email",
+          "type": "string"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "password_hash",
+          "type": "string"
+        }
+      ],
+      "returns": "Newly created User object",
+      "version": "1.0.0",
+      "usedBy": ["registration-service"]
+    }
+  },
+  "integrations": [
+    {
+      "service": "Stripe",
+      "purpose": "Payment processing",
+      "status": "Active",
+      "authentication": "API Key",
+      "package": "stripe",
+      "version": "^12.0.0",
+      "bindingModule": "src/integrations/StripeClient.js",
+      "endpoints": [
+        "POST /v1/payment_intents",
+        "GET /v1/customers"
+      ],
+      "usedBy": ["payment-service"],
+      "envVars": ["STRIPE_API_KEY", "STRIPE_WEBHOOK_SECRET"]
+    },
+    {
+      "service": "SendGrid",
+      "purpose": "Email delivery",
+      "status": "Active",
+      "authentication": "API Key",
+      "package": "@sendgrid/mail",
+      "version": "^7.7.0",
+      "bindingModule": "src/integrations/SendGridClient.js",
+      "endpoints": [
+        "POST /v3/mail/send"
+      ],
+      "usedBy": ["notification-service"],
+      "envVars": ["SENDGRID_API_KEY"]
+    }
+  ],
+  "envVars": [
+    {
+      "name": "DATABASE_URL",
+      "type": "string",
+      "description": "PostgreSQL connection string",
+      "required": true,
+      "example": "postgresql://user:password@localhost:5432/mydb",
+      "usedBy": ["All services"]
+    },
+    {
+      "name": "REDIS_URL",
+      "type": "string",
+      "description": "Redis connection string for caching",
+      "required": true,
+      "example": "redis://localhost:6379",
+      "usedBy": ["auth-service", "cache-service"]
+    },
+    {
+      "name": "STRIPE_API_KEY",
+      "type": "string",
+      "description": "Stripe API key for payment processing",
+      "required": true,
+      "example": "sk_test_...",
+      "usedBy": ["payment-service"]
+    },
+    {
+      "name": "SENDGRID_API_KEY",
+      "type": "string",
+      "description": "SendGrid API key for email delivery",
+      "required": true,
+      "example": "SG...",
+      "usedBy": ["notification-service"]
+    },
+    {
+      "name": "PORT",
+      "type": "integer",
+      "description": "Server port",
+      "required": false,
+      "default": "3000",
+      "example": "3000",
+      "usedBy": ["All services"]
+    }
+  ]
+}

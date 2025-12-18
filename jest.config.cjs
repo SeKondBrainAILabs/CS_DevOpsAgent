@@ -2,7 +2,8 @@ module.exports = {
   testMatch: [
     '**/test_cases/**/*.spec.js',
     '**/test_cases/**/*.test.js',
-    '**/test_cases/**/*_spec.js'
+    '**/test_cases/**/*_spec.js',
+    '**/tests/**/*.test.js'
   ],
   testPathIgnorePatterns: [
     '/node_modules/',
