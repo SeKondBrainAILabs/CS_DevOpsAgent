@@ -1405,6 +1405,11 @@ The DevOps agent will automatically:
     console.log(``);
     console.log(`Write commit messages to: .devops-commit-${sessionId}.msg`);
     console.log(`The DevOps agent will automatically commit and push changes.`);
+    console.log(``);
+    console.log(`⛔ IMPORTANT: STOP HERE AND WAIT`);
+    console.log(`Do NOT start coding or making changes yet!`);
+    console.log(`Follow the steps above in order when instructed by the user.`);
+    console.log(`Wait for further instructions before proceeding.`);
     console.log();
     
     console.log(`${CONFIG.colors.yellow}══════════════════════════════════════════════════════════════${CONFIG.colors.reset}`);

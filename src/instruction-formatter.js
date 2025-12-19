@@ -151,7 +151,15 @@ export function formatInstructions(session, options = {}) {
     lines.push('');
   }
   
-  // Footer
+  // STOP instruction
+  lines.push('━'.repeat(70));
+  lines.push('');
+  lines.push(`${colors.red}${status.warning} IMPORTANT: STOP HERE${colors.reset}`);
+  lines.push('');
+  lines.push(`${colors.bright}Do NOT start coding or making changes yet!${colors.reset}`);
+  lines.push(`${colors.dim}Follow the steps above in order when instructed.${colors.reset}`);
+  lines.push(`${colors.dim}Wait for further instructions from the user before proceeding.${colors.reset}`);
+  lines.push('');
   lines.push('━'.repeat(70));
   lines.push('');
   lines.push(`${status.checkmark} ${colors.green}DevOps Agent is now monitoring this session...${colors.reset}`);
