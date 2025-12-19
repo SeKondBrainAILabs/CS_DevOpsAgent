@@ -30,7 +30,7 @@ class WeeklyConsolidationTests {
       await this.testWeeklyBranchNaming();
       await this.testDualMergeToTarget();
       await this.testDailyBranchCleanup();
-      await this.testNoDaily BranchesScenario();
+      await this.testNoDailyBranchesScenario();
       await this.testExistingWeeklyBranch();
       await this.testPartialMergeFailure();
       await this.testOldWeeklyBranchCleanup();

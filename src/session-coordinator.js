@@ -19,6 +19,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import readline from 'readline';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { spawn, execSync, exec } from 'child_process';
