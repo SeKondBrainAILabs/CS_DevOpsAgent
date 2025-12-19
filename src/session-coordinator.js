@@ -28,11 +28,9 @@ import { credentialsManager } from './credentials-manager.js';
 credentialsManager.injectEnv();
 
 const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 import { hasDockerConfiguration } from './docker-utils.js';
 import HouseRulesManager from './house-rules-manager.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 // ============================================================================
 // CONFIGURATION
