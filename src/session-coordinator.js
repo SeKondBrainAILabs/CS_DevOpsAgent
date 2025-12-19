@@ -23,7 +23,7 @@ import crypto from 'crypto';
 import readline from 'readline';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { spawn, execSync, exec } from 'child_process';
+import { spawn, execSync, exec, fork } from 'child_process';
 import { credentialsManager } from './credentials-manager.js';
 
 // Inject credentials immediately
