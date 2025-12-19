@@ -601,12 +601,30 @@ class SessionCoordinator {
     
     if (dockerInfo.composeFiles.length > 1) {
       console.log(`\n${CONFIG.colors.bright}Select docker-compose file:${CONFIG.colors.reset}`);
-      dockerInfo.composeFiles.forEach((file, index) => {
-        console.log(`  ${index + 1}) ${file.name}`);
-      });
+      
+      // Check running containers for each compose file
+      for (let i = 0; i < dockerInfo.composeFiles.length; i++) {
+        const file = dockerInfo.composeFiles[i];
+        let runningInfo = '';
+        
+        try {
+          // Try to get container count for this compose file
+          const { execSync } = await import('child_process');
+          const result = execSync(`docker compose -f "${file.path}" ps -q 2>/dev/null | wc -l`, { encoding: 'utf8' });
+          const count = parseInt(result.trim());
+          if (count > 0) {
+            runningInfo = ` ${CONFIG.colors.green}(${count} running)${CONFIG.colors.reset}`;
+          }
+        } catch (err) {
+          // Ignore errors, just don't show running info
+        }
+        
+        console.log(`  ${i + 1}) ${file.name}${runningInfo}`);
+        console.log(`     ${CONFIG.colors.dim}${file.path}${CONFIG.colors.reset}`);
+      }
       
       const fileChoice = await new Promise((resolve) => {
-        rl.question(`Choose file (1-${dockerInfo.composeFiles.length}) [1]: `, (answer) => {
+        rl.question(`\nChoose file (1-${dockerInfo.composeFiles.length}) [1]: `, (answer) => {
           const choice = parseInt(answer) || 1;
           if (choice >= 1 && choice <= dockerInfo.composeFiles.length) {
             resolve(dockerInfo.composeFiles[choice - 1]);
