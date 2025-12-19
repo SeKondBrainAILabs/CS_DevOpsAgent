@@ -28,7 +28,6 @@ jobs:
 
       - name: Run Tests
         run: npm test
-        continue-on-error: true
 
       - name: Publish to NPM (Dev)
         if: github.ref == 'refs/heads/development'
