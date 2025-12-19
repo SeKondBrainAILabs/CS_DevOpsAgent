@@ -273,8 +273,12 @@ class SessionCoordinator {
     
     // Check if house rules exist
     if (!houseRulesManager.houseRulesPath || !fs.existsSync(houseRulesManager.houseRulesPath)) {
-      console.log(`\n${CONFIG.colors.yellow}House rules not found - setting up now...${CONFIG.colors.reset}`);
-      await houseRulesManager.initialSetup();
+      console.log(`\n${CONFIG.colors.yellow}House rules not found - creating default house rules...${CONFIG.colors.reset}`);
+      // Auto-create default house rules without prompting
+      const result = await houseRulesManager.updateHouseRules({ createIfMissing: true, backupExisting: false });
+      if (result.created) {
+        console.log(`${CONFIG.colors.green}✓${CONFIG.colors.reset} House rules created at: ${CONFIG.colors.bright}${result.path}${CONFIG.colors.reset}`);
+      }
     } else {
       // House rules exist - check if they need updating
       const status = houseRulesManager.getStatus();
