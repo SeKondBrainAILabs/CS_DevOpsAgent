@@ -329,7 +329,8 @@ export function getAgentDisplayName(agentType) {
     cursor: 'Cursor',
     copilot: 'GitHub Copilot',
     cline: 'Cline',
-    other: 'AI Assistant',
+    warp: 'Warp',
+    other: 'Other',
   };
   return names[agentType] || agentType;
 }

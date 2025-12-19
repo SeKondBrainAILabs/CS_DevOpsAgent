@@ -166,6 +166,8 @@ I'll show you what happens at each stage.
   console.log(`   ${colors.bright}2)${colors.reset} Cursor`);
   console.log(`   ${colors.bright}3)${colors.reset} GitHub Copilot`);
   console.log(`   ${colors.bright}4)${colors.reset} Cline (VS Code)`);
+  console.log(`   ${colors.bright}5)${colors.reset} Warp`);
+  console.log(`   ${colors.bright}6)${colors.reset} Other`);
   console.log();
   console.log(`   ${colors.cyan}?${colors.reset} Your choice: ${colors.dim}1${colors.reset}`);
   console.log();

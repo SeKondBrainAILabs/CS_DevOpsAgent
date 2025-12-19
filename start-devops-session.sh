@@ -147,13 +147,17 @@ create_new_session() {
     echo -e "  ${GREEN}2)${NC} Cursor"
     echo -e "  ${GREEN}3)${NC} GitHub Copilot"
     echo -e "  ${GREEN}4)${NC} Cline (VS Code)"
-    echo -n "➜ Your choice [1-4, default: 1]: "
+    echo -e "  ${GREEN}5)${NC} Warp"
+    echo -e "  ${GREEN}6)${NC} Other"
+    echo -n "➜ Your choice [1-6, default: 1]: "
     read agent_choice
     
     case "$agent_choice" in
         2) agent_type="cursor" ;;
         3) agent_type="copilot" ;;
         4) agent_type="cline" ;;
+        5) agent_type="warp" ;;
+        6) agent_type="other" ;;
         *) agent_type="claude" ;;
     esac
     
