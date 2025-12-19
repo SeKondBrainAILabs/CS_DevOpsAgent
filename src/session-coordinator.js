@@ -925,6 +925,77 @@ class SessionCoordinator {
   }
 
   /**
+   * Ensure GROQ API key is configured (for AI-powered commit messages)
+   */
+  async ensureGroqApiKey() {
+    const globalSettings = this.loadGlobalSettings();
+    
+    // Check if we've already asked or if key is set
+    if (globalSettings.groqApiKeyConfigured === 'never') {
+      return; // User chose never
+    }
+    
+    if (credentialsManager.hasGroqApiKey()) {
+      return; // Key already configured
+    }
+    
+    // First time - ask if they want AI-powered commit messages
+    console.log(`\n${CONFIG.colors.yellow}═══ AI-Powered Commit Messages ═══${CONFIG.colors.reset}`);
+    console.log(`${CONFIG.colors.dim}DevOps Agent can generate commit messages using AI (GROQ).${CONFIG.colors.reset}`);
+    console.log();
+    console.log(`${CONFIG.colors.bright}Options:${CONFIG.colors.reset}`);
+    console.log(`  ${CONFIG.colors.green}Y${CONFIG.colors.reset}) Yes - Configure GROQ API key now`);
+    console.log(`  ${CONFIG.colors.red}N${CONFIG.colors.reset}) Skip - Configure later with: npm run setup`);
+    console.log(`  ${CONFIG.colors.magenta}Never${CONFIG.colors.reset}) Never ask again (disable AI commits)`);
+    
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+    
+    const answer = await new Promise((resolve) => {
+      rl.question('\nEnable AI-powered commit messages? (Y/N/Never) [N]: ', (ans) => {
+        resolve(ans.trim().toLowerCase());
+      });
+    });
+    
+    if (answer === 'never' || answer === 'nev') {
+      globalSettings.groqApiKeyConfigured = 'never';
+      this.saveGlobalSettings(globalSettings);
+      console.log(`${CONFIG.colors.dim}AI commit messages disabled. You can enable later by editing ~/.devops-agent/settings.json${CONFIG.colors.reset}`);
+      rl.close();
+      return;
+    }
+    
+    if (answer === 'y' || answer === 'yes') {
+      console.log();
+      console.log(`${CONFIG.colors.bright}GROQ API Key Setup${CONFIG.colors.reset}`);
+      console.log(`${CONFIG.colors.dim}Get your free API key at: ${CONFIG.colors.cyan}https://console.groq.com/keys${CONFIG.colors.reset}`);
+      console.log();
+      
+      const apiKey = await new Promise((resolve) => {
+        rl.question('Enter your GROQ API key: ', (key) => {
+          resolve(key.trim());
+        });
+      });
+      
+      if (apiKey) {
+        credentialsManager.setGroqApiKey(apiKey);
+        credentialsManager.injectEnv();
+        globalSettings.groqApiKeyConfigured = 'yes';
+        this.saveGlobalSettings(globalSettings);
+        console.log(`${CONFIG.colors.green}✓${CONFIG.colors.reset} GROQ API key saved successfully!`);
+      } else {
+        console.log(`${CONFIG.colors.yellow}No key entered. You can configure later with: npm run setup${CONFIG.colors.reset}`);
+      }
+    } else {
+      console.log(`${CONFIG.colors.dim}Skipping for now. Configure later with: npm run setup${CONFIG.colors.reset}`);
+    }
+    
+    rl.close();
+  }
+
+  /**
    * Create a new session and generate Claude instructions
    */
   async createSession(options = {}) {
@@ -935,6 +1006,7 @@ class SessionCoordinator {
     await this.ensureGlobalSetup();     // Developer initials (once per user)
     await this.ensureProjectSetup();    // Version strategy (once per project)
     await this.ensureHouseRulesSetup(); // House rules setup (once per project)
+    await this.ensureGroqApiKey();      // GROQ API key for AI commits (once per user)
     
     const sessionId = this.generateSessionId();
     const task = options.task || 'development';
