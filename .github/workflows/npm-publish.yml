@@ -3,7 +3,7 @@ name: NPM Publish Workflow
 on:
   push:
     branches:
-      - DEV_AGENT_MANUS_1612_Upgradev3
+      - development
       - main
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
         continue-on-error: true
 
       - name: Publish to NPM (Dev)
-        if: github.ref == 'refs/heads/DEV_AGENT_MANUS_1612_Upgradev3'
+        if: github.ref == 'refs/heads/development'
         run: npm publish --tag dev
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

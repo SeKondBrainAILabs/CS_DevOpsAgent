@@ -3,11 +3,11 @@ name: Contract Automation Tests
 on:
   push:
     branches:
-      - DEV_AGENT_MANUS_1612_Upgradev3
+      - development
       - main
   pull_request:
     branches:
-      - DEV_AGENT_MANUS_1612_Upgradev3
+      - development
       - main
 
 jobs:
