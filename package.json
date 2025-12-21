@@ -1,6 +1,6 @@
 {
   "name": "s9n-devops-agent",
-  "version": "2.0.14",
+  "version": "2.0.17",
   "description": "CS_DevOpsAgent - Intelligent Git Automation System with multi-agent support and session management",
   "type": "module",
   "main": "src/cs-devops-agent-worker.js",
@@ -12,8 +12,11 @@
     "src/",
     "scripts/",
     "docs/",
+    "House_Rules_Contracts/",
     "start-devops-session.sh",
     "cleanup-sessions.sh",
+    "houserules.md",
+    "houserules_structured.md",
     "LICENSE",
     "README.md"
   ],
@@ -25,6 +28,7 @@
     "devops:start": "node src/session-coordinator.js start",
     "devops:close": "node src/close-session.js",
     "devops:cleanup": "./cleanup-sessions.sh",
+    "chat": "node src/agent-chat.js",
     "setup": "node src/setup-cs-devops-agent.js",
     "house-rules:status": "node src/house-rules-manager.js status",
     "house-rules:update": "node src/house-rules-manager.js update",
@@ -33,7 +37,7 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:worktree": "jest test_cases/worktree/",
-    "test:e2e": "./test_scripts/test-multi-agent-e2e.sh",
+    "test:e2e": "./test_scripts/test-e2e-multi-session.sh",
     "test:contracts": "jest tests/integration/contract-workflow.test.js",
     "test:push-behind": "jest test_scripts/push_behind_spec.js",
     "test:debug": "./debug-failing-tests.sh"

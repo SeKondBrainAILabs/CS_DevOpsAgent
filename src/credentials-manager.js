@@ -7,7 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const rootDir = path.join(__dirname, '..');
 
-const CREDENTIALS_PATH = path.join(rootDir, 'local_deploy', 'credentials.json');
+const CREDENTIALS_PATH = process.env.DEVOPS_CREDENTIALS_PATH || path.join(rootDir, 'local_deploy', 'credentials.json');
 
 // Simple obfuscation to prevent casual shoulder surfing
 // NOTE: This is NOT strong encryption. In a production environment with sensitive keys,

@@ -177,7 +177,8 @@ select_session() {
     echo -e "${BOLD}🚀 Session Selection${NC}"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo
-    echo "  ${BOLD}${GREEN}N)${NC} Create a ${BOLD}new${NC} session"
+    echo -e "  ${BOLD}${MAGENTA}0)${NC} 🤖 Kora (Smart Assistant)"
+    echo -e "  ${BOLD}${GREEN}N)${NC} Create a ${BOLD}new${NC} session"
     
     # List existing sessions
     local sessions_dir="local_deploy/session-locks"
@@ -211,7 +212,13 @@ select_session() {
     read choice
     
     # Handle the choice
-    if [[ "$choice" =~ ^[Qq]$ ]]; then
+    if [[ "$choice" == "0" ]]; then
+        # Start Smart Assistant
+        echo
+        echo -e "${MAGENTA}Starting Smart Assistant...${NC}"
+        node "$SRC_DIR/agent-chat.js"
+        return 0
+    elif [[ "$choice" =~ ^[Qq]$ ]]; then
         # Quit the session manager
         echo
         echo -e "${GREEN}Goodbye! Exiting DevOps Session Manager.${NC}"

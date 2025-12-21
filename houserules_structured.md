@@ -1,5 +1,10 @@
 # House Rules for DevOps Agent (Structured Organization)
 
+**IMPORTANT: This project uses structured folder organization for NEW code only.**
+- **Existing files**: Stay in their current locations - DO NOT move them
+- **New features/modules**: Follow the structure below
+- **Rationale**: Structured organization improves discoverability and consistency for new development
+
 ## 🚨 CRITICAL: File Coordination & Infrastructure Protocol (MUST FOLLOW)
 
 **To prevent conflicts with other agents and maintain infrastructure integrity, you MUST follow this protocol:**
@@ -62,31 +67,270 @@
 - Wait for user decision: override, wait, or choose alternative files
 - **NEVER edit conflicting files without explicit user approval**
 
+### Example Workflow:
+```bash
+# 1. Check if files are available (no other agent editing them)
+# 2. Create your declaration in .file-coordination/active-edits/
+# 3. Make your edits
+# 4. Write commit message to the session-specific file
+# 5. Continue working (locks stay active!)
+# 6. When session closes: merge changes THEN remove declaration
+```
+
 ### Why Locks Must Stay Active:
 - **Problem**: If you release locks after committing, another agent can declare and edit the same files
 - **Result**: Both sessions will conflict when merging
 - **Solution**: Hold locks until session is merged and worktree removed
 - **Benefit**: Prevents duplicate work and merge conflicts
 
-## Project Structure & Folder Guidelines
+**This coordination prevents wasted work and merge conflicts!**
 
-**Refer to `folders.md` for complete folder descriptions. You may create new module and feature subfolders following the established patterns, but MUST update `folders.md` when doing so.**
+---
+
+## Architecture Decision Records (ADRs)
+
+**We treat architectural decisions as code.** 
+Any "Architecturally Significant" change MUST be documented in an ADR.
+
+**What is Architecturally Significant?**
+- Adding a new persistence layer (e.g., adding Redis)
+- Changing the multi-agent coordination protocol
+- Adding a new major component or service
+- Changing the testing strategy
+- Introducing the Contract System itself
+
+**Workflow:**
+1.  **Create:** Create a new file in `adr/` named `XXXX-title-of-decision.md` (e.g., `0002-switch-to-postgres.md`).
+2.  **Format:** Use the standard ADR template (Context, Decision, Consequences).
+3.  **Review:** Submit as part of your PR.
+
+## 🚨 CRITICAL: Contract System (MUST FOLLOW)
+
+**ADDED: 2024-12-02**
+
+**To prevent duplicate features, conflicting changes, and wasted work, ALL coding agents MUST follow the Contract System.**
+
+### What is the Contract System?
+
+The Contract System is a **single source of truth** for all project components. Before making ANY changes to:
+- Database schema
+- SQL queries
+- API endpoints
+- Third-party integrations
+- Features
+- Infrastructure/environment variables
+
+**You MUST check the relevant contract file first.**
+
+### Contract Files Location
+
+**All contract files are stored in:** `House_Rules_Contracts/`
+
+| Contract File | Purpose | Check Before... |
+|---------------|---------|----------------|
+| `DATABASE_SCHEMA_CONTRACT.md` | Database tables, columns, indexes, migrations | Creating/modifying database schema |
+| `SQL_CONTRACT.json` | Reusable SQL queries with parameters | Writing any SQL query |
+| `API_CONTRACT.md` | All API endpoints and specifications | Creating/modifying API endpoints |
+| `THIRD_PARTY_INTEGRATIONS.md` | External service integrations | Integrating third-party services |
+| `FEATURES_CONTRACT.md` | All features and specifications | Implementing any feature |
+| `INFRA_CONTRACT.md` | Environment variables and infrastructure | Adding configuration/env vars |
+
+### 🚨 MANDATORY Workflow for ALL Coding Agents
+
+**BEFORE making ANY changes, you MUST:**
 
 ```
-DevOpsAgent/
-├── ModuleName/            # Module-specific folders
+1. IDENTIFY what you're about to change:
+   - Database? → Read DATABASE_SCHEMA_CONTRACT.md
+   - SQL query? → Read SQL_CONTRACT.json
+   - API endpoint? → Read API_CONTRACT.md
+   - Third-party service? → Read THIRD_PARTY_INTEGRATIONS.md
+   - Feature? → Read FEATURES_CONTRACT.md
+   - Config/env var? → Read INFRA_CONTRACT.md
+
+2. SEARCH the contract for existing implementation:
+   - Does this table/query/endpoint/feature already exist?
+   - Can I reuse existing code instead of creating new?
+   - Will my change conflict with existing code?
+
+3. DECIDE based on what you found:
+   
+   IF existing implementation found:
+   ✅ REUSE it - Add your module to "Used By" section
+   ✅ EXTEND it - If it needs enhancement
+   ❌ DO NOT duplicate it
+   ❌ DO NOT create a new version
+   
+   IF no existing implementation:
+   ✅ CREATE new following contract template
+   ✅ DOCUMENT thoroughly in contract
+   ✅ CROSS-REFERENCE other contracts
+   ✅ UPDATE version number and changelog
+
+4. AFTER making changes:
+   ✅ UPDATE the relevant contract file immediately
+   ✅ ADD changelog entry with date
+   ✅ INCREMENT version number
+   ✅ CROSS-REFERENCE related contracts
+```
+
+### Why This Prevents Chaos
+
+**Without contracts, multiple agents will:**
+❌ Create duplicate features with different names  
+❌ Create duplicate API endpoints for same functionality  
+❌ Create duplicate SQL queries doing the same thing  
+❌ Integrate the same third-party service multiple times  
+❌ Create conflicting database schema changes  
+❌ Create duplicate environment variables  
+❌ Overwrite each other's code  
+❌ Break existing functionality unknowingly  
+
+**With contracts, agents will:**
+✅ Discover existing functionality before building  
+✅ Reuse existing code instead of duplicating  
+✅ Know exactly what exists and how to use it  
+✅ Avoid conflicts and breaking changes  
+✅ Coordinate changes across the codebase  
+✅ Maintain consistency and quality  
+✅ Save time by not rebuilding what exists  
+
+### Contract Update Requirements
+
+**Every contract update MUST include:**
+
+1. **Date stamp:** When the change was made (YYYY-MM-DD)
+2. **Version increment:** Following semver (1.0.0 → 1.0.1 or 1.1.0)
+3. **Changelog entry:** What changed and why
+4. **Impact assessment:** Breaking change? Which modules affected?
+5. **Cross-references:** Links to related contracts
+
+**Example changelog entry:**
+```markdown
+| Date | Version | Agent/Author | Changes | Impact |
+|------|---------|--------------|---------|--------|
+| 2024-12-02 | 1.1.0 | Coding Agent Alpha | Added user_preferences table | Non-breaking, new feature |
+```
+
+### Cross-Referencing Contracts
+
+**Contracts are interconnected. Always check related contracts:**
+
+- **DATABASE_SCHEMA_CONTRACT.md** ↔️ **SQL_CONTRACT.json**  
+  (Tables ↔️ Queries that use them)
+
+- **SQL_CONTRACT.json** ↔️ **API_CONTRACT.md**  
+  (Queries ↔️ Endpoints that call them)
+
+- **API_CONTRACT.md** ↔️ **FEATURES_CONTRACT.md**  
+  (Endpoints ↔️ Features that use them)
+
+- **THIRD_PARTY_INTEGRATIONS.md** ↔️ **INFRA_CONTRACT.md**  
+  (Services ↔️ API keys/config)
+
+- **FEATURES_CONTRACT.md** ↔️ **ALL CONTRACTS**  
+  (Features use everything)
+
+**When updating one contract, check if related contracts need updates too.**
+
+### Initial Contract Population
+
+**If contracts are empty/incomplete, the DevOps Agent can generate them:**
+
+See the "Initial Population Instructions" section in each contract file for:
+- Search patterns to find existing code
+- File locations to check
+- How to extract and document information
+- Automated script approaches
+
+**DevOps Agent can execute coding agent scripts to:**
+1. Scan the entire codebase
+2. Identify all features, APIs, database tables, etc.
+3. Generate contract files automatically
+4. Iteratively improve contracts
+
+### Enforcement & Quality Gates
+
+**1. Automated Validation (Coming Soon)**
+We are moving towards "Executable Specifications". Soon, build scripts will validate that contracts match the codebase.
+*   **Drift Check:** `npm run validate-contracts` will fail if code and contracts diverge.
+*   **Pre-commit Hook:** Will prevent commits that violate contracts.
+
+**2. TDD is Paramount**
+**Contracts do NOT replace Test-Driven Development (TDD).**
+*   **Tests** are the executable specification of *behavior*.
+*   **Contracts** are the executable specification of *architecture/schema*.
+*   **Rule:** You must write tests AND update contracts. One does not substitute for the other.
+
+**3. Manual Rejection (Temporary)**
+Until automation is fully in place, the user should reject your changes if you:
+- Create a feature without checking FEATURES_CONTRACT.md first
+- Write SQL without checking SQL_CONTRACT.json first
+- Create an API endpoint without checking API_CONTRACT.md first
+- Integrate a service without checking THIRD_PARTY_INTEGRATIONS.md first
+- Modify database without checking DATABASE_SCHEMA_CONTRACT.md first
+- Add env vars without checking INFRA_CONTRACT.md first
+
+**You are violating house rules and creating technical debt.**
+
+**The user should reject your changes and require you to:**
+1. Read the relevant contract(s)
+2. Check for existing implementation
+3. Reuse or properly document your changes
+4. Update contracts appropriately
+
+### Quick Reference
+
+**Before you code, ask yourself:**
+
+- 📋 "Does this feature already exist?" → Check `FEATURES_CONTRACT.md`
+- 🔌 "Does this API endpoint already exist?" → Check `API_CONTRACT.md`
+- 🗄️ "Does this database table already exist?" → Check `DATABASE_SCHEMA_CONTRACT.md`
+- 📝 "Does this SQL query already exist?" → Check `SQL_CONTRACT.json`
+- 🌐 "Is this service already integrated?" → Check `THIRD_PARTY_INTEGRATIONS.md`
+- ⚙️ "Does this env variable already exist?" → Check `INFRA_CONTRACT.md`
+
+**If the answer is YES → REUSE IT**  
+**If the answer is NO → CREATE IT and DOCUMENT IT**
+
+---
+
+## Project Structure & Folder Guidelines
+
+**CRITICAL: Structured organization applies to NEW code only. Existing files remain where they are.**
+
+**Refer to `folders.md` (if it exists) for complete folder descriptions. You may create new module and feature subfolders following the patterns below, and MUST update `folders.md` when doing so.**
+
+**Structure for NEW Development:**
+```
+ProjectName/
+├── ModuleName/            # Module-specific folders (for NEW modules)
 │   ├── src/              # Source code for this module
 │   │   └── featurename/  # Feature-specific code
 │   └── test/             # Tests for this module
 │       └── featurename/  # Feature-specific tests
+├── src/                   # Existing source code (if already present)
+├── test_cases/            # Existing test files (if already present)
 ├── test_scripts/          # Test execution scripts
 ├── docs/                  # Documentation
 ├── deploy_test/           # Deployment test scripts
 ├── infrastructure/        # Infrastructure docs (READ BEFORE CREATING RESOURCES)
 │   └── infrastructure.md  # Server, instance, Docker information
+├── House_Rules_Contracts/ # Contract system files
 ├── local_deploy/          # Local-only files (gitignored) - ALL DEBUG/TEMP FILES GO HERE
 └── product_requirement_docs/  # PRDs
 ```
+
+**When Creating New Modules/Features:**
+- Create a `ModuleName/` folder for the new module
+- Within that, create `src/` and `test/` subdirectories
+- Group related features within `src/featurename/` and `test/featurename/`
+- Update commit messages to reference the module path (e.g., `ModuleName/src/featurename/file.js`)
+
+**DO NOT:**
+- Move existing files to fit the new structure
+- Restructure existing modules that are already working
+- Create module folders for one-off changes to existing code
 
 ### Infrastructure Folder Requirements
 
@@ -96,11 +340,11 @@ The `/infrastructure/` folder contains critical system information:
 - **MUST UPDATE** this file when you create new resources
 - Include resource names, purposes, ports, dependencies, and access information
 
-### Local-Only Files Policy
+### Important: Local-Only Files Policy
 
 **ALL temporary, debug, and local-only files MUST be placed in `local_deploy/` folder**
 
-This folder is gitignored and includes:
+This folder is gitignored and will never be uploaded to the repository. Use it for:
 - Debug logs and output files
 - Temporary test data
 - Local configuration overrides
@@ -144,9 +388,10 @@ local_deploy/migration-backup/
 
 ## Commit Policy
 
-### Single Commit Message File (`.claude-commit-msg`)
+### 1. Single Commit Message File (`.claude-commit-msg`)
 
 **Location**: Project root `.claude-commit-msg`  
+**Action**: WRITE to this file (the DevOps agent will process it)  
 **Format**:
 ```
 type(scope): subject line describing the change (max 72 characters)
@@ -161,14 +406,30 @@ This change was needed because [specific problem or requirement].
 - File(s): docs/README.md - Related documentation updates
 ```
 
-**Commit Types**:
-- `feat`: New feature or capability
-- `fix`: Bug fix or error correction
-- `refactor`: Code restructuring without changing functionality
-- `docs`: Documentation updates
-- `test`: Adding or modifying tests
-- `chore`: Maintenance tasks
-- `infra`: Infrastructure changes (servers, Docker, deployment)
+**Commit Types (REQUIRED - MUST use one of these)**:
+- `feat:` - New feature or capability added
+- `fix:` - Bug fix or error correction
+- `refactor:` - Code restructuring without changing functionality
+- `docs:` - Documentation updates (README, comments, PRDs)
+- `test:` - Adding or modifying tests
+- `chore:` - Maintenance tasks (configs, dependencies, cleanup)
+- `style:` - Code formatting, no functional changes
+- `infra:` - Infrastructure changes (servers, Docker, deployment)
+
+**CRITICAL**: All commit messages MUST start with one of these prefixes followed by a colon.
+The DevOps agent will reject commits that don't follow this format.
+
+**Rules**:
+- Always start with WHY (2 lines): Explain the problem/need that motivated these changes
+- For each WHAT item: List the specific files changed, then describe what was done
+- Format: "File(s): path/to/file.ext, other.ext - Description of changes"
+- Group related file changes together in one bullet point
+- Be specific about WHAT changed and WHERE (exact file paths)
+- Describe the IMPACT of the change, not just what was done
+- Never include bash commands or command-line syntax
+- Never attempt to run git commands directly
+- Keep the subject line under 72 characters
+- Use present tense ("add" not "added", "fix" not "fixed")
 
 ### Infrastructure Change Requirements
 
@@ -178,10 +439,51 @@ When making infrastructure changes, your commit MUST:
 - Document resource purpose, configuration, and dependencies
 - Include rollback instructions if applicable
 
-## Session Recovery System (`temp_todo.md`)
+**Example Infrastructure Commit Message**:
+```
+infra(docker): add PostgreSQL database container for user service
 
-**Purpose**: Maintain session continuity across crashes or disconnections.
+The user service needs a dedicated database instance with persistent storage.
+This approach uses Docker Compose for easier local development and testing.
+
+- File(s): docker-compose.yml - Add postgres service with volume and environment configuration
+- File(s): infrastructure/infrastructure.md - Document new database container details and connection info
+- File(s): .env.example - Add database credentials template
+```
+
+**Example Commit Message**:
+```
+fix(worktree): resolve push-behind error in multi-agent scenarios
+
+The DevOps agent was failing when multiple agents pushed to the same branch simultaneously.
+This fix adds retry logic with pull-merge to handle the common "behind remote" scenario.
+
+- File(s): src/cs-devops-agent-worker.js - Add retry logic with git pull --no-rebase on push failures
+- File(s): src/utils.js, src/git-helpers.js - Extract common git operations into reusable helper functions  
+- File(s): test_cases/worktree/20250929_push_behind_spec.js - Add test case for push-behind scenario
+- File(s): docs/README.md - Document the new retry behavior and configuration options
+```
+
+### 2. Product Requirement Docs Updates
+
+**When making code changes**: Also update relevant files in the `product_requirement_docs/` folder
+- Keep PRDs in sync with implementation
+- Document new features and their rationale
+- Update affected system components
+
+## Session Recovery and Context Persistence
+
+### Crash Recovery System (temp_todo.md)
+
+**Purpose**: Maintain session continuity across potential crashes or disconnections.
+
 **Location**: `/temp_todo.md` (project root)
+
+**When to Use**:
+- Starting any multi-step task
+- Before executing complex operations
+- When debugging issues that may cause crashes
+- Whenever working on tasks that modify multiple files
 
 **Format**:
 ```markdown
@@ -202,47 +504,109 @@ Last Updated: YYYY-MM-DDTHH:MM:SSZ
 - [x] Step 2: Description (completed)
 - [ ] Step 3: Description (in progress)
 
+## Relevant Context
+- Key files being modified:
+  - file1.js: [what changes]
+  - file2.sh: [what changes]
+- Important findings:
+  - [Any discovered issues or insights]
+- Dependencies/Requirements:
+  - [Libraries, services needed]
+
+## Current Working State
+[Any variables, partial results, or important data to preserve]
+
 ## Next Steps
 [What should happen next if session resumes]
+
+## Error Log (if any)
+[Any errors encountered and their resolution status]
 ```
 
-## Code Quality Standards
+**Recovery Process**:
+When starting a new session:
+1. Always check `temp_todo.md` first
+2. If it contains data, ask user: "I found a previous session context. Should I continue where we left off?"
+3. If continuing, resume from "Next Steps"
+4. If not continuing, clear the file and start fresh
 
-### File Headers
+## Code Quality & Documentation Standards
+
+### Module/File Headers
+Every JavaScript file should start with a comprehensive header:
 ```javascript
 /**
+ * ============================================================================
  * MODULE NAME - Brief Description
+ * ============================================================================
  * 
- * This module handles [main purpose]. Key components:
+ * This module handles [main purpose]. It provides [key functionality].
+ * 
+ * Key Components:
  * - ComponentA: Does X
  * - ComponentB: Handles Y
  * 
- * Dependencies: library1, module.submodule
+ * Dependencies:
+ * - External: library1, library2
+ * - Internal: module.submodule
+ * 
+ * Usage Example:
+ *   const { MainClass } = require('./this_module');
+ *   const instance = new MainClass();
+ *   const result = instance.process();
+ * ============================================================================
  */
 ```
 
-### Function Comments
+### Function/Method Comments
 ```javascript
 /**
  * Execute a named operation with the provided input.
  * 
- * @param {string} operationName - Name of operation
- * @param {Object} input - Input data
- * @returns {Promise<Object>} Result with status and output
- * @throws {Error} If operation fails
+ * @param {string} operationName - Name of the operation to execute
+ * @param {Object} input - Input data for the operation
+ * @param {Object} [context={}] - Optional context for execution
+ * @returns {Promise<Object>} Result object with status and output
+ * @throws {Error} If operation fails or times out
+ * 
+ * @example
+ * const result = await execute('process', { data: 'test' });
+ * if (result.success) {
+ *   console.log(result.output);
+ * }
  */
 ```
 
-### Error Handling
-- Provide meaningful error messages with context
-- Use try-catch for risky operations
-- Log errors with relevant context
-- Never concatenate user input into shell commands
+### Inline Comments
+```javascript
+// Good inline comments explain WHY, not WHAT
+const DEBOUNCE_MS = 3000;  // Longer delay for commit messages to ensure complete writes
 
-## Testing Policy
+// Document complex logic
+if (retries > 0) {
+  // Pull failed due to behind remote, retry with merge
+  // This handles the common case where another agent pushed first
+  execSync('git pull --no-rebase origin main');
+}
 
-**Location**: `ModuleName/test/featurename/`
-**Naming**: `YYYYMMDD_<short-slug>_spec.js`
+// TODO/FIXME format
+// TODO(username, 2025-09-29): Implement parallel worktree creation
+// FIXME(username, 2025-09-29): Handle edge case when worktree already exists
+```
+
+### Testing Policy
+
+### Core Testing Principles
+
+**Location for NEW tests**: Follow module structure
+- New modules: `ModuleName/test/featurename/`
+- Existing structure: `test_cases/<area>/<component>/`
+- Example (new): `UserModule/test/authentication/`
+- Example (existing): `test_cases/cs-devops-agent/worker/`
+
+**Naming Convention**:
+- Files: `YYYYMMDD_<short-slug>_spec.js`
+- Example: `20250929_push_behind_spec.js`
 
 **Test Structure**:
 ```javascript
@@ -250,50 +614,136 @@ Last Updated: YYYY-MM-DDTHH:MM:SSZ
  * Test Case: <human title>
  * - Area: <domain area>
  * - Component: <component/module>
+ * - Related Issue/PR: <#id or link>
+ * - Repro Summary: <1-3 lines on steps/inputs>
  * - Expected Behavior: <what should happen>
+ * - Regression Guard: <what would break if this fails again>
  */
+
 describe('Feature Name', () => {
+  beforeEach(() => {
+    // Setup
+  });
+
   it('should handle specific scenario', () => {
-    // Arrange, Act, Assert
+    // Arrange - set up test data
+    const testData = { /* ... */ };
+    
+    // Act - perform the action
+    const result = performAction(testData);
+    
+    // Assert - verify the result
+    expect(result).toBe(expected);
   });
 });
 ```
 
-**Bug Fix Process**: Create failing test FIRST, then fix the bug.
+### Test Execution Strategy
+
+**Run specific area tests**:
+```bash
+# Working on cs-devops-agent-worker.js?
+npm test test_cases/cs-devops-agent/worker/
+
+# Working on worktree management?
+npm test test_cases/worktree/
+
+# Just fixed a specific bug?
+npm test test_cases/worktree/manager/20250929_detection_spec.js
+```
+
+### Bug Fix Test Process (MANDATORY)
+
+1. **Create failing test FIRST (Red phase)**
+2. **Fix the bug (Green phase)**
+3. **Run area tests (Verification)**
+4. **Run full suite only before commit**
 
 ## Multi-Agent Coordination
 
 ### Session Management
-- Use `npm start` or `./start-devops-session.sh` to create sessions
-- Each session gets unique ID, dedicated worktree, and isolated branch
-- Session files stored in `local_deploy/sessions/`
+
+**Starting a new session**:
+```bash
+# Interactive session starter (recommended)
+npm start
+# or
+./start-devops-session.sh
+```
+
+This will:
+1. Ask if you want to use an existing session or create new
+2. Generate instructions for your coding agent
+3. Start the DevOps agent monitoring the appropriate worktree
 
 ### Worktree Organization
+
+**Branch Naming**:
 - Agent branches: `agent/<agent-name>/<task-name>`
+- Daily branches: `dev_sdd_YYYY-MM-DD`
 - Session branches: `<agent>/<session-id>/<task>`
-- Coordination files in `.session-locks/` and `.agent-sessions.json`
+
+**Session Files**:
+- `.devops-session.json` - Session configuration
+- `.devops-commit-<session-id>.msg` - Session-specific commit message file
+- `SESSION_README.md` - Session documentation
+
+### Multiple Coding Agent Sessions
+
+**Each session gets**:
+- Unique session ID
+- Dedicated worktree
+- Own commit message file
+- Isolated branch
+
+**Coordination Files**:
+- `.session-locks/` - Active session locks
+- `.agent-sessions.json` - Session registry
+- `.worktrees/` - Agent worktrees
 
 ## Environment Variables
 
-### Core Settings
+### Core CS_DevOpsAgent Settings
 ```bash
 AC_MSG_FILE=".claude-commit-msg"       # Commit message file
 AC_BRANCH_PREFIX="dev_sdd_"           # Branch naming prefix
 AC_PUSH=true                           # Auto-push after commit
 AC_CLEAR_MSG_WHEN="push"              # When to clear message file
+AC_MSG_DEBOUNCE_MS=3000               # Wait time after message change
 ```
 
-### Session-Specific
+### Session-Specific Variables
 ```bash
 DEVOPS_SESSION_ID="abc-123"           # Current session ID
 AGENT_NAME="claude"                    # Agent identifier
 AGENT_WORKTREE="claude-abc-123-task"  # Worktree name
 ```
 
+## File Paths and References
+
+### Path Formatting Rules
+- Use relative paths for files in same/sub/parent directories
+- Use absolute paths for system files or files outside working tree
+- Examples:
+  - Same directory: `main.js`, `config.yaml`
+  - Subdirectory (new modules): `ModuleName/src/featurename/worker.js`
+  - Subdirectory (existing): `src/components/Button.tsx`, `tests/unit/test_helper.go`
+  - Parent directory: `../package.json`, `../../Makefile`
+  - Absolute: `/etc/nginx/nginx.conf`, `/usr/local/bin/node`
+
+### Code Block Formatting
+```javascript path=/absolute/path/to/file.js start=10
+// Real code from actual file
+```
+
+```javascript path=null start=null
+// Example or hypothetical code
+```
+
 ## Logging Policy
 
 ### Log File Location
-**All log files MUST be written to `local_deploy/logs/` directory**
+**IMPORTANT: All log files MUST be written to `local_deploy/logs/` directory**
 
 ```javascript
 const LOG_DIR = './local_deploy/logs';
@@ -328,11 +778,6 @@ function appendToLogFile(message) {
 }
 ```
 
-### Log Rotation
-- Keep logs in `local_deploy/logs/` organized by date
-- Format: `devops-agent-YYYY-MM-DD.log`
-- Never commit log files to git
-
 ### What to Log
 - Session creation/destruction
 - Worktree operations
@@ -341,9 +786,14 @@ function appendToLogFile(message) {
 - Error conditions and recovery attempts
 - Agent coordination events
 
+### Log Rotation
+- Keep logs in `local_deploy/logs/` organized by date
+- Format: `devops-agent-YYYY-MM-DD.log`
+- Never commit log files to git
+
 ### Security - NEVER Log
 - API keys or tokens
-- Full file contents
+- Full file contents (use hashes or excerpts)
 - User credentials
 - Sensitive configuration
 
@@ -377,77 +827,89 @@ When creating infrastructure, document in `/infrastructure/infrastructure.md`:
 
 ## Common Workflows
 
-### Starting New Development Session
+### 1. Starting a New Development Session
 ```bash
 npm start
 # Select "N" for new session
 # Enter task name
-# Agent creates worktree and begins monitoring
+# Copy instructions to your coding agent
 ```
 
-### Handling Infrastructure Changes
-1. Check existing infrastructure documentation
-2. Plan changes to avoid conflicts
-3. Create resources with proper naming
-4. Update documentation immediately
-5. Test integration with existing systems
-
-### Push-Behind Recovery
+### 2. Handling Push-Behind Scenarios
 The agent automatically:
 1. Detects push failures
 2. Pulls with --no-rebase to merge
 3. Retries the push
 4. Alerts on conflicts
 
-## Security Best Practices
+### 3. Multiple Agent Coordination
+```bash
+# Terminal 1: Start agent for feature-auth
+./start-devops-session.sh
+# Creates session abc-123
 
-### Input Validation
-```javascript
-function processPath(userPath) {
-  if (userPath.includes('../')) {
-    throw new Error('Invalid path: directory traversal detected');
-  }
-  return path.resolve(userPath);
-}
+# Terminal 2: Start agent for api-endpoints  
+./start-devops-session.sh
+# Creates session def-456
+
+# Each coding agent works in their respective worktree
 ```
 
-### Command Safety
-```javascript
-// Good - use array arguments
-execSync('git', ['checkout', userBranch]);
+## Review Cadence
 
-// Bad - concatenation allows injection
-execSync(`git checkout ${userBranch}`);
-```
-
-## Review and Maintenance
-
-- Review this file when adding major features
-- Update when infrastructure patterns change
+- Review this file quarterly
+- Update when adding major features
 - Keep in sync with actual implementation
 - Document lessons learned from production issues
 
-## File Paths and References
+## Additional Development Guidelines
 
-### Path Formatting Rules
-- Use relative paths for files in same/sub/parent directories
-- Use absolute paths for system files or files outside working tree
-- Examples:
-  - Same directory: `main.js`, `config.yaml`
-  - Subdirectory: `ModuleName/src/featurename/worker.js`, `ModuleName/test/unit/test.js`
-  - Parent directory: `../package.json`, `../../Makefile`
-  - Absolute: `/etc/hosts`, `/usr/local/bin/node`
+### Error Handling
 
-### Code Block Formatting
-```javascript path=/absolute/path/to/file.js start=10
-// Real code from actual file
+**Always provide meaningful error messages:**
+```javascript
+// Bad
+if (!file) throw new Error('Error');
+
+// Good
+if (!file) {
+  throw new Error(`File not found: ${filePath}. Ensure the file exists and you have read permissions.`);
+}
 ```
 
-```javascript path=null start=null
-// Example or hypothetical code
+**Use try-catch appropriately:**
+```javascript
+try {
+  const result = await riskyOperation();
+  return result;
+} catch (error) {
+  // Log the error with context
+  console.error(`Failed to perform operation: ${error.message}`, {
+    operation: 'riskyOperation',
+    context: relevantContext
+  });
+  
+  // Decide whether to recover or propagate
+  if (canRecover(error)) {
+    return fallbackValue;
+  }
+  throw error; // Re-throw if unrecoverable
+}
 ```
 
-## Performance Considerations
+### Code Organization
+
+**Single Responsibility Principle:**
+- Each function should do one thing well
+- Each module should have a clear, focused purpose
+- If a function is > 50 lines, consider breaking it down
+
+**DRY (Don't Repeat Yourself):**
+- Extract common logic into utility functions
+- Use configuration objects for repeated patterns
+- Create abstractions for repeated workflows
+
+### Performance Considerations
 
 **File System Operations:**
 ```javascript
@@ -466,7 +928,64 @@ const data = fs.readFileSync(path, 'utf8');
 - Use `--no-pager` for git commands to avoid hanging
 - Implement retry logic for network-dependent operations
 
-## Additional Development Guidelines
+### Security Best Practices
+
+**Input Validation:**
+```javascript
+// Always validate and sanitize inputs
+function processPath(userPath) {
+  // Prevent directory traversal
+  if (userPath.includes('../') || userPath.includes('..\\')) {
+    throw new Error('Invalid path: directory traversal detected');
+  }
+  
+  // Ensure path is within allowed directory
+  const resolvedPath = path.resolve(userPath);
+  if (!resolvedPath.startsWith(ALLOWED_BASE_PATH)) {
+    throw new Error('Path outside allowed directory');
+  }
+  
+  return resolvedPath;
+}
+```
+
+**Command Injection Prevention:**
+```javascript
+// Never concatenate user input into shell commands
+// Bad
+execSync(`git checkout ${userBranch}`);
+
+// Good - use array arguments
+execSync('git', ['checkout', userBranch]);
+```
+
+### Git Workflow Best Practices
+
+**Commit Guidelines:**
+- Make atomic commits (one logical change per commit)
+- Write clear, descriptive commit messages
+- Reference issues/PRs when applicable
+- Avoid committing commented-out code
+
+**Branch Management:**
+- Keep branches focused on single features/fixes
+- Regularly sync with main branch
+- Clean up merged branches
+- Use meaningful branch names
+
+### Documentation Requirements
+
+**README Updates:**
+- Update README when adding new features
+- Include usage examples for new functionality
+- Document breaking changes prominently
+- Keep installation instructions current
+
+**API Documentation:**
+- Document all public functions/methods
+- Include parameter types and return values
+- Provide usage examples
+- Note any side effects or prerequisites
 
 ### Debugging Helpers
 
@@ -554,3 +1073,370 @@ Before committing, verify:
 - Suggest potential fixes or workarounds
 - Provide links to documentation when relevant
 - Include error codes for support reference
+
+
+---
+
+## 🤖 DevOps Agent Automation (NEW: 2024-12-02)
+
+**The DevOps Agent can now automatically generate, validate, and maintain contract files.**
+
+### Automation Scripts
+
+All automation scripts are located in `scripts/contract-automation/`:
+
+1. **generate-contracts.js** - Scan codebase and extract contract information
+2. **analyze-with-llm.js** - Use Groq LLM for intelligent analysis
+3. **validate-commit.js** - Validate commit messages with contract flags
+4. **check-compliance.js** - Check if contracts are in sync with code
+
+See `scripts/contract-automation/README.md` for detailed documentation.
+
+### Contract Generation Workflow
+
+**Step 1: Local Scanning**
+
+```bash
+node scripts/contract-automation/generate-contracts.js --verbose
+```
+
+This scans the codebase and extracts:
+- Features from `src/features/` and `src/modules/`
+- API endpoints from route files
+- Database tables from migrations
+- SQL queries from code
+- Third-party integrations from package.json
+- Environment variables from code
+
+Output: `House_Rules_Contracts/contract-scan-results.json`
+
+**Step 2: LLM Analysis (Optional but Recommended)**
+
+```bash
+node scripts/contract-automation/analyze-with-llm.js \
+  --scan-results=House_Rules_Contracts/contract-scan-results.json
+```
+
+This uses Groq LLM to:
+- Generate human-readable descriptions
+- Create user stories and acceptance criteria
+- Infer API request/response formats
+- Provide security and performance recommendations
+- Validate contract completeness
+
+Output: `House_Rules_Contracts/llm-analysis-results.json`
+
+**Step 3: Manual Population**
+
+Review the generated JSON files and manually populate the contract markdown files with the discovered information. Use the templates already in place.
+
+### Commit Message Contract Flags (MANDATORY)
+
+**All commits MUST include contract flags in this format:**
+
+```
+feat(api): add user profile endpoint
+
+Contracts: [SQL:T, API:T, DB:F, 3RD:F, FEAT:T, INFRA:F]
+
+[WHY] Users need to view and update their profile information.
+
+[WHAT]
+- File(s): src/api/profile.js - Added GET /api/v1/profile endpoint
+- File(s): House_Rules_Contracts/API_CONTRACT.md - Documented new endpoint
+```
+
+**Contract Flags:**
+- `SQL:T/F` - SQL_CONTRACT.json modified
+- `API:T/F` - API_CONTRACT.md modified
+- `DB:T/F` - DATABASE_SCHEMA_CONTRACT.md modified
+- `3RD:T/F` - THIRD_PARTY_INTEGRATIONS.md modified
+- `FEAT:T/F` - FEATURES_CONTRACT.md modified
+- `INFRA:T/F` - INFRA_CONTRACT.md modified
+
+**Validation:**
+
+Before committing, run:
+
+```bash
+node scripts/contract-automation/validate-commit.js --check-staged --auto-fix
+```
+
+This will:
+- ✅ Check if claimed contract flags match actual file changes
+- ✅ Detect false positives (claimed T but not modified)
+- ✅ Detect false negatives (modified but not claimed)
+- ✅ Generate corrected commit message if --auto-fix used
+
+**The DevOps Agent will alert the user if:**
+- Contract flags are missing
+- Contract flags don't match actual changes
+- Contract files should have been updated but weren't
+
+### Compliance Checking
+
+**Run periodic compliance checks:**
+
+```bash
+node scripts/contract-automation/check-compliance.js
+```
+
+This checks if:
+- Features in code are documented in FEATURES_CONTRACT.md
+- API endpoints in code are documented in API_CONTRACT.md
+- Database tables in migrations are documented in DATABASE_SCHEMA_CONTRACT.md
+- Third-party services in package.json are documented in THIRD_PARTY_INTEGRATIONS.md
+- Environment variables in code are documented in INFRA_CONTRACT.md
+
+**Output:**
+- List of items in code but missing from contracts
+- List of items in contracts but missing from code
+- Compliance status (pass/fail)
+
+**Strict mode for CI/CD:**
+
+```bash
+node scripts/contract-automation/check-compliance.js --strict
+```
+
+Exits with error code 1 if any discrepancies found.
+
+### DevOps Agent Responsibilities
+
+**The DevOps Agent MUST:**
+
+1. **Generate contracts** when setting up a new project or after major changes
+2. **Validate commit messages** before allowing commits
+3. **Alert users** if contract flags don't match actual changes
+4. **Run compliance checks** periodically (weekly recommended)
+5. **Report discrepancies** between code and contracts
+6. **Suggest fixes** when validation fails
+
+**The DevOps Agent CAN:**
+
+1. **Execute local scanning** without LLM for fast discovery
+2. **Use Groq LLM** for intelligent analysis and recommendations
+3. **Auto-fix commit messages** with correct contract flags
+4. **Generate JSON reports** for programmatic processing
+5. **Integrate with CI/CD** pipelines for automated validation
+
+### LLM Integration (Groq)
+
+**The DevOps Agent can use Groq LLM via OpenAI-compatible API:**
+
+**Available Models:**
+- `llama-3.1-70b-versatile` (default) - Best for complex analysis
+- `llama-3.1-8b-instant` - Faster, good for simple tasks
+- `mixtral-8x7b-32768` - Alternative with large context window
+- `gemini-2.5-flash` - Fast and efficient
+
+**Environment Variable:**
+- `OPENAI_API_KEY` - Set to Groq API key (already configured in sandbox)
+
+**Use Cases:**
+- Analyze code files and extract documentation
+- Generate feature descriptions and user stories
+- Infer API request/response formats
+- Validate contract completeness
+- Provide security and performance recommendations
+
+**Cost Optimization:**
+- Use local scanning first (free, fast)
+- Use LLM only for enhancement and validation
+- Cache LLM results to avoid redundant calls
+
+### Hybrid Approach (Recommended)
+
+**Combine local scanning + LLM analysis for best results:**
+
+1. **Local scanning** (fast, deterministic)
+   - Extract structured data (tables, endpoints, queries)
+   - Pattern matching and regex
+   - File system operations
+
+2. **LLM analysis** (intelligent, contextual)
+   - Generate human-readable descriptions
+   - Infer relationships and dependencies
+   - Provide recommendations
+   - Validate completeness
+
+3. **Manual review** (human oversight)
+   - Review generated content
+   - Fill in gaps
+   - Verify accuracy
+   - Make final decisions
+
+### CI/CD Integration Example
+
+```yaml
+# .github/workflows/contract-validation.yml
+name: Contract Validation
+
+on: [pull_request]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+      
+      - name: Install Dependencies
+        run: npm install
+      
+      - name: Check Contract Compliance
+        run: node scripts/contract-automation/check-compliance.js --strict --report=json
+      
+      - name: Validate Commit Message
+        run: |
+          git log -1 --pretty=%B > commit-msg.txt
+          node scripts/contract-automation/validate-commit.js --commit-msg=commit-msg.txt --check-staged
+```
+
+### Troubleshooting
+
+**Issue: "Contract directory not found"**
+
+Solution: Merge the contract system branch first:
+```bash
+git merge origin/0212_SDD_Manus_HouseFilesUpgrade
+```
+
+**Issue: "OPENAI_API_KEY not set"**
+
+Solution: Already set in sandbox environment. For local development:
+```bash
+export OPENAI_API_KEY="your-groq-api-key"
+```
+
+**Issue: "No files found"**
+
+Solution: Run from repository root:
+```bash
+cd /path/to/CS_DevOpsAgent
+node scripts/contract-automation/generate-contracts.js
+```
+
+### Best Practices
+
+1. **Run contract generation** after major feature additions
+2. **Validate commits** before pushing to prevent issues
+3. **Check compliance weekly** to keep contracts up-to-date
+4. **Use LLM sparingly** to minimize API costs
+5. **Review auto-generated content** before committing
+6. **Document exceptions** when automation can't handle something
+7. **Keep scripts updated** as codebase evolves
+
+### Future Enhancements
+
+**Planned features:**
+- Auto-fix for compliance issues
+- Visual HTML reports with charts
+- Git hooks for pre-commit validation
+- VSCode extension for real-time validation
+- Contract versioning and diff tool
+- Dependency graph visualization
+- Dashboard for contract status
+
+---
+
+**Last Updated:** 2024-12-02  
+**Status:** ✅ Ready for use
+
+
+---
+
+## 📋 DevOps Agent Change Workflow (NEW: 2024-12-16)
+
+**This section provides a step-by-step workflow for DevOps Agents to handle change requests while adhering to the House Rules Contract System.**
+
+### Objective
+
+Implement changes to the codebase while strictly adhering to the House Rules Contract System to prevent conflicts and ensure consistency across all development activities.
+
+### Context
+
+As a DevOps Agent, you are responsible for maintaining the integrity of the microservices architecture. Before writing any code, you MUST follow the contract system to ensure coordination with other agents and prevent duplicate work.
+
+### Step-by-Step Change Process
+
+See the comprehensive workflow documentation in `House_Rules_Contracts/README.md` for detailed examples including:
+
+- How to understand change requests
+- How to consult contracts before coding
+- How to analyze and decide whether to reuse or create
+- How to implement changes following contracts
+- How to update contracts after changes
+- How to commit with proper contract flags
+
+### Quick Reference
+
+**Before you code, ask yourself:**
+
+- 📋 "Does this feature already exist?" → Check `FEATURES_CONTRACT.md`
+- 🔌 "Does this API endpoint already exist?" → Check `API_CONTRACT.md`
+- 🗄️ "Does this database table already exist?" → Check `DATABASE_SCHEMA_CONTRACT.md`
+- 📝 "Does this SQL query already exist?" → Check `SQL_CONTRACT.json`
+- 🌐 "Is this service already integrated?" → Check `THIRD_PARTY_INTEGRATIONS.md`
+- ⚙️ "Does this env variable already exist?" → Check `INFRA_CONTRACT.md`
+
+**If YES → REUSE IT**  
+**If NO → CREATE IT and DOCUMENT IT**
+
+### Mandatory Commit Format
+
+```
+<type>(<scope>): <subject>
+
+Contracts: [SQL:T/F, API:T/F, DB:T/F, 3RD:T/F, FEAT:T/F, INFRA:T/F]
+
+[WHY]
+<explanation of motivation>
+
+[WHAT]
+- File(s): <path> - <description>
+- File(s): <path> - <description>
+
+Resolves: [Task ID or Issue Number]
+Part of: House Rules Contract System
+```
+
+### Validation Before Commit
+
+```bash
+# Validate commit message and contract flags
+node scripts/contract-automation/validate-commit.js --check-staged --auto-fix
+
+# If validation passes, commit and push
+git commit -F .claude-commit-msg
+git push origin <branch-name>
+```
+
+### Critical Reminders
+
+**DO:**
+
+✅ Always check contracts BEFORE coding  
+✅ Reuse existing components when possible  
+✅ Document ALL changes in contracts immediately  
+✅ Use the mandatory commit message format  
+✅ Validate commits before pushing  
+✅ Increment version numbers appropriately  
+✅ Add comprehensive changelog entries  
+✅ Cross-reference related contracts  
+
+**DON'T:**
+
+❌ Create duplicate features/APIs/queries  
+❌ Skip contract consultation  
+❌ Forget to update contracts after coding  
+❌ Use incorrect commit message format  
+❌ Push without validation  
+❌ Make breaking changes without documentation  
+❌ Ignore existing implementations  
+❌ Work in isolation from other agents  
+
+---
+
+**Last Updated:** 2024-12-16  
+**Status:** ✅ Ready for use

@@ -62,7 +62,7 @@ const CONFIG = {
 // SESSION COORDINATOR CLASS
 // ============================================================================
 
-class SessionCoordinator {
+export class SessionCoordinator {
   constructor() {
     this.repoRoot = this.getRepoRoot();
     this.sessionsPath = path.join(this.repoRoot, CONFIG.sessionsDir);
@@ -266,19 +266,128 @@ class SessionCoordinator {
   }
   
   /**
+   * Initialize House Rules Contracts folder and files
+   */
+  async initializeContractsFolder() {
+    const contractsDir = path.join(this.repoRoot, 'House_Rules_Contracts');
+    
+    // Check if contracts folder already exists
+    if (fs.existsSync(contractsDir)) {
+      console.log(`${CONFIG.colors.dim}✓ Contracts folder already exists${CONFIG.colors.reset}`);
+      return;
+    }
+    
+    console.log(`\n${CONFIG.colors.blue}Creating contracts folder...${CONFIG.colors.reset}`);
+    
+    try {
+      // Create contracts directory
+      fs.mkdirSync(contractsDir, { recursive: true });
+      
+      // Find the npm package location to copy templates
+      const packageRoot = path.resolve(__dirname, '..');
+      const contractsTemplateDir = path.join(packageRoot, 'House_Rules_Contracts');
+      
+      if (fs.existsSync(contractsTemplateDir)) {
+        // Copy all contract template files
+        const files = fs.readdirSync(contractsTemplateDir);
+        let copiedCount = 0;
+        
+        for (const file of files) {
+          if (file.endsWith('.md') || file.endsWith('.json')) {
+            const srcPath = path.join(contractsTemplateDir, file);
+            const destPath = path.join(contractsDir, file);
+            const content = fs.readFileSync(srcPath, 'utf8');
+            fs.writeFileSync(destPath, content);
+            copiedCount++;
+          }
+        }
+        
+        console.log(`${CONFIG.colors.green}✓${CONFIG.colors.reset} Created contracts folder with ${copiedCount} template files`);
+        console.log(`${CONFIG.colors.dim}  Location: ${contractsDir}${CONFIG.colors.reset}`);
+        console.log(`${CONFIG.colors.dim}  Files: API_CONTRACT.md, DATABASE_SCHEMA_CONTRACT.md, SQL_CONTRACT.json, etc.${CONFIG.colors.reset}`);
+      } else {
+        // Fallback: create empty contracts folder with basic README
+        const readmeContent = `# House Rules Contracts\n\nThis folder contains contract files that document all project components.\n\nSee houserules.md for complete documentation on the Contract System.\n`;
+        fs.writeFileSync(path.join(contractsDir, 'README.md'), readmeContent);
+        console.log(`${CONFIG.colors.yellow}⚠ Created empty contracts folder (templates not found in package)${CONFIG.colors.reset}`);
+        console.log(`${CONFIG.colors.dim}  You can manually populate contract files from the DevOps Agent repository${CONFIG.colors.reset}`);
+      }
+    } catch (err) {
+      console.log(`${CONFIG.colors.red}✗ Error creating contracts folder: ${err.message}${CONFIG.colors.reset}`);
+      console.log(`${CONFIG.colors.dim}  You can manually create House_Rules_Contracts/ folder${CONFIG.colors.reset}`);
+    }
+  }
+  
+  /**
    * Ensure house rules are set up for the project
    */
   async ensureHouseRulesSetup() {
     const houseRulesManager = new HouseRulesManager(this.repoRoot);
+    const houseRulesPath = path.join(this.repoRoot, 'houserules.md');
     
     // Check if house rules exist
-    if (!houseRulesManager.houseRulesPath || !fs.existsSync(houseRulesManager.houseRulesPath)) {
+    if (!fs.existsSync(houseRulesPath)) {
       console.log(`\n${CONFIG.colors.yellow}House rules not found - creating default house rules...${CONFIG.colors.reset}`);
-      // Auto-create default house rules without prompting
-      const result = await houseRulesManager.updateHouseRules({ createIfMissing: true, backupExisting: false });
-      if (result.created) {
-        console.log(`${CONFIG.colors.green}✓${CONFIG.colors.reset} House rules created at: ${CONFIG.colors.bright}${result.path}${CONFIG.colors.reset}`);
+      console.log(`\n${CONFIG.colors.bright}=== Folder Organization Strategy ===${CONFIG.colors.reset}`);
+      console.log();
+      console.log(`${CONFIG.colors.bright}Option 1: STRUCTURED Organization${CONFIG.colors.reset}`);
+      console.log(`${CONFIG.colors.dim}  • NEW code follows a module-based structure:${CONFIG.colors.reset}`);
+      console.log(`${CONFIG.colors.dim}    ModuleName/src/featurename/   (source code)${CONFIG.colors.reset}`);
+      console.log(`${CONFIG.colors.dim}    ModuleName/test/featurename/  (tests)${CONFIG.colors.reset}`);
+      console.log(`${CONFIG.colors.dim}  • Existing files stay where they are (no moving!)${CONFIG.colors.reset}`);
+      console.log(`${CONFIG.colors.dim}  • Benefits: Better discoverability, clear ownership, scales well${CONFIG.colors.reset}`);
+      console.log(`${CONFIG.colors.dim}  • Best for: Larger projects, teams, microservices${CONFIG.colors.reset}`);
+      console.log();
+      console.log(`${CONFIG.colors.bright}Option 2: FLEXIBLE Organization${CONFIG.colors.reset}`);
+      console.log(`${CONFIG.colors.dim}  • Use any folder structure you prefer${CONFIG.colors.reset}`);
+      console.log(`${CONFIG.colors.dim}  • No enforced patterns for new code${CONFIG.colors.reset}`);
+      console.log(`${CONFIG.colors.dim}  • Benefits: Freedom, simplicity, less overhead${CONFIG.colors.reset}`);
+      console.log(`${CONFIG.colors.dim}  • Best for: Small projects, prototypes, solo developers${CONFIG.colors.reset}`);
+      console.log();
+      console.log(`${CONFIG.colors.yellow}Note: Both include the full contract system for preventing duplicate work.${CONFIG.colors.reset}`);
+      
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+      });
+      
+      const wantsStructure = await new Promise((resolve) => {
+        rl.question(`${CONFIG.colors.green}Use structured organization? (Y/n):${CONFIG.colors.reset} `, (answer) => {
+          rl.close();
+          resolve(answer.toLowerCase() !== 'n');
+        });
+      });
+      
+      // Determine which template to copy
+      const templateName = wantsStructure ? 'houserules_structured.md' : 'houserules.md';
+      
+      // Find the npm package location (where this script is running from)
+      // session-coordinator.js is in src/, so package root is one level up
+      const packageRoot = path.resolve(__dirname, '..');
+      const templatePath = path.join(packageRoot, templateName);
+      
+      // Copy the template to the project root
+      try {
+        if (fs.existsSync(templatePath)) {
+          const templateContent = fs.readFileSync(templatePath, 'utf8');
+          fs.writeFileSync(houseRulesPath, templateContent);
+          console.log(`${CONFIG.colors.green}✓${CONFIG.colors.reset} House rules created at: ${CONFIG.colors.bright}${houseRulesPath}${CONFIG.colors.reset}`);
+          console.log(`${CONFIG.colors.dim}Using ${wantsStructure ? 'structured' : 'flexible'} organization template${CONFIG.colors.reset}`);
+        } else {
+          console.log(`${CONFIG.colors.yellow}⚠ Template not found, creating basic house rules...${CONFIG.colors.reset}`);
+          // Fallback to programmatic creation
+          const result = await houseRulesManager.updateHouseRules({ createIfMissing: true, backupExisting: false });
+          if (result.created) {
+            console.log(`${CONFIG.colors.green}✓${CONFIG.colors.reset} House rules created at: ${CONFIG.colors.bright}${result.path}${CONFIG.colors.reset}`);
+          }
+        }
+      } catch (err) {
+        console.log(`${CONFIG.colors.red}✗ Error creating house rules: ${err.message}${CONFIG.colors.reset}`);
+        console.log(`${CONFIG.colors.dim}You can manually create houserules.md in your project root${CONFIG.colors.reset}`);
       }
+      
+      // Initialize contracts folder after house rules are created
+      await this.initializeContractsFolder();
     } else {
       // House rules exist - check if they need updating
       const status = houseRulesManager.getStatus();
@@ -2306,8 +2415,10 @@ ${CONFIG.colors.yellow}Typical Workflow:${CONFIG.colors.reset}
   }
 }
 
-// Run the CLI
-main().catch(err => {
-  console.error(`${CONFIG.colors.red}Error: ${err.message}${CONFIG.colors.reset}`);
-  process.exit(1);
-});
+// Run the CLI only if executed directly
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch(err => {
+    console.error(`${CONFIG.colors.red}Error: ${err.message}${CONFIG.colors.reset}`);
+    process.exit(1);
+  });
+}

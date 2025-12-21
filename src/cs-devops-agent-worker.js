@@ -1618,8 +1618,10 @@ console.log();
   // INTERACTIVE COMMAND INTERFACE - Handle user commands during execution
   // ============================================================================
   
-  // Extract session ID from branch name or message file
+  // Extract session ID from environment, branch name, or message file
   const sessionId = (() => {
+    if (process.env.DEVOPS_SESSION_ID) return process.env.DEVOPS_SESSION_ID;
+    
     const branch = STATIC_BRANCH || BRANCH;
     const match = branch.match(/([a-z0-9]{4}-[a-z0-9]{4})/i);
     if (match) return match[1];

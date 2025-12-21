@@ -758,7 +758,8 @@ Examples:
 }
 
 // Run if called directly
-if (import.meta.url === `file://${__filename}`) {
+const isMainModule = process.argv[1] === __filename;
+if (isMainModule) {
   main().catch(error => {
     log.error(`Fatal error: ${error.message}`);
     process.exit(1);

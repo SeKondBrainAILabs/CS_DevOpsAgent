@@ -53,16 +53,22 @@ print_info() {
 
 # Function to cleanup test environment
 cleanup() {
-    print_header "Cleaning up test environment"
-    
-    # Kill any running test processes
-    pkill -f "test-session-" 2>/dev/null || true
-    pkill -f "cs-devops-agent-worker" 2>/dev/null || true
-    
-    # Remove test directory
-    if [ -d "$TEST_DIR" ]; then
-        rm -rf "$TEST_DIR"
-        print_success "Test directory cleaned up"
+    # Only cleanup if TEST_NO_CLEANUP is not set
+    if [ -z "$TEST_NO_CLEANUP" ]; then
+        print_header "Cleaning up test environment"
+        
+        # Kill any running test processes
+        pkill -f "test-session-" 2>/dev/null || true
+        pkill -f "cs-devops-agent-worker" 2>/dev/null || true
+        
+        # Remove test directory
+        if [ -d "$TEST_DIR" ]; then
+            rm -rf "$TEST_DIR"
+            print_success "Test directory cleaned up"
+        fi
+    else
+        print_info "Skipping cleanup (TEST_NO_CLEANUP set)"
+        print_info "Test directory: $TEST_DIR"
     fi
 }
 
@@ -86,7 +92,7 @@ setup_test_env() {
     
     # Copy CS_DevOpsAgent files
     mkdir -p "$TEST_REPO/src"
-    cp -r "$REPO_ROOT/src"/*.js "$TEST_REPO/src/"
+    cp -r "$REPO_ROOT/src"/* "$TEST_REPO/src/"
     cp -r "$REPO_ROOT/deploy_test"/*.sh "$TEST_REPO/"
     cp "$REPO_ROOT/package.json" "$TEST_REPO/"
     cp "$REPO_ROOT/.env.example" "$TEST_REPO/.env" 2>/dev/null || true
@@ -288,6 +294,13 @@ test_conflict_handling() {
     
     cd "$TEST_REPO"
     
+    # Start worker for conflict detection with Session ID
+    export DEVOPS_SESSION_ID="session_conflict"
+    AC_PUSH=false AC_REQUIRE_MSG=true AC_MSG_MIN_BYTES=10 AC_CLEAR_MSG_WHEN=commit AC_TRIGGER_ON_MSG=true AC_MSG_DEBOUNCE_MS=400 AC_DEBOUNCE_MS=200 AC_DEBUG=true \
+    node src/cs-devops-agent-worker.js > "${LOG_DIR}/worker_conflict.log" 2>&1 &
+    local WORKER_PID=$!
+    sleep 2
+
     # Setup conflict scenario
     echo "Original content" > conflict_file.txt
     git add conflict_file.txt
@@ -299,6 +312,7 @@ test_conflict_handling() {
         echo "Content from Agent A" > conflict_file.txt
         echo "fix: agent A change" > .claude-commit-msg
     ) &
+    PID_A=$!
     
     (
         export AGENT_NAME="agent_b"
@@ -306,19 +320,24 @@ test_conflict_handling() {
         echo "Content from Agent B" > conflict_file.txt
         echo "fix: agent B change" > .claude-commit-msg
     ) &
+    PID_B=$!
     
-    wait
+    # Wait ONLY for the agent subshells, not the worker
+    wait $PID_A $PID_B
     
     sleep 3
     
-    # Check if conflict was detected (check alerts)
-    if [ -d ".git/.ac/alerts" ] && [ "$(ls -A .git/.ac/alerts)" ]; then
+    # Check if conflict was detected (check file coordination conflicts)
+    # The new system uses local_deploy/.file-coordination/conflicts or logs advisory
+    if grep -q "File coordination advisory" "${LOG_DIR}/worker_conflict.log" || [ -d "local_deploy/.file-coordination/conflicts" ]; then
         print_success "Conflict detected and alert created"
         echo "PASS: Conflict detection" >> "$RESULTS_FILE"
     else
         print_error "Conflict detection failed"
         echo "FAIL: Conflict detection" >> "$RESULTS_FILE"
     fi
+    
+    kill $WORKER_PID 2>/dev/null || true
 }
 
 # Test 6: Daily rollover
@@ -329,7 +348,7 @@ test_daily_rollover() {
     
     # Create a branch for yesterday
     local yesterday=$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d "yesterday" +%Y-%m-%d)
-    git checkout -b "test_${yesterday}"
+    git checkout -B "test_${yesterday}"
     echo "Yesterday's work" > yesterday.txt
     git add .
     git commit -m "Yesterday's commit"
@@ -342,7 +361,7 @@ test_daily_rollover() {
     if command -v node >/dev/null 2>&1; then
         # Create a simple rollover test
         cat > test_rollover.js << 'EOF'
-const { execSync } = require('child_process');
+import { execSync } from 'child_process';
 
 // Simulate daily rollover
 const today = new Date().toISOString().split('T')[0];
@@ -396,7 +415,7 @@ test_performance() {
     local duration=$((end_time - start_time))
     
     # Count commits created
-    local commit_count=$(git log --oneline | grep -c "rapid commit" || echo 0)
+    local commit_count=$(git log --oneline | grep -c "rapid commit" || true)
     
     print_info "Created $commit_count commits in ${duration}s"
     
@@ -434,9 +453,9 @@ main() {
     # Generate test report
     print_header "Test Results Summary"
     
-    local total_tests=$(grep -c ":" "$RESULTS_FILE" 2>/dev/null || echo 0)
-    local passed_tests=$(grep -c "PASS" "$RESULTS_FILE" 2>/dev/null || echo 0)
-    local failed_tests=$(grep -c "FAIL" "$RESULTS_FILE" 2>/dev/null || echo 0)
+    local total_tests=$(grep -c ":" "$RESULTS_FILE" 2>/dev/null || true)
+    local passed_tests=$(grep -c "PASS" "$RESULTS_FILE" 2>/dev/null || true)
+    local failed_tests=$(grep -c "FAIL" "$RESULTS_FILE" 2>/dev/null || true)
     
     echo -e "${CYAN}Total Tests:${NC} $total_tests"
     echo -e "${GREEN}Passed:${NC} $passed_tests"
