@@ -344,6 +344,24 @@ class SessionCoordinator {
         return;
     }
     
+    // Check if worktree directory exists
+    if (!fs.existsSync(sessionData.worktreePath)) {
+      this.ui.logError(`Worktree directory not found: ${sessionData.worktreePath}`);
+      this.ui.logWarning('This session appears to be stale or the worktree was deleted manually.');
+      
+      const cleanup = await this.ui.promptYesNo('Would you like to cleanup this stale session?', true);
+      if (cleanup) {
+        // Clean up the stale session
+        this.sessionManager.removeSessionLock(sessionId);
+        // Also try to prune git worktrees just in case
+        try {
+          this.git.pruneWorktrees();
+        } catch (e) {}
+        this.ui.logSuccess('Stale session cleaned up.');
+      }
+      return;
+    }
+    
     // ... Env setup and fork logic ...
     const env = {
       ...process.env,
