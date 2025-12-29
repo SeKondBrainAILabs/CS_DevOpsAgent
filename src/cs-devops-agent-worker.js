@@ -729,8 +729,13 @@ async function commitOnce(repoRoot, msgPath) {
       msg = rest.length > 0 ? `${msg}\n${rest.join('\n')}${infraDetails}` : `${msg}${infraDetails}`;
     }
 
+const REQUIRE_AI_COMMIT = (process.env.AC_AI_COMMIT || "false").toLowerCase() === "true";
+
+// ...
+
     let committed = false;
     if (REQUIRE_MSG && conventionalHeaderOK(msg)) {
+      // (Existing commit logic...)
       // Update infrastructure documentation before commit
       if (infraChanges.hasInfraChanges) {
         await updateInfrastructureDoc(infraChanges, msg);
@@ -753,6 +758,47 @@ async function commitOnce(repoRoot, msgPath) {
       fs.writeFileSync(tmp, msg + "\n");
       committed = (await run("git", ["commit", "-F", tmp])).ok;
       try { fs.unlinkSync(tmp); } catch {}
+    } else if (REQUIRE_MSG && !conventionalHeaderOK(msg) && REQUIRE_AI_COMMIT) {
+      // AI COMMIT GENERATION
+      log("generating AI commit message...");
+      
+      // Look for the script in scripts/ or ../scripts/
+      let scriptPath = path.join(process.cwd(), 'scripts', 'generate-ai-commit.js');
+      if (!fs.existsSync(scriptPath)) {
+        // Try looking relative to __dirname
+        scriptPath = path.resolve(__dirname, '..', 'scripts', 'generate-ai-commit.js');
+      }
+      
+      if (fs.existsSync(scriptPath)) {
+        try {
+          const { stdout } = await execa('node', [scriptPath], { 
+            stdio: 'inherit',
+            env: { ...process.env, GROQ_API_KEY: process.env.GROQ_API_KEY } 
+          });
+          
+          // Re-read message after generation
+          msg = readMsgFile(msgPath);
+          if (conventionalHeaderOK(msg)) {
+             // Recursive call or just proceed? Let's proceed with commit logic duplicated or simple recursion
+             // To avoid recursion complexity, let's just commit here
+             
+             // ... Duplicated commit logic or recursive call
+             // Let's recursively call commitOnce to keep it clean (busy flag handles concurrency)
+             busy = false; // Reset busy temporarily
+             await commitOnce(repoRoot, msgPath);
+             return; 
+          }
+        } catch (err) {
+          log(`AI generation failed: ${err.message}`);
+        }
+      } else {
+        log(`AI script not found at ${scriptPath}`);
+      }
+      
+      if (!committed) {
+         log("message still not ready after AI attempt; skipping commit");
+         return;
+      }
     } else if (!REQUIRE_MSG) {
       committed = (await run("git", ["commit", "-m", "chore: cs-devops-agent"])).ok;
     } else {
@@ -770,6 +816,8 @@ async function commitOnce(repoRoot, msgPath) {
     console.log(`\x1b[32m✓ COMMITTED:\x1b[0m ${sha}`);
     console.log(`  Branch:  ${await currentBranch()}`);
     console.log(`  Message: ${header}`);
+    console.log("");
+    console.log(`\x1b[36m💡 TO FINISH:\x1b[0m Type \x1b[1mexit\x1b[0m to close session and cleanup`);
     console.log("─".repeat(60) + "\n");
     
     log(`committed ${sha} on ${await currentBranch()}`);
