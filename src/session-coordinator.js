@@ -1123,7 +1123,44 @@ export class SessionCoordinator {
     
     const sessionId = this.generateSessionId();
     const task = options.task || 'development';
-    const agentType = options.agent || 'claude';
+    
+    // If agent type wasn't provided, ask for it now
+    let agentType = options.agent;
+    if (!agentType) {
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+      });
+      
+      console.log(`\n${CONFIG.colors.blue}Select Agent Type:${CONFIG.colors.reset}`);
+      console.log(`  1) Claude (default)`);
+      console.log(`  2) Cline`);
+      console.log(`  3) Cursor`);
+      console.log(`  4) Copilot`);
+      console.log(`  5) Warp`);
+      console.log(`  6) Custom\n`);
+      
+      const agentChoice = await new Promise(resolve => {
+        rl.question('Agent [1]: ', resolve);
+      });
+      
+      switch(agentChoice.trim() || '1') {
+        case '1': agentType = 'claude'; break;
+        case '2': agentType = 'cline'; break;
+        case '3': agentType = 'cursor'; break;
+        case '4': agentType = 'copilot'; break;
+        case '5': agentType = 'warp'; break;
+        case '6':
+          agentType = await new Promise(resolve => {
+            rl.question('Enter agent name: ', resolve);
+          });
+          agentType = agentType.trim() || 'claude';
+          break;
+        default: agentType = 'claude';
+      }
+      rl.close();
+    }
+    
     const devInitials = this.getDeveloperInitials();
     
     console.log(`\n${CONFIG.colors.bgBlue}${CONFIG.colors.bright} Creating New Session ${CONFIG.colors.reset}`);
@@ -2287,7 +2324,8 @@ async function main() {
             console.log(`  2) Cline`);
             console.log(`  3) Cursor`);
             console.log(`  4) Copilot`);
-            console.log(`  5) Custom\n`);
+            console.log(`  5) Warp`);
+            console.log(`  6) Custom\n`);
             
             const agentChoice = await new Promise(resolve => {
               rl.question('Agent [1]: ', resolve);
@@ -2299,7 +2337,8 @@ async function main() {
               case '2': agent = 'cline'; break;
               case '3': agent = 'cursor'; break;
               case '4': agent = 'copilot'; break;
-              case '5':
+              case '5': agent = 'warp'; break;
+              case '6':
                 const customAgent = await new Promise(resolve => {
                   rl.question('Enter agent name: ', resolve);
                 });
@@ -2335,7 +2374,7 @@ async function main() {
       
       const agent = args.includes('--agent') ? 
         args[args.indexOf('--agent') + 1] : 
-        'claude';
+        undefined; // Pass undefined to trigger prompt in createSession
       
       await coordinator.createAndStart({ task, agent });
       break;

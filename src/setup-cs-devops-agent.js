@@ -794,7 +794,9 @@ try {
     const entriesToAdd = [
       '.claude-commit-msg',
       '**/Archive/',
-      '*.backup.*'
+      '*.backup.*',
+      'local_deploy/',
+      '.file-coordination/'
     ];
     
     let modified = false;

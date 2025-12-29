@@ -165,7 +165,6 @@ switch(command) {
   case 'help':
   case '--help':
   case '-h':
-  default:
     console.log(`
 CS_DevOpsAgent - Intelligent Git Automation System
 Version: ${JSON.parse(fs.readFileSync(join(rootDir, 'package.json'), 'utf8')).version}
@@ -205,5 +204,19 @@ Environment Variables:
 
 For more information, visit: https://github.com/SecondBrainAICo/CS_DevOpsAgent
     `);
+    break;
+
+  default:
+    // Default to chat if no command provided, or if unknown command
+    // This replaces the prior UX where help was default
+    if (!command || !command.startsWith('-')) {
+      console.log('Starting Kora Smart Assistant...');
+      runScript(join(rootDir, 'src', 'agent-chat.js'), args.slice(1));
+    } else {
+      // Show help for flags like -h, --help, or unknown flags
+      console.log(`\nCS_DevOpsAgent - Intelligent Git Automation System`);
+      console.log(`Usage: cs-devops-agent [command] [options]`);
+      console.log(`Try 'cs-devops-agent help' for more information.`);
+    }
     break;
 }

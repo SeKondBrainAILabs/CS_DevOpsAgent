@@ -98,7 +98,7 @@ describe('Kora (Smart Assistant)', () => {
 
     expect(mockGroqCreate).toHaveBeenCalledTimes(1);
     expect(mockGroqCreate).toHaveBeenCalledWith(expect.objectContaining({
-      model: 'llama-3.1-70b-versatile',
+      model: 'llama-3.3-70b-versatile',
       messages: expect.arrayContaining([
         expect.objectContaining({ role: 'user', content: 'Hello' })
       ])

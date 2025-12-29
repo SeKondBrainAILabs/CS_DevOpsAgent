@@ -23,6 +23,7 @@ import readline from 'readline';
 import Groq from 'groq-sdk';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { spawn } from 'child_process';
 import { credentialsManager } from './credentials-manager.js';
 import HouseRulesManager from './house-rules-manager.js';
 // We'll import SessionCoordinator dynamically to avoid circular deps if any
@@ -34,7 +35,7 @@ const __dirname = dirname(__filename);
 credentialsManager.injectEnv();
 
 const CONFIG = {
-  model: 'llama-3.1-70b-versatile',
+  model: 'llama-3.3-70b-versatile',
   colors: {
     reset: '\x1b[0m',
     bright: '\x1b[1m',
@@ -124,6 +125,45 @@ When you want to perform an action, use the available tools.`;
    * Initialize the chat session
    */
   async start() {
+    // Check for Groq API Key
+    if (!credentialsManager.hasGroqApiKey()) {
+      console.log('\n' + '='.repeat(60));
+      console.log(`${CONFIG.colors.yellow}⚠️  GROQ API KEY MISSING${CONFIG.colors.reset}`);
+      console.log('='.repeat(60));
+      console.log('\nTo use Kora (Smart DevOps Assistant), you need a Groq API key.');
+      console.log('It allows Kora to understand your requests and help you manage sessions.\n');
+      
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+      });
+
+      console.log(`${CONFIG.colors.bright}How to get a key:${CONFIG.colors.reset}`);
+      console.log(`1. Go to: ${CONFIG.colors.cyan}https://console.groq.com/keys${CONFIG.colors.reset}`);
+      console.log('2. Log in or sign up');
+      console.log('3. Click "Create API Key"');
+      console.log('4. Copy the key and paste it below\n');
+
+      const apiKey = await new Promise((resolve) => {
+        rl.question(`${CONFIG.colors.green}Enter your Groq API Key: ${CONFIG.colors.reset}`, (answer) => {
+          resolve(answer.trim());
+        });
+      });
+
+      if (apiKey) {
+        credentialsManager.setGroqApiKey(apiKey);
+        // Re-initialize Groq client with new key
+        this.groq = new Groq({
+          apiKey: apiKey
+        });
+        console.log(`\n${CONFIG.colors.green}✅ API Key saved successfully!${CONFIG.colors.reset}\n`);
+      } else {
+        console.log(`\n${CONFIG.colors.red}❌ No key provided. Exiting.${CONFIG.colors.reset}`);
+        process.exit(1);
+      }
+      rl.close();
+    }
+
     console.log('\n' + '='.repeat(60));
     console.log(`${CONFIG.colors.magenta}🤖 Kora - Smart DevOps Assistant${CONFIG.colors.reset}`);
     console.log(`${CONFIG.colors.dim}Powered by Groq (${CONFIG.model})${CONFIG.colors.reset}`);
@@ -131,18 +171,26 @@ When you want to perform an action, use the available tools.`;
     console.log(`\n${CONFIG.colors.cyan}Hi! I'm Kora. How can I help you today?${CONFIG.colors.reset}`);
     console.log(`${CONFIG.colors.dim}(Try: "Start a new task for login", "Explain house rules", "Check contracts")${CONFIG.colors.reset}\n`);
 
-    const rl = readline.createInterface({
+    this.startReadline();
+  }
+
+  startReadline() {
+    if (this.rl) {
+      this.rl.close();
+    }
+
+    this.rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
       prompt: `${CONFIG.colors.green}You > ${CONFIG.colors.reset}`
     });
 
-    rl.prompt();
+    this.rl.prompt();
 
-    rl.on('line', async (line) => {
+    this.rl.on('line', async (line) => {
       const input = line.trim();
       if (!input) {
-        rl.prompt();
+        this.rl.prompt();
         return;
       }
 
@@ -152,7 +200,10 @@ When you want to perform an action, use the available tools.`;
       }
 
       await this.handleUserMessage(input);
-      rl.prompt();
+      // Only prompt if rl is still active (it might be closed if starting a session)
+      if (this.rl && !this.rl.closed) {
+        this.rl.prompt();
+      }
     });
   }
 
@@ -162,6 +213,11 @@ When you want to perform an action, use the available tools.`;
   async handleUserMessage(content) {
     // Add user message to history
     this.history.push({ role: 'user', content });
+
+    // Pause readline while thinking/executing
+    if (this.rl) {
+      this.rl.pause();
+    }
 
     try {
       process.stdout.write(`${CONFIG.colors.dim}Thinking...${CONFIG.colors.reset}`);
@@ -196,6 +252,11 @@ When you want to perform an action, use the available tools.`;
       readline.cursorTo(process.stdout, 0);
       readline.clearLine(process.stdout, 0);
       console.error(`${CONFIG.colors.red}Error: ${error.message}${CONFIG.colors.reset}\n`);
+    } finally {
+      // Resume readline if it exists and we're not starting a session (which handles its own RL)
+      if (this.rl && !this.rl.closed) {
+        this.rl.resume();
+      }
     }
   }
 
@@ -330,10 +391,56 @@ When you want to perform an action, use the available tools.`;
   }
 
   async startSession(args) {
-    return JSON.stringify({
-      success: true,
-      message: `I cannot start the session process directly from this chat yet (interactive limitation), but you can run: 'npm start' and enter task name: '${args.taskName}'`,
-      command_to_run: `npm start`
+    const taskName = args.taskName;
+    
+    console.log(`${CONFIG.colors.magenta}Kora > ${CONFIG.colors.reset}Starting new session for: ${taskName}...`);
+    
+    // Close readline interface to release stdin for the child process
+    if (this.rl) {
+      this.rl.close();
+      this.rl = null;
+    }
+
+    // We need to run the session coordinator interactively
+    // We'll use the 'create-and-start' command to jump straight to the task
+    const scriptPath = path.join(__dirname, 'session-coordinator.js');
+    
+    return new Promise((resolve, reject) => {
+      // Use 'inherit' for stdio to allow interactive input/output
+      const child = spawn('node', [scriptPath, 'create-and-start', '--task', taskName], {
+        stdio: 'inherit',
+        cwd: this.repoRoot
+      });
+      
+      child.on('close', (code) => {
+        // Re-initialize readline interface after child process exits
+        this.startReadline();
+
+        if (code === 0) {
+          resolve(JSON.stringify({
+            success: true,
+            message: `Session for '${taskName}' completed successfully.`
+          }));
+        } else {
+          resolve(JSON.stringify({
+            success: false,
+            message: `Session process exited with code ${code}.`
+          }));
+        }
+        
+        // Resume the chat interface after the child process exits
+        console.log(`\n${CONFIG.colors.cyan}Welcome back to Kora!${CONFIG.colors.reset}`);
+      });
+      
+      child.on('error', (err) => {
+        // Re-initialize readline interface on error
+        this.startReadline();
+        
+        resolve(JSON.stringify({
+          success: false,
+          error: err.message
+        }));
+      });
     });
   }
 }

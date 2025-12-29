@@ -166,10 +166,10 @@ class HouseRulesManager {
 
   /**
    * Find existing house rules file
-   * Searches across the repository, excluding the DevOps agent directories
+   * STRICT MODE: Only searches in the project root
    */
   findHouseRulesFile() {
-    // First try the standard locations
+    // Standard locations in root only
     const possiblePaths = [
       'houserules.md',
       'HOUSERULES.md',
@@ -195,18 +195,8 @@ class HouseRulesManager {
       }
     }
 
-    // If not found in standard locations, search the repository
-    // excluding DevOps agent directories
-    const foundPath = this.searchForHouseRules(this.projectRoot);
-    if (foundPath) {
-      this.houseRulesPath = foundPath;
-      // Only log if not running as CLI
-      if (!process.argv[1]?.endsWith('house-rules-manager.js')) {
-        console.log(`Found house rules at: ${foundPath}`);
-      }
-      return foundPath;
-    }
-
+    // STRICT MODE: Do not search recursively.
+    // If not found in root, return null.
     return null;
   }
 

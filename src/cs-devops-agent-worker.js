@@ -764,6 +764,14 @@ async function commitOnce(repoRoot, msgPath) {
     if (CLEAR_MSG_WHEN === "commit") clearMsgFile(msgPath);
 
     const sha = (await run("git", ["rev-parse", "--short", "HEAD"])).stdout.trim();
+    
+    // VISIBLE NOTIFICATION FOR USER
+    console.log("\n" + "─".repeat(60));
+    console.log(`\x1b[32m✓ COMMITTED:\x1b[0m ${sha}`);
+    console.log(`  Branch:  ${await currentBranch()}`);
+    console.log(`  Message: ${header}`);
+    console.log("─".repeat(60) + "\n");
+    
     log(`committed ${sha} on ${await currentBranch()}`);
 
     if (PUSH) {
@@ -772,8 +780,13 @@ async function commitOnce(repoRoot, msgPath) {
       if (ok) {
         if (CLEAR_MSG_WHEN === "push") clearMsgFile(msgPath);
         
+        console.log(`\x1b[32m✓ PUSHED:\x1b[0m ${BRANCH} -> remote`);
+        console.log(""); // Empty line for spacing
+        
         // Handle Docker restart if configured
         await handleDockerRestart();
+      } else {
+        console.log(`\x1b[31m✗ PUSH FAILED:\x1b[0m Check logs for details`);
       }
     }
   } finally {
@@ -1564,6 +1577,23 @@ console.log();
     ],
   })
   .on("all", async (evt, p) => {
+    // Check if file is in local_deploy or .file-coordination (internal agent files)
+    if (p.includes('local_deploy/') || p.includes('.file-coordination/')) {
+      return;
+    }
+
+    // Check if file is ignored by git (respect .gitignore)
+    try {
+      // git check-ignore returns 0 if ignored, 1 if not ignored
+      // We use quiet mode (-q) and ignore stdio
+      execSync(`git check-ignore -q "${p}"`, { stdio: 'ignore' });
+      // If we get here, exit code was 0, so file IS ignored
+      if (DEBUG) console.log(`[debug] Ignoring gitignored file: ${p}`);
+      return;
+    } catch (e) {
+      // Exit code 1 means NOT ignored (or other error). Proceed.
+    }
+
     const now = Date.now();
     const isMsg = samePath(p, relMsg);
     
@@ -1653,7 +1683,7 @@ console.log();
   const rl = readline.createInterface({
     input: input,
     output: output,
-    prompt: '[agent] > ',
+    prompt: '\\x1b[36m[agent] >\\x1b[0m ',
     terminal: true
   });
   
@@ -1756,7 +1786,7 @@ console.log();
       case 'exit':
       case 'quit':
       case 'q':
-        console.log("\nInitiating clean shutdown...");
+        console.log("\\n\\x1b[35m[Session] Initiating clean shutdown...\\x1b[0m");
         
         // Check for uncommitted changes
         const uncommitted = await hasUncommittedChanges();
@@ -1997,7 +2027,7 @@ console.log();
           }
         }
         
-        console.log("\nGoodbye!");
+        console.log("\n\\x1b[35m[Session] Exiting worker process...\\x1b[0m");
         rl.close();
         process.exit(0);
         break;
