@@ -146,10 +146,6 @@ Standard folders help organize your code, tests, and documentation.
 This structure is compatible with the DevOps Agent's automation tools.
   `);
 
-  // We can't use await here because this function is synchronous in the flow, 
-  // but the main flow is async. We should probably make this async or use prompt from ui-utils.
-  // However, looking at the code structure, helper functions are sync or async.
-  // Let's return the missing folders and handle the prompt in the main function or make this async.
   return missingFolders;
 }
 
@@ -271,7 +267,7 @@ async function setupNpmPackages(projectRoot) {
   return packageJson;
 }
 
-function setupVSCodeSettings(projectRoot, initials) {
+function setupVSCodeSettings(projectRoot, initials, agentName = 'Claude') {
   log.header();
   log.title('⚙️  Setting up VS Code Configuration');
   
@@ -317,8 +313,8 @@ function setupVSCodeSettings(projectRoot, initials) {
   
   // Add file associations for commit messages
   settings['files.associations'] = settings['files.associations'] || {};
-  settings['files.associations']['.claude-commit-msg'] = 'markdown';
-  settings['files.associations']['CLAUDE_CHANGELOG.md'] = 'markdown';
+  settings['files.associations'][`.${agentName.toLowerCase()}-commit-msg`] = 'markdown';
+  settings['files.associations'][`${agentName.toUpperCase()}_CHANGELOG.md`] = 'markdown';
   
   // Add file watchers
   settings['files.watcherExclude'] = settings['files.watcherExclude'] || {};
@@ -331,7 +327,7 @@ function setupVSCodeSettings(projectRoot, initials) {
   return settings;
 }
 
-function setupVSCodeTasks(projectRoot, initials) {
+function setupVSCodeTasks(projectRoot, initials, agentName = 'Claude') {
   log.title('📋 Setting up VS Code Tasks');
   
   const vscodeDir = path.join(projectRoot, '.vscode');
@@ -395,7 +391,7 @@ function setupVSCodeTasks(projectRoot, initials) {
     {
       label: '📝 Create Commit Message',
       type: 'shell',
-      command: 'echo "feat(): " > .claude-commit-msg && code .claude-commit-msg',
+      command: `echo "feat(): " > .${agentName.toLowerCase()}-commit-msg && code .${agentName.toLowerCase()}-commit-msg`,
       problemMatcher: [],
       presentation: {
         echo: false,
@@ -424,25 +420,25 @@ function setupVSCodeTasks(projectRoot, initials) {
   return tasks;
 }
 
-function setupCommitFiles(projectRoot, initials) {
+function setupCommitFiles(projectRoot, initials, agentName = 'Claude') {
   log.header();
   log.title('📝 Setting up Commit Message Files');
   
-  // Setup .claude-commit-msg
-  const commitMsgPath = path.join(projectRoot, '.claude-commit-msg');
+  // Setup commit message file (dynamic name)
+  const commitMsgPath = path.join(projectRoot, `.${agentName.toLowerCase()}-commit-msg`);
   if (!fs.existsSync(commitMsgPath)) {
     fs.writeFileSync(commitMsgPath, '');
-    log.success('Created .claude-commit-msg file');
+    log.success(`Created .${agentName.toLowerCase()}-commit-msg file`);
   } else {
-    log.info('.claude-commit-msg already exists');
+    log.info(`.${agentName.toLowerCase()}-commit-msg already exists`);
   }
   
-  // Setup CLAUDE_CHANGELOG.md
-  const changelogPath = path.join(projectRoot, 'CLAUDE_CHANGELOG.md');
+  // Setup CHANGELOG (dynamic name)
+  const changelogPath = path.join(projectRoot, `${agentName.toUpperCase()}_CHANGELOG.md`);
   if (!fs.existsSync(changelogPath)) {
-    const initialContent = `# Claude AI Assistant Changelog
+    const initialContent = `# ${agentName} AI Assistant Changelog
 
-This file tracks all changes made by Claude AI assistant to this codebase.
+This file tracks all changes made by ${agentName} AI assistant to this codebase.
 Each entry includes a timestamp, commit type, and detailed description.
 
 Developer: ${initials.toUpperCase()}
@@ -455,9 +451,9 @@ Initialized: ${new Date().toISOString()}
 
 `;
     fs.writeFileSync(changelogPath, initialContent);
-    log.success('Created CLAUDE_CHANGELOG.md');
+    log.success(`Created ${agentName.toUpperCase()}_CHANGELOG.md`);
   } else {
-    log.info('CLAUDE_CHANGELOG.md already exists');
+    log.info(`${agentName.toUpperCase()}_CHANGELOG.md already exists`);
   }
   
   // Setup Documentation/infrastructure.md
@@ -500,10 +496,10 @@ Each entry should follow this format:
     log.info('Documentation/infrastructure.md already exists');
   }
   
-  // Setup CLAUDE.md if it doesn't exist
-  const claudeMdPath = path.join(projectRoot, 'CLAUDE.md');
-  if (!fs.existsSync(claudeMdPath)) {
-    const claudeRules = `# House Rules for Claude
+  // Setup Agent Rules (dynamic name)
+  const agentMdPath = path.join(projectRoot, `${agentName.toUpperCase()}.md`);
+  if (!fs.existsSync(agentMdPath)) {
+    const agentRules = `# House Rules for ${agentName}
 
 ## Developer Information
 - Developer Initials: ${initials.toUpperCase()}
@@ -514,9 +510,9 @@ Each entry should follow this format:
 ## Commit Policy
 After applying any file edits, you must document changes in two places:
 
-### 1. Single Commit Message File (\`.claude-commit-msg\`)
+### 1. Single Commit Message File (\`.${agentName.toLowerCase()}-commit-msg\`)
 
-**Location**: \`/.claude-commit-msg\`  
+**Location**: \`/.${agentName.toLowerCase()}-commit-msg\`  
 **Action**: APPEND to this file (don't overwrite) - the worker will clean it  
 **Format**:
 \`\`\`
@@ -543,8 +539,8 @@ type(scope): subject line describing the change (max 72 characters)
 - Keep the subject line under 72 characters
 - Use present tense ("add" not "added", "fix" not "fixed")
 
-### 2. Changelog Documentation (\`CLAUDE_CHANGELOG.md\`)
-**Location**: \`/CLAUDE_CHANGELOG.md\`  
+### 2. Changelog Documentation (\`${agentName.toUpperCase()}_CHANGELOG.md\`)
+**Location**: \`/${agentName.toUpperCase()}_CHANGELOG.md\`  
 **Action**: APPEND a new section (don't overwrite)  
 **Format**:
 \`\`\`markdown
@@ -561,7 +557,7 @@ type(scope): exact same subject line from commit message
 
 ### Example of Both Files
 
-**.claude-commit-msg** (append new entries):
+**.${agentName.toLowerCase()}-commit-msg** (append new entries):
 \`\`\`
 feat(api): add webhook support for real-time notifications
 
@@ -570,7 +566,7 @@ feat(api): add webhook support for real-time notifications
 - Integrated webhook triggers into event processing pipeline
 \`\`\`
 
-**CLAUDE_CHANGELOG.md** (appended):
+**${agentName.toUpperCase()}_CHANGELOG.md** (appended):
 \`\`\`markdown
 ## 2025-09-15T14:35:00Z
 feat(api): add webhook support for real-time notifications
@@ -583,7 +579,7 @@ feat(api): add webhook support for real-time notifications
 The cs-devops-agent worker is configured to:
 - Use branch prefix: dev_${initials}_
 - Create daily branches: dev_${initials}_YYYY-MM-DD
-- Auto-commit when .claude-commit-msg changes
+- Auto-commit when .${agentName.toLowerCase()}-commit-msg changes
 - Handle daily rollover at midnight
 - Automatically stage, commit, and push changes
 - Clear commit message after successful push
@@ -614,7 +610,7 @@ Every file should start with a comprehensive description:
  *     import { MainClass } from './this-module';
  *     const instance = new MainClass();
  *     const result = instance.process();
- */
+ * */
 \`\`\`
 
 ### 2. Function/Method Documentation
@@ -639,22 +635,7 @@ Every file should start with a comprehensive description:
  * }
  */
 async function executeProcess(processName, inputText, context) {
-    // Step 1: Validate process exists
-    if (!processes[processName]) {
-        throw new Error(\`Process '\${processName}' not found\`);
-    }
-    
-    // Step 2: Initialize execution context
-    // This tracks state across all process steps
-    const executionContext = initContext(context);
-    
-    // Step 3: Execute each step sequentially
-    // Note: Future versions will support parallel execution
-    for (const step of process.steps) {
-        // Process step with automatic retry on failure
-        const stepResult = await executeStep(step, executionContext);
-        // ...
-    }
+    // ...
 }
 \`\`\`
 
@@ -668,15 +649,7 @@ if (mode === 'production') {
     // Force secure connections in production
     // This ensures data privacy for sensitive operations
     options.secure = true;
-} else if (mode === 'development') {
-    // Allow insecure connections for local testing
-    // Speeds up development workflow
-    options.secure = false;
 }
-
-// Explain non-obvious code
-// Using exponential backoff to avoid overwhelming the API
-const waitTime = Math.min(2 ** attempt * 0.5, 30); // Cap at 30 seconds
 \`\`\`
 
 ### 4. TODO/FIXME Comments
@@ -685,41 +658,6 @@ const waitTime = Math.min(2 ** attempt * 0.5, 30); // Cap at 30 seconds
 // This would reduce API calls by ~40% based on usage patterns
 
 // FIXME(${initials}, YYYY-MM-DD): Handle edge case when input is null
-// Current behavior: Throws unhandled exception
-// Desired: Return graceful error message
-\`\`\`
-
-### 5. Configuration & Constants
-\`\`\`javascript
-// Configuration constants should explain their purpose and valid ranges
-const MAX_RETRIES = 3; // Maximum retry attempts for failed operations
-const TIMEOUT_MS = 30000; // Request timeout in milliseconds (30 seconds)
-const BATCH_SIZE = 100; // Process items in batches to manage memory
-
-// Document configuration structures
-const MODES = {
-    'fast': 'Prioritize speed over accuracy',
-    'balanced': 'Balance between speed and accuracy',
-    'accurate': 'Prioritize accuracy over speed'
-};
-\`\`\`
-
-### 6. Error Handling Comments
-\`\`\`javascript
-try {
-    const response = await apiClient.request(endpoint);
-} catch (error) {
-    if (error.code === 'ECONNREFUSED') {
-        // Service might be starting up or under maintenance
-        // Retry with exponential backoff before failing
-        logger.warn(\`Service unavailable: \${error.message}\`);
-        return await retryWithBackoff(request);
-    } else if (error.code === 'INVALID_INPUT') {
-        // Invalid input is unrecoverable - notify user
-        logger.error(\`Invalid input: \${error.message}\`);
-        throw error;
-    }
-}
 \`\`\`
 
 ## Code Quality Standards
@@ -728,61 +666,31 @@ try {
 - Update related documentation when changing functionality
 - Write self-documenting code with clear variable and function names
 - Add JSDoc comments for all public functions and classes
-- Comment complex algorithms and business logic
-- Document assumptions and constraints
-- Include examples in function documentation
-
-## File Organization
-- Use descriptive file names that reflect their purpose
-- Group related changes in a single commit when they're part of the same feature
-- If making multiple unrelated changes, document them separately
-- Keep files focused on a single responsibility
-- Create new files rather than making existing files too large
-
-## Testing Guidelines
-- Write tests for new functionality
-- Update tests when modifying existing functionality
-- Ensure all tests pass before committing
-- Document test scenarios and expected outcomes
-- Include edge cases in test coverage
 
 ## Communication
-- When asked about changes, reference the CLAUDE_CHANGELOG.md for history
+- When asked about changes, reference the ${agentName.toUpperCase()}_CHANGELOG.md for history
 - Provide context about why changes were made, not just what was changed
 - Alert user to any breaking changes or required migrations
-- Be clear about dependencies and prerequisites
 
 ## Image and Asset Creation
 - **NEVER create or generate images without explicit user permission**
 - Always ask before creating any image files (PNG, JPG, SVG, etc.)
-- Do not automatically generate placeholder images or logos
-- Wait for specific user request before creating visual assets
 
 ## Version Control Best Practices
 - Make atomic commits - each commit should represent one logical change
 - Write meaningful commit messages following the conventional format
 - Review changes before committing to ensure quality
-- Don't commit commented-out code - remove it or document why it's kept
 - Keep commits focused and avoid mixing unrelated changes
 
 ## Security Considerations
 - Never commit sensitive information (passwords, API keys, tokens)
 - Use environment variables for configuration that varies by environment
 - Validate all user input before processing
-- Follow the principle of least privilege
-- Document security considerations in code comments
-
-## Performance Guidelines
-- Comment on performance implications of algorithms
-- Document O(n) complexity for non-trivial algorithms
-- Explain caching strategies where implemented
-- Note potential bottlenecks or scaling concerns
-- Include performance considerations in technical decisions
 `;
-    fs.writeFileSync(claudeMdPath, claudeRules);
-    log.success('Created CLAUDE.md with house rules');
+    fs.writeFileSync(agentMdPath, agentRules);
+    log.success(`Created ${agentName.toUpperCase()}.md with house rules`);
   } else {
-    log.info('CLAUDE.md already exists');
+    log.info(`${agentName.toUpperCase()}.md already exists`);
   }
   
   // Update .gitignore
@@ -792,7 +700,7 @@ try {
     
     // Check if entries already exist
     const entriesToAdd = [
-      '.claude-commit-msg',
+      `.${agentName.toLowerCase()}-commit-msg`,
       '**/Archive/',
       '*.backup.*',
       'local_deploy/',
@@ -815,7 +723,7 @@ try {
   }
 }
 
-function createRunScripts(projectRoot, initials, packageJson) {
+function createRunScripts(projectRoot, initials, packageJson, agentName = 'Claude') {
   log.header();
   log.title('🎯 Creating Run Scripts');
   
@@ -852,6 +760,8 @@ export AC_CLEAR_MSG_WHEN="push"
 # Daily rollover is automatic - no prompting needed
 export AC_ROLLOVER_PROMPT="false"
 export AC_DEBUG="false"
+# Set message file explicitly to match dynamic configuration
+export AC_MSG_FILE=".${agentName.toLowerCase()}-commit-msg"
 
 # Check for debug flag
 if [ "$1" == "--debug" ] || [ "$1" == "-d" ]; then
@@ -892,6 +802,7 @@ AC_PUSH=true
 AC_REQUIRE_MSG=true
 AC_MSG_MIN_BYTES=20
 AC_MSG_PATTERN=^(feat|fix|refactor|docs|test|chore)(\\([^)]+\\))?:\\s
+AC_MSG_FILE=.${agentName.toLowerCase()}-commit-msg
 
 # Timing Settings
 AC_DEBOUNCE_MS=1500
@@ -907,72 +818,6 @@ AC_DEBUG=false
   const envExamplePath = path.join(projectRoot, '.env.example');
   fs.writeFileSync(envExamplePath, envExampleContent);
   log.success('Created .env.example file');
-}
-
-function printInstructions(initials) {
-  log.header();
-  log.title('✅ Setup Complete!');
-  console.log('');
-  log.info(`Developer Initials: ${colors.bright}${initials.toUpperCase()}${colors.reset}`);
-  log.info(`Branch Prefix: ${colors.bright}dev_${initials}_${colors.reset}`);
-  console.log('');
-  
-  log.title('📚 Quick Start Guide:');
-  console.log('');
-  console.log('1. Start the cs-devops-agent worker:');
-  console.log(`   ${colors.green}npm run cs-devops-agent${colors.reset}`);
-  console.log(`   ${colors.yellow}OR${colors.reset}`);
-  console.log(`   ${colors.green}./run-cs-devops-agent-${initials}.sh${colors.reset}`);
-  console.log(`   ${colors.yellow}OR${colors.reset}`);
-  console.log(`   ${colors.green}Use VS Code: Cmd+Shift+P → Tasks: Run Task → 🚀 Start DevOps Agent Worker${colors.reset}`);
-  console.log('');
-  
-  console.log('2. Make your code changes');
-  console.log('');
-  
-  console.log('3. Create a commit message:');
-  console.log(`   ${colors.green}echo "feat(module): description" > .claude-commit-msg${colors.reset}`);
-  console.log(`   ${colors.yellow}OR${colors.reset}`);
-  console.log(`   ${colors.green}Use VS Code: Cmd+Shift+P → Tasks: Run Task → 📝 Create Commit Message${colors.reset}`);
-  console.log('');
-  
-  console.log('4. The worker will automatically commit and push!');
-  console.log('');
-  
-  log.title('🎯 Daily Workflow:');
-  console.log('');
-  console.log(`• Your daily branches will be: ${colors.bright}dev_${initials}_YYYY-MM-DD${colors.reset}`);
-  console.log('• The worker automatically creates new daily branches at midnight');
-  console.log('• Commits require valid conventional format (feat/fix/docs/etc)');
-  console.log('• Message file is cleared after successful push');
-  console.log('');
-  
-  log.title('📁 Files Created/Updated:');
-  console.log('');
-  console.log('• .vscode/settings.json - VS Code environment settings');
-  console.log('• .vscode/tasks.json - VS Code task shortcuts');
-  console.log('• package.json - NPM scripts');
-  console.log(`• run-cs-devops-agent-${initials}.sh - Personal run script`);
-  console.log('• .claude-commit-msg - Commit message file');
-  console.log('• CLAUDE_CHANGELOG.md - Change tracking');
-  console.log('• CLAUDE.md - House rules for Claude');
-  console.log('• .env.example - Configuration template');
-  console.log('');
-  
-  log.title('🔧 Debugging:');
-  console.log('');
-  console.log('Run with debug output:');
-  console.log(`   ${colors.green}npm run cs-devops-agent:debug${colors.reset}`);
-  console.log(`   ${colors.yellow}OR${colors.reset}`);
-  console.log(`   ${colors.green}./run-cs-devops-agent-${initials}.sh --debug${colors.reset}`);
-  console.log('');
-  
-  log.title('📖 Environment Variables:');
-  console.log('');
-  console.log('See .env.example for all configuration options');
-  console.log('');
-  
-  log.header();
 }
 
 async function setupEnvFile(projectRoot) {
@@ -1020,7 +865,7 @@ You can enter your API key now, or set it later in the .env file.
 // CLEANUP FUNCTIONS
 // ============================================================================
 
-function cleanupDevOpsAgentFiles(projectRoot) {
+function cleanupDevOpsAgentFiles(projectRoot, agentName = 'Claude') {
   log.header();
   log.title('🧹 Cleaning Up DevOpsAgent Files');
   
@@ -1071,6 +916,16 @@ function cleanupDevOpsAgentFiles(projectRoot) {
 // ============================================================================
 
 async function main() {
+  const args = process.argv.slice(2);
+  const skipPrompts = args.includes('--yes') || args.includes('-y');
+  const rootArgIndex = args.indexOf('--root');
+  const initialsArgIndex = args.indexOf('--initials');
+  const agentArgIndex = args.indexOf('--agent');
+  
+  const providedRoot = rootArgIndex !== -1 ? args[rootArgIndex + 1] : null;
+  const providedInitials = initialsArgIndex !== -1 ? args[initialsArgIndex + 1] : null;
+  const providedAgent = agentArgIndex !== -1 ? args[agentArgIndex + 1] : null;
+
   console.clear();
   
   // Show welcome
@@ -1092,7 +947,7 @@ ${colors.dim}This takes about 2 minutes.${colors.reset}
   console.log();
   
   // Find project root
-  const projectRoot = findProjectRoot();
+  const projectRoot = providedRoot ? path.resolve(providedRoot) : findProjectRoot();
   log.info(`Project root: ${projectRoot}`);
   
   // Ensure ScriptCS_DevOpsAgent directory exists
@@ -1106,54 +961,96 @@ ${colors.dim}This takes about 2 minutes.${colors.reset}
   // Get developer initials
   console.log();
   sectionTitle('Developer Identification');
-  explain(`
+  
+  let initials = providedInitials;
+  
+  if (!initials) {
+    explain(`
 ${colors.bright}What:${colors.reset} Your 3-letter initials (e.g., abc, xyz)
 ${colors.bright}Why:${colors.reset} Identifies your branches and configuration
 ${colors.bright}How:${colors.reset} Creates branches like dev_abc_2025-10-31
-  `);
-  
-  let initials = null;
-  while (!initials) {
-    const input = await prompt('Enter your 3-letter initials');
-    initials = validateInitials(input);
+    `);
     
+    while (!initials) {
+      const input = await prompt('Enter your 3-letter initials');
+      initials = validateInitials(input);
+      
+      if (!initials) {
+        errorMsg('Please enter exactly 3 letters (a-z)');
+        tip('Examples: abc, xyz, jdoe');
+      }
+    }
+  } else {
+    initials = validateInitials(initials);
     if (!initials) {
-      errorMsg('Please enter exactly 3 letters (a-z)');
-      tip('Examples: abc, xyz, jdoe');
+       log.error(`Invalid initials provided: ${providedInitials}`);
+       process.exit(1);
     }
   }
   
   success(`Using initials: ${colors.cyan}${initials.toUpperCase()}${colors.reset}`);
   tip(`Your branches will be named: ${colors.cyan}dev_${initials}_YYYY-MM-DD${colors.reset}`);
   console.log();
+
+  // Get Primary Agent
+  console.log();
+  sectionTitle('Primary AI Assistant');
+  
+  let agentName = providedAgent;
+  
+  if (!agentName) {
+    explain(`
+${colors.bright}What:${colors.reset} The AI assistant you primarily use (Claude, Warp, Cursor, etc.)
+${colors.bright}Why:${colors.reset} Customizes file names (e.g., .warp-commit-msg, WARP.md)
+    `);
+    
+    if (skipPrompts) {
+        agentName = 'Claude'; // Default if skipping prompts
+    } else {
+        agentName = await prompt('Primary AI Assistant? [Claude]');
+        agentName = agentName.trim() || 'Claude';
+    }
+  }
+  
+  success(`Using assistant: ${colors.cyan}${agentName}${colors.reset}`);
+  console.log();
   
   // Groq API Key Setup
   sectionTitle('Groq API Key (Contract Automation)');
-  explain(`
-${colors.bright}What:${colors.reset} API Key for Groq (llama-3.1-70b-versatile)
-${colors.bright}Why:${colors.reset} Required for AI-Optimized Contract Automation System
-${colors.bright}Security:${colors.reset} Stored locally in ${colors.yellow}local_deploy/credentials.json${colors.reset} (gitignored)
-  `);
-
+  
   const hasKey = credentialsManager.hasGroqApiKey();
   let groqKey = null;
 
-  if (hasKey) {
-    info('Groq API Key is already configured.');
-    const update = await confirm('Do you want to update it?', false);
-    if (update) {
-      groqKey = await prompt('Enter your Groq API Key');
-    }
-  } else {
-    groqKey = await prompt('Enter your Groq API Key (leave empty to skip)');
-  }
+  if (!skipPrompts) {
+      explain(`
+${colors.bright}What:${colors.reset} API Key for Groq (llama-3.1-70b-versatile)
+${colors.bright}Why:${colors.reset} Required for AI-Optimized Contract Automation System
+${colors.bright}Security:${colors.reset} Stored locally in ${colors.yellow}local_deploy/credentials.json${colors.reset} (gitignored)
+      `);
 
-  if (groqKey && groqKey.trim()) {
-    credentialsManager.setGroqApiKey(groqKey.trim());
-    success('Groq API Key saved securely.');
-  } else if (!hasKey) {
-    warn('Skipping Groq API Key setup.');
-    warn('NOTE: Contract Automation features (analyze-with-llm.js) will NOT work without this key.');
+      if (hasKey) {
+        info('Groq API Key is already configured.');
+        const update = await confirm('Do you want to update it?', false);
+        if (update) {
+          groqKey = await prompt('Enter your Groq API Key');
+        }
+      } else {
+        groqKey = await prompt('Enter your Groq API Key (leave empty to skip)');
+      }
+
+      if (groqKey && groqKey.trim()) {
+        credentialsManager.setGroqApiKey(groqKey.trim());
+        success('Groq API Key saved securely.');
+      } else if (!hasKey) {
+        warn('Skipping Groq API Key setup.');
+        warn('NOTE: Contract Automation features (analyze-with-llm.js) will NOT work without this key.');
+      }
+  } else {
+      if (hasKey) {
+          info('Using existing Groq API Key.');
+      } else {
+          warn('Skipping Groq API Key setup (non-interactive mode).');
+      }
   }
   
   console.log();
@@ -1171,7 +1068,7 @@ ${colors.bright}Security:${colors.reset} Stored locally in ${colors.yellow}local
   ]);
   console.log();
   
-  const proceed = await confirm('Ready to configure DevOps Agent?', true);
+  const proceed = skipPrompts ? true : await confirm('Ready to configure DevOps Agent?', true);
   
   if (!proceed) {
     warn('Setup cancelled');
@@ -1186,7 +1083,7 @@ ${colors.bright}Security:${colors.reset} Stored locally in ${colors.yellow}local
     // Check and setup folder structure first
     const missingFolders = setupFolderStructure(projectRoot);
     if (missingFolders && missingFolders.length > 0) {
-      const createFolders = await confirm('Create missing standard folders?', true);
+      const createFolders = skipPrompts ? true : await confirm('Create missing standard folders?', true);
       if (createFolders) {
         missingFolders.forEach(folder => {
           ensureDirectoryExists(path.join(projectRoot, folder));
@@ -1201,14 +1098,17 @@ ${colors.bright}Security:${colors.reset} Stored locally in ${colors.yellow}local
     if (!checkContractsExist(projectRoot)) {
       log.header();
       log.title('📜 Contract Files Missing');
-      explain(`
+      
+      if (!skipPrompts) {
+          explain(`
 ${colors.bright}Contract System:${colors.reset}
 This project uses a Contract System to coordinate multiple AI agents.
 It seems like this is a fresh setup or contracts are missing.
 We can scan your codebase and generate them now.
-      `);
+          `);
+      }
       
-      const shouldGenerate = await confirm('Generate contract files now?', true);
+      const shouldGenerate = skipPrompts ? true : await confirm('Generate contract files now?', true);
       if (shouldGenerate) {
         await generateContracts(projectRoot);
       }
@@ -1216,25 +1116,101 @@ We can scan your codebase and generate them now.
 
     // Run setup steps
     const packageJson = await setupNpmPackages(projectRoot);
-    setupVSCodeSettings(projectRoot, initials);
-    setupVSCodeTasks(projectRoot, initials);
-    setupCommitFiles(projectRoot, initials);
-    createRunScripts(projectRoot, initials, packageJson);
+    setupVSCodeSettings(projectRoot, initials, agentName);
+    setupVSCodeTasks(projectRoot, initials, agentName);
+    setupCommitFiles(projectRoot, initials, agentName);
+    createRunScripts(projectRoot, initials, packageJson, agentName);
     
     // Setup .env with API keys
-    await setupEnvFile(projectRoot);
+    if (!skipPrompts) {
+        await setupEnvFile(projectRoot);
+    } else {
+        // Just create .env if missing in non-interactive mode
+        const envPath = path.join(projectRoot, '.env');
+        if (!fs.existsSync(envPath)) {
+            fs.writeFileSync(envPath, '# Environment Variables\n');
+            log.success('Created .env file');
+        }
+    }
     
     // Clean up DevOpsAgent files to avoid duplicates
-    cleanupDevOpsAgentFiles(projectRoot);
+    cleanupDevOpsAgentFiles(projectRoot, agentName);
     
     // Print instructions
-    printInstructions(initials);
+    printInstructions(initials, agentName);
     
   } catch (error) {
     log.error(`Setup failed: ${error.message}`);
     console.error(error);
     process.exit(1);
   }
+}
+
+function printInstructions(initials, agentName = 'Claude') {
+  log.header();
+  log.title('✅ Setup Complete!');
+  console.log('');
+  log.info(`Developer Initials: ${colors.bright}${initials.toUpperCase()}${colors.reset}`);
+  log.info(`Branch Prefix: ${colors.bright}dev_${initials}_${colors.reset}`);
+  log.info(`Primary Agent: ${colors.bright}${agentName}${colors.reset}`);
+  console.log('');
+  
+  log.title('📚 Quick Start Guide:');
+  console.log('');
+  console.log('1. Start the cs-devops-agent worker:');
+  console.log(`   ${colors.green}npm run cs-devops-agent${colors.reset}`);
+  console.log(`   ${colors.yellow}OR${colors.reset}`);
+  console.log(`   ${colors.green}./run-cs-devops-agent-${initials}.sh${colors.reset}`);
+  console.log(`   ${colors.yellow}OR${colors.reset}`);
+  console.log(`   ${colors.green}Use VS Code: Cmd+Shift+P → Tasks: Run Task → 🚀 Start DevOps Agent Worker${colors.reset}`);
+  console.log('');
+  
+  console.log('2. Make your code changes');
+  console.log('');
+  
+  console.log('3. Create a commit message:');
+  console.log(`   ${colors.green}echo "feat(module): description" > .${agentName.toLowerCase()}-commit-msg${colors.reset}`);
+  console.log(`   ${colors.yellow}OR${colors.reset}`);
+  console.log(`   ${colors.green}Use VS Code: Cmd+Shift+P → Tasks: Run Task → 📝 Create Commit Message${colors.reset}`);
+  console.log('');
+  
+  console.log('4. The worker will automatically commit and push!');
+  console.log('');
+  
+  log.title('🎯 Daily Workflow:');
+  console.log('');
+  console.log(`• Your daily branches will be: ${colors.bright}dev_${initials}_YYYY-MM-DD${colors.reset}`);
+  console.log('• The worker automatically creates new daily branches at midnight');
+  console.log('• Commits require valid conventional format (feat/fix/docs/etc)');
+  console.log('• Message file is cleared after successful push');
+  console.log('');
+  
+  log.title('📁 Files Created/Updated:');
+  console.log('');
+  console.log('• .vscode/settings.json - VS Code environment settings');
+  console.log('• .vscode/tasks.json - VS Code task shortcuts');
+  console.log('• package.json - NPM scripts');
+  console.log(`• run-cs-devops-agent-${initials}.sh - Personal run script`);
+  console.log(`• .${agentName.toLowerCase()}-commit-msg - Commit message file`);
+  console.log(`• ${agentName.toUpperCase()}_CHANGELOG.md - Change tracking`);
+  console.log(`• ${agentName.toUpperCase()}.md - House rules for ${agentName}`);
+  console.log('• .env.example - Configuration template');
+  console.log('');
+  
+  log.title('🔧 Debugging:');
+  console.log('');
+  console.log('Run with debug output:');
+  console.log(`   ${colors.green}npm run cs-devops-agent:debug${colors.reset}`);
+  console.log(`   ${colors.yellow}OR${colors.reset}`);
+  console.log(`   ${colors.green}./run-cs-devops-agent-${initials}.sh --debug${colors.reset}`);
+  console.log('');
+  
+  log.title('📖 Environment Variables:');
+  console.log('');
+  console.log('See .env.example for all configuration options');
+  console.log('');
+  
+  log.header();
 }
 
 // Run the setup
