@@ -1958,7 +1958,7 @@ console.log();
 
     // Draw Frame
     process.stdout.write('\x1b[2J');   // Clear
-    process.stdout.write('\x1b[0f');   // Home
+    process.stdout.write('\x1b[H');    // Home (standard ANSI)
     
     // 1. Header
     const headerText = ` DEVOPS AGENT | Session: ${TUI.sessionId || 'N/A'} | Branch: ${TUI.branch} `;
@@ -1970,34 +1970,35 @@ console.log();
         let lLine = (i >= leftEmpty) ? leftView[i - leftEmpty] : '';
         let rLine = (i >= rightEmpty) ? rightView[i - rightEmpty] : '';
         
-        // Truncate (simple) - stripping ansi for length check would be better but expensive in loop
-        // Just slice raw string for speed, reset color at end
-        // A better approach for "visual" length requires a library. 
-        // We'll trust the user has a wide enough terminal or wraps naturally.
-        // Actually, wrapping breaks the vertical line.
-        // Let's force strict length slice.
-        
         // Removing ANSI for length calculation is essential for alignment
         const lPlain = stripAnsi(lLine);
         const rPlain = stripAnsi(rLine);
         
-        // Pad
-        const lPad = Math.max(0, leftWidth - lPlain.length);
-        const rPad = Math.max(0, rightWidth - rPlain.length);
+        // Truncate to prevent wrapping and breaking layout
+        let lDisp = lLine;
+        let rDisp = rLine;
         
-        // If line is too long, we simply let it bleed or truncate?
-        // Bleeding breaks the wall. Truncating hides info.
-        // Let's truncate with ellipsis if needed.
         if (lPlain.length > leftWidth) {
-            // Re-adding color reset is tricky if we chop. 
-            // Let's just print it and let it break alignment if massive.
-            // Or stricter:
-            // lLine = ...
+            // Simple truncation (note: might cut ansi codes, but prevents layout break)
+            // We use the plain length to determine cut point
+            // For safety, we just display the plain truncated text to avoid hanging colors
+            lDisp = lPlain.substring(0, leftWidth - 3) + '...';
         }
         
-        process.stdout.write(lLine + ' '.repeat(lPad));
+        if (rPlain.length > rightWidth) {
+            rDisp = rPlain.substring(0, rightWidth - 3) + '...';
+        }
+        
+        // Pad using the length of the *displayed* string (re-strip to be sure)
+        const lDispLen = stripAnsi(lDisp).length;
+        const rDispLen = stripAnsi(rDisp).length;
+        
+        const lPad = Math.max(0, leftWidth - lDispLen);
+        const rPad = Math.max(0, rightWidth - rDispLen);
+        
+        process.stdout.write(lDisp + ' '.repeat(lPad));
         process.stdout.write('\x1b[90m │ \x1b[0m');
-        process.stdout.write(rLine + ' '.repeat(rPad));
+        process.stdout.write(rDisp + ' '.repeat(rPad));
         process.stdout.write('\n');
     }
     

@@ -2063,16 +2063,6 @@ The DevOps agent is monitoring this worktree for changes.
       silent: false
     });
     
-    // Wait for agent to initialize and display its interactive commands
-    // Then show the copy-paste instructions
-    setTimeout(async () => {
-      console.log('\n'); // Add spacing
-      
-      // Generate and display instructions
-      const instructions = this.generateClaudeInstructions(sessionData);
-      this.displayInstructions(instructions, sessionId, sessionData.task);
-    }, 3000); // Wait 3 seconds for agent to show interactive commands
-    
     child.on('exit', (code) => {
       console.log(`${CONFIG.colors.yellow}Agent exited with code: ${code}${CONFIG.colors.reset}`);
       
