@@ -1537,7 +1537,7 @@ function saveProjectSettings(settings, settingsPath) {
 console.log("\n" + "=".repeat(70));
 console.log("  CS_DevOpsAgent - Intelligent Git Automation System");
 console.log("  Version 1.4.8 | Build 20251008.1");
-console.log("  Copyright (c) 2025 SeKondBrain AI Labs Limited");
+console.log("  Copyright (c) 2026 SeKondBrain AI Labs Limited");
 console.log("  Author: Sachin Dev Duggal");
 console.log("  \n  Licensed under the MIT License");
 console.log("  This software is provided 'as-is' without any warranty.");
@@ -1756,6 +1756,9 @@ console.log();
     ],
   })
   .on("all", async (evt, p) => {
+    // Define 'now' at the very top of the callback to avoid ReferenceError
+    const now = Date.now();
+
     // Check if file is in local_deploy or .file-coordination (internal agent files)
     if (p.includes('local_deploy/') || p.includes('.file-coordination/')) {
       return;

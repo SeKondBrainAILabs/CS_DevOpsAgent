@@ -104,6 +104,29 @@ class SmartAssistant {
           description: "Check the status of active sessions and locks",
           parameters: { type: "object", properties: {} }
         }
+      },
+      {
+        type: "function",
+        function: {
+          name: "resume_session",
+          description: "Resume an existing or orphaned session",
+          parameters: {
+            type: "object",
+            properties: {
+              sessionId: { type: "string", description: "The ID of the session to resume" },
+              taskName: { type: "string", description: "The task name to search for (optional)" }
+            },
+            required: ["sessionId"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "recover_sessions",
+          description: "Scan for and recover orphaned sessions from existing worktrees",
+          parameters: { type: "object", properties: {} }
+        }
       }
     ];
 
@@ -144,6 +167,8 @@ AVAILABLE TOOLS:
 2. list_contracts - Check what contract files exist.
 3. check_session_status - See active work sessions.
 4. start_session - Begin a new task.
+5. resume_session - Resume an existing or orphaned session.
+6. recover_sessions - Scan and restore lost session locks.
 
 IMPORTANT INSTRUCTIONS:
 - ONLY use the tools listed above. Do NOT invent new tools like "check_compliance" or "run_tests".
@@ -153,6 +178,8 @@ IMPORTANT INSTRUCTIONS:
 - Identify yourself as "${skillsDef.assistant_name}".
 - If the user asks about starting a task, ask for a clear task name if not provided.
 - If the user asks about rules, summarize them from the actual files.
+- If the user wants to resume work, use check_session_status first.
+- If a session seems missing but worktree exists, use recover_sessions.
 - Always prefer "Structured" organization for new code.
 
 When you want to perform an action, use the available tools.`;
@@ -172,6 +199,8 @@ AVAILABLE TOOLS:
 2. list_contracts - Check what contract files exist.
 3. check_session_status - See active work sessions.
 4. start_session - Begin a new task.
+5. resume_session - Resume an existing or orphaned session.
+6. recover_sessions - Scan and restore lost session locks.
 
 IMPORTANT INSTRUCTIONS:
 - ONLY use the tools listed above. Do NOT invent new tools like "check_compliance" or "run_tests".
@@ -180,6 +209,8 @@ IMPORTANT INSTRUCTIONS:
 - Identify yourself as "Kora".
 - If the user asks about starting a task, ask for a clear task name if not provided.
 - If the user asks about rules, summarize them from the actual files.
+- If the user wants to resume work, use check_session_status first.
+- If a session seems missing but worktree exists, use recover_sessions.
 - Always prefer "Structured" organization for new code.
 
 When you want to perform an action, use the available tools.`;
@@ -377,6 +408,12 @@ When you want to perform an action, use the available tools.`;
           case 'start_session':
             result = await this.startSession(args);
             break;
+          case 'resume_session':
+            result = await this.resumeSession(args);
+            break;
+          case 'recover_sessions':
+            result = await this.recoverSessions();
+            break;
           default:
             result = JSON.stringify({ error: "Unknown tool" });
         }
@@ -510,58 +547,104 @@ When you want to perform an action, use the available tools.`;
     });
   }
 
-  async startSession(args) {
-    const taskName = args.taskName;
+  async recoverSessions() {
+    console.log(`${CONFIG.colors.magenta}Kora > ${CONFIG.colors.reset}Scanning for orphaned sessions to recover...`);
     
-    console.log(`${CONFIG.colors.magenta}Kora > ${CONFIG.colors.reset}Starting new session for: ${taskName}...`);
-    
-    // Close readline interface to release stdin for the child process
+    // Close readline interface
     if (this.rl) {
       this.rl.close();
       this.rl = null;
     }
 
-    // We need to run the session coordinator interactively
-    // We'll use the 'create-and-start' command to jump straight to the task
-    // Pass --skip-setup to avoid redundant house rules prompts since Kora is handling context
-    // Pass --skip-update to avoid killing the child process on update check
     const scriptPath = path.join(__dirname, 'session-coordinator.js');
     
     return new Promise((resolve, reject) => {
-      // Use 'inherit' for stdio to allow interactive input/output
-      const child = spawn('node', [scriptPath, 'create-and-start', '--task', taskName, '--skip-setup', '--skip-update'], {
+      const child = spawn('node', [scriptPath, 'recover'], {
         stdio: 'inherit',
         cwd: this.repoRoot
       });
       
       child.on('close', (code) => {
-        // Re-initialize readline interface after child process exits
         this.startReadline();
-
         if (code === 0) {
-          resolve(JSON.stringify({
-            success: true,
-            message: `Session for '${taskName}' completed successfully.`
+          // Instead of generic message, suggest checking status
+          resolve(JSON.stringify({ 
+            success: true, 
+            message: "Recovery scan complete. Please run 'check_session_status' to see recovered sessions." 
           }));
         } else {
-          resolve(JSON.stringify({
-            success: false,
-            message: `Session process exited with code ${code}.`
-          }));
+          resolve(JSON.stringify({ success: false, message: `Recovery process exited with code ${code}.` }));
         }
-        
-        // Resume the chat interface after the child process exits
+        // Don't print "Welcome back" here to keep flow cleaner
+      });
+      
+      child.on('error', (err) => {
+        this.startReadline();
+        resolve(JSON.stringify({ success: false, error: err.message }));
+      });
+    });
+  }
+
+  async resumeSession(args) {
+    const { sessionId, taskName } = args;
+    
+    console.log(`${CONFIG.colors.magenta}Kora > ${CONFIG.colors.reset}Resuming session: ${sessionId || taskName}...`);
+    
+    // Close readline interface
+    if (this.rl) {
+      this.rl.close();
+      this.rl = null;
+    }
+
+    const scriptPath = path.join(__dirname, 'session-coordinator.js');
+    
+    // Construct arguments for session coordinator
+    // We use the 'resume' command if we have an ID, or create-and-start with task if we're fuzzy matching
+    // But actually session-coordinator doesn't have a direct 'resume' command exposed easily via CLI args 
+    // that jumps straight to monitoring without prompts, EXCEPT via the way createSession handles existing sessions.
+    // However, createSession with --task will prompt.
+    // Let's use a new approach: pass --resume-session-id if we have it.
+    
+    // Wait, session-coordinator.js CLI handling (which I can't fully see but I saw 'create' and 'list')
+    // I need to check how to invoke resume.
+    // Looking at session-coordinator.js (which I read), it has 'requestSession' and 'createSession'.
+    // It doesn't seem to have a direct CLI command for 'resume' that takes an ID.
+    // However, 'create-and-start' (implied by startSession usage) might support it?
+    // In startSession: [scriptPath, 'create-and-start', '--task', taskName, '--skip-setup', '--skip-update']
+    
+    // If I use 'create-and-start' with the SAME task name, it triggers the "Found existing session" logic
+    // but that logic is interactive (prompts Y/n).
+    
+    // I should probably add a CLI command to session-coordinator.js to resume by ID non-interactively,
+    // OR just use the 'worker' command directly if I know the worktree?
+    // But the coordinator handles setting up the environment.
+    
+    // Let's assume for now we can use a new 'resume' command in session-coordinator.js
+    // I will need to implement that in session-coordinator.js as well.
+    // But first let's implement the caller here.
+    
+    const cmdArgs = ['resume', '--session-id', sessionId];
+    if (taskName) cmdArgs.push('--task', taskName);
+    
+    return new Promise((resolve, reject) => {
+      const child = spawn('node', [scriptPath, ...cmdArgs], {
+        stdio: 'inherit',
+        cwd: this.repoRoot
+      });
+      
+      child.on('close', (code) => {
+        this.startReadline();
+        if (code === 0) {
+          resolve(JSON.stringify({ success: true, message: "Session resumed successfully." }));
+        } else {
+          resolve(JSON.stringify({ success: false, message: `Session process exited with code ${code}.` }));
+        }
         console.log(`\n${CONFIG.colors.cyan}Welcome back to Kora!${CONFIG.colors.reset}`);
       });
       
       child.on('error', (err) => {
-        // Re-initialize readline interface on error
         this.startReadline();
-        
-        resolve(JSON.stringify({
-          success: false,
-          error: err.message
-        }));
+        resolve(JSON.stringify({ success: false, error: err.message }));
       });
     });
   }

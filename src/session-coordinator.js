@@ -133,17 +133,22 @@ export class SessionCoordinator {
   }
 
   cleanupStaleLocks() {
-    // Clean up locks older than 1 hour
-    const oneHourAgo = Date.now() - 3600000;
+    // Clean up locks older than 24 hours (increased from 1 hour to allow resuming next day)
+    const staleThreshold = Date.now() - 86400000;
     
     if (fs.existsSync(this.locksPath)) {
       const locks = fs.readdirSync(this.locksPath);
       locks.forEach(lockFile => {
         const lockPath = path.join(this.locksPath, lockFile);
-        const stats = fs.statSync(lockPath);
-        if (stats.mtimeMs < oneHourAgo) {
-          fs.unlinkSync(lockPath);
-          console.log(`${CONFIG.colors.dim}Cleaned stale lock: ${lockFile}${CONFIG.colors.reset}`);
+        try {
+          const stats = fs.statSync(lockPath);
+          // Only cleanup if VERY old
+          if (stats.mtimeMs < staleThreshold) {
+            fs.unlinkSync(lockPath);
+            console.log(`${CONFIG.colors.dim}Cleaned stale lock: ${lockFile}${CONFIG.colors.reset}`);
+          }
+        } catch (e) {
+          // Ignore errors
         }
       });
     }
@@ -1226,6 +1231,41 @@ export class SessionCoordinator {
     await this.ensureHouseRulesSetup(options.skipSetup); // House rules setup (once per project)
     await this.ensureGroqApiKey();      // GROQ API key for AI commits (once per user)
     
+    // Resume Check: If task provided, check for existing sessions with similar task names
+    if (options.task && options.task !== 'development') {
+        const matchingSession = this.findSessionByTask(options.task);
+        if (matchingSession) {
+            console.log(`\\n${CONFIG.colors.yellow}Found existing session for '${options.task}'${CONFIG.colors.reset}`);
+            console.log(`Session ID: ${CONFIG.colors.bright}${matchingSession.sessionId}${CONFIG.colors.reset}`);
+            console.log(`Status: ${matchingSession.status}`);
+            console.log(`Branch: ${matchingSession.branchName}`);
+            
+            const rlResume = readline.createInterface({ input: process.stdin, output: process.stdout });
+            const resume = await new Promise(resolve => {
+                rlResume.question(`\\nDo you want to resume this session instead? (Y/n): `, ans => {
+                    rlResume.close();
+                    resolve(ans.trim().toLowerCase() !== 'n');
+                });
+            });
+            
+            if (resume) {
+                // Return existing session info structure similar to createSession
+                // but we might need to "claim" it if it's inactive
+                if (matchingSession.status !== 'active') {
+                    // Claim/Restart it
+                    return this.claimSession(matchingSession, options.agent || 'claude');
+                } else {
+                    // It's already active, just return info so startAgent can pick it up
+                    // But startAgent requires lock file integrity.
+                    // If it's active, we might be double-attaching unless we check PID.
+                    // findAvailableSession logic already handles dead PIDs.
+                    // If PID is alive, we probably shouldn't interfere, but here we assume user knows best.
+                    return matchingSession;
+                }
+            }
+        }
+    }
+
     const sessionId = this.generateSessionId();
     const task = options.task || 'development';
     
@@ -1868,7 +1908,33 @@ The DevOps agent is monitoring this worktree for changes.
   }
 
   /**
-   * Find an available unclaimed session
+   * Find a session by task name (fuzzy match)
+   */
+  findSessionByTask(taskName) {
+    if (!fs.existsSync(this.locksPath)) return null;
+    
+    const locks = fs.readdirSync(this.locksPath).filter(f => f.endsWith('.lock'));
+    const search = taskName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    
+    for (const lockFile of locks) {
+      try {
+        const lockPath = path.join(this.locksPath, lockFile);
+        const session = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+        const task = (session.task || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        
+        // Exact match or significant partial match
+        if (task === search || (task.length > 4 && task.includes(search)) || (search.length > 4 && search.includes(task))) {
+          return session;
+        }
+      } catch (e) {
+        // Ignore invalid locks
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Find an available unclaimed session or orphaned session
    */
   findAvailableSession() {
     if (!fs.existsSync(this.locksPath)) {
@@ -1879,11 +1945,33 @@ The DevOps agent is monitoring this worktree for changes.
     
     for (const lockFile of locks) {
       const lockPath = path.join(this.locksPath, lockFile);
-      const lockData = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      try {
+        const lockData = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
       
-      // Check if session is available (not claimed)
-      if (lockData.status === 'waiting' && !lockData.claimedBy) {
-        return lockData;
+        // Check if session is available (not claimed)
+        if (lockData.status === 'waiting' && !lockData.claimedBy) {
+          return lockData;
+        }
+        
+        // Check if session is orphaned/stopped but not cleaned up
+        // If the PID is no longer running, it might be orphaned
+        if (lockData.status === 'active' && lockData.agentPid) {
+          try {
+            // Check if process exists
+            process.kill(lockData.agentPid, 0);
+          } catch (e) {
+            // Process doesn't exist - it's orphaned!
+            console.log(`${CONFIG.colors.yellow}Found orphaned session: ${lockData.sessionId} (PID ${lockData.agentPid} dead)${CONFIG.colors.reset}`);
+            // Mark as stopped so it can be reclaimed
+            lockData.status = 'stopped';
+            lockData.agentPid = null;
+            lockData.agentStopped = new Date().toISOString();
+            fs.writeFileSync(lockPath, JSON.stringify(lockData, null, 2));
+            return lockData;
+          }
+        }
+      } catch (e) {
+        // Invalid lock file
       }
     }
     
@@ -1918,7 +2006,7 @@ The DevOps agent is monitoring this worktree for changes.
     
     if (!fs.existsSync(lockFile)) {
       console.error(`${CONFIG.colors.red}Session not found: ${sessionId}${CONFIG.colors.reset}`);
-      return;
+      return false;
     }
     
     const sessionData = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
@@ -2000,6 +2088,8 @@ The DevOps agent is monitoring this worktree for changes.
       child.kill('SIGINT');
       setTimeout(() => process.exit(0), 1000);
     });
+    
+    return true;
   }
 
   /**
@@ -2334,8 +2424,67 @@ The DevOps agent is monitoring this worktree for changes.
   }
   
   /**
-   * Clean up all stale sessions and worktrees
+   * Recover sessions from existing worktrees that are missing lock files
    */
+  async recoverSessions() {
+    console.log(`\n${CONFIG.colors.yellow}Scanning for recoverable sessions...${CONFIG.colors.reset}`);
+    
+    if (!fs.existsSync(this.worktreesPath)) {
+      console.log('No worktrees directory found.');
+      return 0;
+    }
+
+    const worktrees = fs.readdirSync(this.worktreesPath);
+    let recovered = 0;
+
+    worktrees.forEach(dir => {
+      // Skip .DS_Store and other system files
+      if (dir.startsWith('.')) return;
+
+      const worktreePath = path.join(this.worktreesPath, dir);
+      
+      // Ensure it's a directory
+      try {
+        if (!fs.statSync(worktreePath).isDirectory()) return;
+      } catch (e) { return; }
+
+      const configPath = path.join(worktreePath, '.devops-session.json');
+
+      if (fs.existsSync(configPath)) {
+        try {
+          const sessionData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          
+          if (!sessionData.sessionId) return;
+
+          const lockFile = path.join(this.locksPath, `${sessionData.sessionId}.lock`);
+
+          if (!fs.existsSync(lockFile)) {
+            // Restore lock file
+            // Reset status to 'stopped' so it can be resumed/claimed
+            sessionData.status = 'stopped'; 
+            sessionData.agentPid = null;
+            sessionData.agentStopped = new Date().toISOString();
+            sessionData.recoveredAt = new Date().toISOString();
+            
+            fs.writeFileSync(lockFile, JSON.stringify(sessionData, null, 2));
+            console.log(`${CONFIG.colors.green}✓ Recovered session ${sessionData.sessionId} (${sessionData.task})${CONFIG.colors.reset}`);
+            recovered++;
+          }
+        } catch (err) {
+          console.error(`Failed to recover ${dir}: ${err.message}`);
+        }
+      }
+    });
+
+    if (recovered === 0) {
+      console.log('No orphaned sessions found to recover.');
+    } else {
+      console.log(`\n${CONFIG.colors.green}Recovered ${recovered} sessions. You can now resume them.${CONFIG.colors.reset}`);
+    }
+    
+    return recovered;
+  }
+
   async cleanupAll() {
     console.log(`\n${CONFIG.colors.yellow}Cleaning up stale sessions and worktrees...${CONFIG.colors.reset}`);
     
@@ -2411,7 +2560,7 @@ async function main() {
   console.log("  CS_DevOpsAgent - Intelligent Git Automation System");
   console.log(`  Version ${packageJson.version} | Build ${new Date().toISOString().split('T')[0].replace(/-/g, '')}`);
   console.log("  ");
-  console.log("  Copyright (c) 2024 SeKondBrain AI Labs Limited");
+  console.log("  Copyright (c) 2026 SeKondBrain AI Labs Limited");
   console.log("  Author: Sachin Dev Duggal");
   console.log("  ");
   console.log("  Licensed under the MIT License");
@@ -2580,6 +2729,39 @@ async function main() {
       await coordinator.requestSession(agent);
       break;
     }
+
+    case 'resume': {
+      // Resume an existing session by ID or Task
+      const sessionId = args.includes('--session-id') ? 
+        args[args.indexOf('--session-id') + 1] : 
+        undefined;
+      
+      const task = args.includes('--task') ? 
+        args[args.indexOf('--task') + 1] : 
+        undefined;
+
+      let targetSessionId = sessionId;
+
+      if (!targetSessionId && task) {
+        const session = coordinator.findSessionByTask(task);
+        if (session) {
+          targetSessionId = session.sessionId;
+        }
+      }
+
+      if (targetSessionId) {
+        // Check if session is already active/claimed?
+        // startAgent checks existence.
+        const success = await coordinator.startAgent(targetSessionId);
+        if (!success) process.exit(1);
+      } else {
+        console.error(`${CONFIG.colors.red}Error: Could not find session to resume.${CONFIG.colors.reset}`);
+        if (task) console.error(`No session found matching task: ${task}`);
+        else console.error(`Please provide --session-id or --task`);
+        process.exit(1);
+      }
+      break;
+    }
     
   case 'list': {
     coordinator.listSessions();
@@ -2598,11 +2780,23 @@ async function main() {
     break;
   }
   
-  case 'cleanup': {
-    // Clean up stale sessions and worktrees
-    await coordinator.cleanupAll();
-    break;
-  }
+    case 'cleanup': {
+      // Clean up stale sessions and worktrees
+      await coordinator.cleanupAll();
+      break;
+    }
+
+    case 'recover': {
+      // Recover orphaned sessions from worktrees
+      await coordinator.recoverSessions();
+      break;
+    }
+
+    case 'recover': {
+      // Recover orphaned sessions from worktrees
+      await coordinator.recoverSessions();
+      break;
+    }
   
   case 'help':
   default: {
