@@ -91,6 +91,11 @@ switch(command) {
     runScript(join(rootDir, 'src', 'session-coordinator.js'), ['create', ...args.slice(1)]);
     break;
     
+  case 'resume':
+    // Resume existing session
+    runScript(join(rootDir, 'src', 'session-coordinator.js'), ['resume', ...args.slice(1)]);
+    break;
+    
   case 'close':
     // Close session
     runScript(join(rootDir, 'src', 'close-session.js'), args.slice(1));

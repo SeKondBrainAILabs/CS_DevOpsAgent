@@ -1602,7 +1602,7 @@ INSTRUCTIONS:
 1. Change to worktree directory: cd "${worktreePath}"
 2. Verify branch: git branch --show-current
 3. Make your changes for: ${task}
-4. Write commit message to: .devops-commit-${sessionId}.msg
+4. Write commit message to: .devops-commit-${sessionId}.msg (use >> to append)
 5. The DevOps agent will auto-commit and push your changes
 `;
 
@@ -1658,7 +1658,7 @@ Make changes for: **${task}**
 ### Step 5: Commit Your Changes
 Write your commit message to the session-specific file:
 \`\`\`bash
-echo "feat: your commit message here" > .devops-commit-${sessionId}.msg
+echo "feat: your commit message here" >> .devops-commit-${sessionId}.msg
 \`\`\`
 
 ### Step 6: Release Your File Locks
@@ -1749,6 +1749,7 @@ The DevOps agent will automatically:
     console.log(`}`);
     console.log(``);
     console.log(`Write commit messages to: .devops-commit-${sessionId}.msg`);
+    console.log(`(Use '>>' to append if you want to add to an existing message)`);
     console.log(`The DevOps agent will automatically commit and push changes.`);
     console.log(``);
     console.log(`⛔ IMPORTANT: STOP HERE AND WAIT`);
@@ -2427,16 +2428,16 @@ The DevOps agent is monitoring this worktree for changes.
     const worktrees = fs.readdirSync(this.worktreesPath);
     let recovered = 0;
 
-    worktrees.forEach(dir => {
+    for (const dir of worktrees) {
       // Skip .DS_Store and other system files
-      if (dir.startsWith('.')) return;
+      if (dir.startsWith('.')) continue;
 
       const worktreePath = path.join(this.worktreesPath, dir);
       
       // Ensure it's a directory
       try {
-        if (!fs.statSync(worktreePath).isDirectory()) return;
-      } catch (e) { return; }
+        if (!fs.statSync(worktreePath).isDirectory()) continue;
+      } catch (e) { continue; }
 
       const configPath = path.join(worktreePath, '.devops-session.json');
 
@@ -2444,7 +2445,7 @@ The DevOps agent is monitoring this worktree for changes.
         try {
           const sessionData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
           
-          if (!sessionData.sessionId) return;
+          if (!sessionData.sessionId) continue;
 
           const lockFile = path.join(this.locksPath, `${sessionData.sessionId}.lock`);
 
@@ -2511,7 +2512,7 @@ The DevOps agent is monitoring this worktree for changes.
           console.error(`Failed to recover ${dir}: ${err.message}`);
         }
       }
-    });
+    }
 
     if (recovered === 0) {
       console.log('No orphaned sessions found to recover.');

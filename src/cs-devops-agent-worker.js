@@ -293,12 +293,13 @@ async function stagedCount() {
 async function unstageIfStaged(file) {
   try {
     // Check if file is actually staged first to avoid errors
-    const { ok } = await run("git", ["ls-files", "--error-unmatch", file]);
-    if (ok) {
+    // Use diff --cached to check without erroring on untracked files
+    const { ok, stdout } = await run("git", ["diff", "--name-only", "--cached", file]);
+    if (ok && stdout.trim().length > 0) {
         await run("git", ["restore", "--staged", file]);
     }
   } catch (e) {
-    // Ignore errors if file not found in index
+    // Ignore errors
   }
 }
 async function defaultRemote() {
@@ -1536,7 +1537,7 @@ function saveProjectSettings(settings, settingsPath) {
 // Display copyright and license information immediately
 console.log("\n" + "=".repeat(70));
 console.log("  CS_DevOpsAgent - Intelligent Git Automation System");
-console.log("  Version 1.4.8 | Build 20251008.1");
+console.log("  Version 2.0.18-dev.10 | Build 20260106");
 console.log("  Copyright (c) 2026 SeKondBrain AI Labs Limited");
 console.log("  Author: Sachin Dev Duggal");
 console.log("  \n  Licensed under the MIT License");
@@ -1879,7 +1880,8 @@ console.log();
     status: 'ACTIVE',
     inputBuffer: '',
     sessionId: sessionId,
-    branch: await currentBranch()
+    branch: await currentBranch(),
+    inputMode: 'command' // 'command' or 'prompt'
   };
 
   // Helper to strip ANSI codes
@@ -2016,6 +2018,9 @@ console.log();
 
   // Command handler
   rl.on('line', async (line) => {
+    // If in prompt mode, ignore this handler (let the prompt handler take it)
+    if (TUI.inputMode !== 'command') return;
+
     TUI.inputBuffer = ''; 
     addToBuffers(`> ${line}`); // Echo command to left panel
     const cmd = line.trim().toLowerCase();
@@ -2083,10 +2088,22 @@ console.log();
           let commitMsg = readMsgFile(msgPath);
           if (!commitMsg) {
             console.log("No commit message found. Enter message (or 'cancel' to abort):");
-            rl.prompt();
+            
+            // Switch to prompt mode to prevent main loop interference
+            TUI.inputMode = 'prompt';
+            
+            // Use a temporary prompt interface
             const msgInput = await new Promise(resolve => {
-              rl.once('line', resolve);
+              // We need to use a one-time listener that doesn't conflict
+              const handler = (input) => {
+                resolve(input);
+              };
+              rl.once('line', handler);
             });
+            
+            // Switch back to command mode
+            TUI.inputMode = 'command';
+            
             if (msgInput.trim().toLowerCase() === 'cancel') {
               console.log("Commit cancelled.");
               break;
@@ -2099,7 +2116,7 @@ console.log();
           console.log("No changes to commit.");
         }
         break;
-        
+
       case 'push':
       case 'p':
         const branchName = await currentBranch();
@@ -2121,10 +2138,17 @@ console.log();
         const uncommitted = await hasUncommittedChanges();
         if (uncommitted) {
           console.log("You have uncommitted changes. Commit them before exit? (y/n)");
-          rl.prompt();
+          
+          TUI.inputMode = 'prompt';
+          
           const answer = await new Promise(resolve => {
-            rl.once('line', resolve);
+            const handler = (input) => {
+              resolve(input);
+            };
+            rl.once('line', handler);
           });
+          
+          TUI.inputMode = 'command';
           
           if (answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes') {
             console.log("Committing changes...");
@@ -2222,74 +2246,128 @@ console.log();
             let mergeCompleted = false;
             if (shouldMerge) {
               try {
-                console.log(`\n\x1b[34mMerging ${currentBranchName} into ${targetBranch}...\x1b[0m`);
-                
-                // Check if target branch exists locally
-                let branchExists = false;
+                // Check if repoRoot is clean before attempting merge operations
+                // We use --porcelain to check for modifications
+                let isDirty = false;
                 try {
-                  execSync(`git rev-parse --verify ${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
-                  branchExists = true;
-                } catch (err) {
-                  // Branch doesn't exist locally
-                }
-                
-                if (!branchExists) {
-                  // Check if branch exists on remote
-                  try {
-                    const remoteCheck = execSync(`git ls-remote --heads origin ${targetBranch}`, { 
-                      cwd: repoRoot, 
-                      encoding: 'utf8' 
-                    }).trim();
+                  const status = execSync(`git status --porcelain`, { cwd: repoRoot, encoding: 'utf8' });
+                  if (status && status.trim().length > 0) {
+                    isDirty = true;
+                    console.log(`\n\x1b[33m⚠️  The main repository has uncommitted changes:\x1b[0m`);
+                    const lines = status.trim().split('\n').slice(0, 5);
+                    lines.forEach(l => console.log(`   ${l}`));
+                    if (status.trim().split('\n').length > 5) console.log('   ...');
                     
-                    if (remoteCheck) {
-                      // Branch exists on remote, fetch it
-                      console.log(`\x1b[2mTarget branch doesn't exist locally, fetching from remote...\x1b[0m`);
-                      execSync(`git fetch origin ${targetBranch}:${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
+                    console.log(`\nMerge cannot proceed with a dirty working tree.`);
+                    console.log(`You can stash these changes to proceed with the merge, or skip the merge.`);
+                    console.log(`  y/yes - Stash changes and merge`);
+                    console.log(`  n/no  - Skip merge`);
+                    
+                    rl.prompt();
+                    const stashAnswer = await new Promise(resolve => {
+                      rl.once('line', resolve);
+                    });
+                    
+                    if (stashAnswer.toLowerCase() === 'y' || stashAnswer.toLowerCase() === 'yes') {
+                      console.log(`\nStashing changes in main repo...`);
+                      execSync(`git stash push -m "Auto-stash before session merge ${sessionId}"`, { cwd: repoRoot, stdio: 'pipe' });
+                      isDirty = false;
                     } else {
-                      // Branch doesn't exist on remote either, create it
-                      console.log(`\x1b[33mTarget branch '${targetBranch}' doesn't exist. Creating it...\x1b[0m`);
-                      execSync(`git checkout -b ${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
-                      execSync(`git push -u origin ${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
-                      console.log(`\x1b[32m✓\x1b[0m Created new branch ${targetBranch}`);
+                      console.log(`\nSkipping merge due to dirty working tree.`);
+                      shouldMerge = false;
                     }
-                  } catch (err) {
-                    console.error(`\x1b[31m✗ Error checking/creating remote branch: ${err.message}\x1b[0m`);
-                    throw err;
                   }
-                }
-                
-                // Switch to target branch
-                execSync(`git checkout ${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
-                
-                // Pull latest (if branch already existed)
-                if (branchExists) {
-                  try {
-                    execSync(`git pull origin ${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
-                  } catch (err) {
-                    console.log(`\x1b[2mCould not pull latest changes (may be new branch)\x1b[0m`);
-                  }
-                }
-                
-                // Merge the session branch
-                execSync(`git merge --no-ff ${currentBranchName} -m "Merge session ${sessionId}: session work"`, { 
-                  cwd: repoRoot, 
-                  stdio: 'pipe' 
-                });
-                
-                // Push merged changes
-                execSync(`git push origin ${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
-                
-                console.log(`\x1b[32m✓\x1b[0m Successfully merged to ${targetBranch}`);
-                
-                // Delete remote branch after successful merge
-                try {
-                  execSync(`git push origin --delete ${currentBranchName}`, { cwd: repoRoot, stdio: 'pipe' });
-                  console.log(`\x1b[32m✓\x1b[0m Deleted remote branch ${currentBranchName}`);
                 } catch (err) {
-                  console.log(`\x1b[2mCould not delete remote branch\x1b[0m`);
+                   console.log(`\x1b[31mError checking git status: ${err.message}\x1b[0m`);
+                   shouldMerge = false; // Err on side of caution
                 }
-                
-                mergeCompleted = true;
+
+                if (shouldMerge && !isDirty) {
+                    console.log(`\n\x1b[34mMerging ${currentBranchName} into ${targetBranch}...\x1b[0m`);
+                    
+                    // Check if target branch exists locally
+                    let branchExists = false;
+                    try {
+                      execSync(`git rev-parse --verify ${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
+                      branchExists = true;
+                    } catch (err) {
+                      // Branch doesn't exist locally
+                    }
+                    
+                    if (!branchExists) {
+                      // Check if branch exists on remote
+                      try {
+                        const remoteCheck = execSync(`git ls-remote --heads origin ${targetBranch}`, { 
+                          cwd: repoRoot, 
+                          encoding: 'utf8' 
+                        }).trim();
+                        
+                        if (remoteCheck) {
+                          // Branch exists on remote, fetch it
+                          console.log(`\x1b[2mTarget branch doesn't exist locally, fetching from remote...\x1b[0m`);
+                          execSync(`git fetch origin ${targetBranch}:${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
+                        } else {
+                          // Branch doesn't exist on remote either, create it
+                          console.log(`\x1b[33mTarget branch '${targetBranch}' doesn't exist. Creating it...\x1b[0m`);
+                          execSync(`git checkout -b ${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
+                          execSync(`git push -u origin ${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
+                          console.log(`\x1b[32m✓\x1b[0m Created new branch ${targetBranch}`);
+                        }
+                      } catch (err) {
+                        console.error(`\x1b[31m✗ Error checking/creating remote branch: ${err.message}\x1b[0m`);
+                        throw err;
+                      }
+                    }
+                    
+                    // Switch to target branch
+                    execSync(`git checkout ${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
+                    
+                    // Pull latest (if branch already existed)
+                    if (branchExists) {
+                      try {
+                        execSync(`git pull origin ${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
+                      } catch (err) {
+                        console.log(`\x1b[2mCould not pull latest changes (may be new branch)\x1b[0m`);
+                      }
+                    }
+
+                    // Rebase session branch onto target branch
+                    try {
+                      console.log(`\x1b[34mRebasing ${currentBranchName} onto ${targetBranch}...\x1b[0m`);
+                      execSync(`git checkout ${currentBranchName}`, { cwd: repoRoot, stdio: 'pipe' });
+                      execSync(`git rebase ${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
+                      console.log(`\x1b[32m✓\x1b[0m Rebase successful`);
+                      
+                      // Switch back to target for merge
+                      execSync(`git checkout ${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
+                    } catch (err) {
+                      console.error(`\x1b[31m✗ Rebase failed: ${err.message}\x1b[0m`);
+                      console.log(`\x1b[33mAborting rebase and trying direct merge...\x1b[0m`);
+                      try { execSync(`git rebase --abort`, { cwd: repoRoot, stdio: 'pipe' }); } catch (e) {}
+                      execSync(`git checkout ${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
+                    }
+                    
+                    // Merge the session branch
+                    execSync(`git merge --no-ff ${currentBranchName} -m "Merge session ${sessionId}: session work"`, { 
+                      cwd: repoRoot, 
+                      stdio: 'pipe' 
+                    });
+                    
+                    // Push merged changes
+                    execSync(`git push origin ${targetBranch}`, { cwd: repoRoot, stdio: 'pipe' });
+                    
+                    console.log(`\x1b[32m✓\x1b[0m Successfully merged to ${targetBranch}`);
+                    
+                    // Delete remote branch after successful merge
+                    try {
+                      execSync(`git push origin --delete ${currentBranchName}`, { cwd: repoRoot, stdio: 'pipe' });
+                      console.log(`\x1b[32m✓\x1b[0m Deleted remote branch ${currentBranchName}`);
+                    } catch (err) {
+                      console.log(`\x1b[2mCould not delete remote branch\x1b[0m`);
+                    }
+                    
+                    mergeCompleted = true;
+                }
               } catch (err) {
                 console.error(`\x1b[31m✗ Merge failed: ${err.message}\x1b[0m`);
                 console.log(`\x1b[33mYou may need to resolve conflicts manually\x1b[0m`);

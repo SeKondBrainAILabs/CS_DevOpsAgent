@@ -281,10 +281,33 @@ When you want to perform an action, use the available tools.`;
     
     if (taskIndex !== -1 && args[taskIndex + 1]) {
       const taskName = args[taskIndex + 1];
-      console.log(`\\n${CONFIG.colors.cyan}Auto-starting session for task: ${taskName}${CONFIG.colors.reset}\\n`);
+      console.log(`\n${CONFIG.colors.cyan}Auto-starting session for task: ${taskName}${CONFIG.colors.reset}\n`);
       await this.startSession({ taskName });
       return; // Exit after session? Or continue chat? Usually session start spawns child and returns.
       // startSession re-initializes readline after child exit, so we can continue chat.
+    }
+
+    // Check for auto-resume
+    const resumeIndex = args.indexOf('resume');
+    const sessionIdIndex = args.indexOf('--session-id');
+    
+    if (resumeIndex !== -1 || sessionIdIndex !== -1) {
+      let sessionId = null;
+      let taskName = null;
+      
+      if (sessionIdIndex !== -1 && args[sessionIdIndex + 1]) {
+        sessionId = args[sessionIdIndex + 1];
+      }
+      
+      if (taskIndex !== -1 && args[taskIndex + 1]) {
+        taskName = args[taskIndex + 1];
+      }
+      
+      if (sessionId || taskName) {
+        console.log(`\n${CONFIG.colors.cyan}Auto-resuming session...${CONFIG.colors.reset}\n`);
+        await this.resumeSession({ sessionId, taskName });
+        return;
+      }
     }
 
     this.startReadline();
@@ -547,6 +570,42 @@ When you want to perform an action, use the available tools.`;
     });
   }
 
+  async startSession(args) {
+    const { taskName, description } = args;
+    
+    console.log(`${CONFIG.colors.magenta}Kora > ${CONFIG.colors.reset}Starting session for task: ${taskName}...`);
+    
+    // Close readline interface
+    if (this.rl) {
+      this.rl.close();
+      this.rl = null;
+    }
+
+    const scriptPath = path.join(__dirname, 'session-coordinator.js');
+    
+    return new Promise((resolve, reject) => {
+      const child = spawn('node', [scriptPath, 'create-and-start', '--task', taskName], {
+        stdio: 'inherit',
+        cwd: this.repoRoot
+      });
+      
+      child.on('close', (code) => {
+        this.startReadline();
+        if (code === 0) {
+          resolve(JSON.stringify({ success: true, message: "Session started successfully." }));
+        } else {
+          resolve(JSON.stringify({ success: false, message: `Session process exited with code ${code}.` }));
+        }
+        console.log(`\n${CONFIG.colors.cyan}Welcome back to Kora!${CONFIG.colors.reset}`);
+      });
+      
+      child.on('error', (err) => {
+        this.startReadline();
+        resolve(JSON.stringify({ success: false, error: err.message }));
+      });
+    });
+  }
+
   async recoverSessions() {
     console.log(`${CONFIG.colors.magenta}Kora > ${CONFIG.colors.reset}Scanning for orphaned sessions to recover...`);
     
@@ -584,7 +643,6 @@ When you want to perform an action, use the available tools.`;
       });
     });
   }
-
   async resumeSession(args) {
     const { sessionId, taskName } = args;
     
