@@ -203,16 +203,42 @@ async function checkContractsExist(projectRoot) {
     let hasChanges = false;
 
     // Process each contract type
+    let scatteredCount = 0;
+    let centralCount = 0;
+    let missingCount = 0;
+    
+    // Print summary header
+    console.log(`\n${colors.bright}Contract Search Results:${colors.reset}`);
+    
     for (const [type, foundFiles] of Object.entries(contractMap)) {
         // Filter out unique paths (resolve them)
         const uniqueFiles = [...new Set(foundFiles.map(f => path.resolve(f)))];
+        const isCentral = fs.existsSync(path.join(targetDir, type));
         
-        if (uniqueFiles.length > 1) {
-             console.log();
-             log.info(`Found multiple files for contract type: ${colors.cyan}${type}${colors.reset}`);
-             uniqueFiles.forEach(f => console.log(` - ${path.relative(projectRoot, f)}`));
+        let statusIcon = '';
+        let statusText = '';
+        
+        if (isCentral) {
+            statusIcon = colors.green + '✓' + colors.reset;
+            statusText = colors.green + 'Present (Central)' + colors.reset;
+            centralCount++;
+        } else if (uniqueFiles.length > 0) {
+            statusIcon = colors.yellow + '⚠️' + colors.reset;
+            statusText = colors.yellow + `Found ${uniqueFiles.length} scattered file(s)` + colors.reset;
+            scatteredCount++;
+        } else {
+            statusIcon = colors.red + '✗' + colors.reset;
+            statusText = colors.red + 'Missing' + colors.reset;
+            missingCount++;
+        }
+        
+        console.log(` ${statusIcon} ${type.padEnd(30)} : ${statusText}`);
+        
+        if (uniqueFiles.length > 0 && !isCentral) {
+             // Show locations for scattered files
+             uniqueFiles.forEach(f => console.log(`    ${colors.dim}- ${path.relative(projectRoot, f)}${colors.reset}`));
              
-             const shouldMerge = await confirm(`Do you want to merge these into House_Rules_Contracts/${type}?`, true);
+             const shouldMerge = await confirm(`   Merge/Copy ${uniqueFiles.length} file(s) to House_Rules_Contracts/${type}?`, true);
              
              if (shouldMerge) {
                  ensureDirectoryExists(targetDir);
@@ -244,47 +270,36 @@ async function checkContractsExist(projectRoot) {
                  }
                  
                  fs.writeFileSync(targetPath, mergedContent);
-                 log.success(`Merged contracts into ${path.relative(projectRoot, targetPath)}`);
+                 log.success(`   Merged into ${path.relative(projectRoot, targetPath)}`);
                  hasChanges = true;
+                 centralCount++; // Now it's central
+                 scatteredCount--;
              }
-        } else if (uniqueFiles.length === 1) {
-            // If single file exists but is NOT in House_Rules_Contracts, ask to move/copy
-            const file = uniqueFiles[0];
-            const targetPath = path.join(targetDir, type);
-            
-            if (file !== path.resolve(targetPath)) {
-                console.log();
-                log.info(`Found ${type} at: ${path.relative(projectRoot, file)}`);
-                const shouldCopy = await confirm(`Copy this to central House_Rules_Contracts/${type}?`, true);
-                if (shouldCopy) {
-                    ensureDirectoryExists(targetDir);
-                    fs.copyFileSync(file, targetPath);
-                    log.success(`Copied to ${path.relative(projectRoot, targetPath)}`);
-                    hasChanges = true;
-                }
-            }
         }
     }
 
-    // Final check: Do we have all required contracts?
-    // We check if they exist in the target directory OR if we found them elsewhere (and user maybe declined to merge)
-    const missing = requiredContracts.filter(contractName => {
-        // 1. Check central folder
-        if (fs.existsSync(path.join(targetDir, contractName))) return false;
-        
-        // 2. Check if we found it anywhere else
-        if (contractMap[contractName] && contractMap[contractName].length > 0) return false;
-        
-        return true;
-    });
-    
-    if (missing.length === 0) {
-        if (hasChanges) log.success('Contract files consolidated successfully.');
-        else log.info('All contract files found in repository.');
+    console.log(); // Spacing
+
+    // Final check logic
+    if (missingCount === 0) {
+        if (hasChanges) log.success('Contracts consolidated and verified.');
+        else log.info('All required contracts are present.');
         return true;
     }
     
-    // If we are missing some, but have others, we still return false so generateContracts can run for the missing ones?
+    if (scatteredCount > 0) {
+        log.warn(`${scatteredCount} contract types exist but are not centralized.`);
+        log.warn('We recommend merging them, but you can proceed without it.');
+        // If we have files but user chose not to merge, we consider them "present" enough to skip generation
+        // UNLESS there are also missing ones.
+    }
+    
+    if (missingCount > 0) {
+        log.warn(`${missingCount} contract types are completely missing.`);
+        return false; // Trigger generation prompt
+    }
+    
+    return true; // All accounted for (either central or scattered)
     // Or we return false and generateContracts will run.
     return false;
     
