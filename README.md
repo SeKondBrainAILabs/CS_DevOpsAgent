@@ -1,204 +1,151 @@
 # DevOps Agent - AI-Powered Git Workflow Automation
 
-> Let AI assistants work safely on your codebase with automatic commits, branch management, and multi-agent conflict prevention.
+> **Now with Kora 🤖 - Your Smart DevOps Assistant**
+
+DevOps Agent acts as a bridge between human developers and AI coding assistants. It manages git operations, prevents multi-agent conflicts, ensures architectural compliance, and now talks to you to streamline your workflow.
 
 [![npm version](https://badge.fury.io/js/s9n-devops-agent.svg)](https://www.npmjs.com/package/s9n-devops-agent)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## What It Does
+---
 
-🤖 **Works with Any AI Assistant** - Claude, Cursor, GitHub Copilot, Cline  
-🔄 **Automatic Git Operations** - Watches changes, commits with proper messages, pushes automatically  
-🛡️ **Multi-Agent Coordination** - Prevents multiple AIs from editing the same files simultaneously  
-🌲 **Smart Branch Management** - Hierarchical structure: session → daily → weekly → main  
-📋 **House Rules System** - Teaches AI agents your project conventions and testing requirements
+## 🚀 New in v2.0: Smart Features
 
-## Quick Start (2 Minutes)
+### 🤖 Meet Kora
+Kora is a conversational AI assistant built into the DevOps Agent. She knows your project's **House Rules**, understands your **Architecture Contracts**, and can manage your development sessions.
 
-```bash
-# Install Stable Version
-npm install -g s9n-devops-agent
+- **Ask Questions:** "What are the rules for API endpoints?"
+- **Start Work:** "Start a new session to fix the login bug."
+- **Check Status:** "Are there any open sessions?"
 
-# Install Development Version (Latest Features)
-npm install -g s9n-devops-agent@dev
+### 📜 Contract Automation
+Ensure your code matches your architecture. The agent now includes tools to:
+- **Validate Compliance:** Checks if your code implements the defined contracts (API, DB, Features).
+- **Auto-Generate Contracts:** Reverse-engineer documentation from existing code.
+- **Test:** Run `npm run test:contracts` to verify compliance in CI/CD.
 
-# Learn (recommended for first-time users)
-s9n-devops-agent tutorial
-
-# Setup
-s9n-devops-agent setup
-
-# Start working
-s9n-devops-agent start
-```
-
-## How It Works
-
-**The Concept:** Give each AI assistant its own private workspace (called a "session")
-
-1. **You start a session** → Creates isolated workspace (git worktree)
-2. **AI assistant works there** → Following house rules you define
-3. **DevOps Agent watches** → Auto-commits and pushes changes
-4. **Session closes** → Merges to daily branch, then to main
-
-### What's a Session?
-
-Think of it like giving each AI assistant their own office:
-- **Separate directory** with full git history
-- **Own branch** auto-named based on task
-- **File locks** prevent conflicts with other agents
-- **Auto-monitoring** commits and pushes automatically
-
-## Core Features
-
-### 🔄 Auto-Commit System
-**What:** Watches your workspace and commits changes automatically  
-**Why:** AI can't run git commands, so we do it for them  
-**How:** AI writes commit message to special file, agent reads and commits
-
-### 🛡️ File Coordination
-**What:** Prevents multiple AI agents from editing same files  
-**Why:** Avoids merge conflicts when working with multiple agents  
-**How:** Agents "declare" files before editing, system checks for conflicts
-
-### 🌲 Branch Hierarchy
-**What:** Organized structure: session/* → daily/* → weekly/* → main  
-**Why:** Easy rollbacks, clear progress tracking, organized history  
-**How:** Auto-merges happen at session close and nightly rollover
-
-### 📋 House Rules
-**What:** Instructions for AI assistants in `docs/houserules.md`  
-**Why:** Consistent behavior across agents, follows your conventions  
-**How:** Markdown file that AI reads first, auto-updated by agent
-
-## Commands
-
-```bash
-# New User Commands
-s9n-devops-agent tutorial          # Interactive learning (start here!)
-s9n-devops-agent setup              # First-time configuration
-s9n-devops-agent help-topics        # Browse comprehensive help
-
-# Session Management
-s9n-devops-agent start              # Create/resume session
-s9n-devops-agent list               # Show all sessions
-s9n-devops-agent close              # Close active session
-
-# Advanced
-s9n-devops-agent create --task api --agent claude  # Create specific session
-s9n-devops-agent cleanup                           # Clean up stale sessions
-```
-
-## Common Workflows
-
-### Single AI Agent
-```bash
-s9n-devops-agent start        # Create session
-# Copy instructions to Claude/Cursor
-# AI works, agent commits automatically
-s9n-devops-agent close        # Merge and cleanup
-```
-
-### Multiple AI Agents (Parallel Work)
-```bash
-# Terminal 1: Claude on backend
-s9n-devops-agent create --task api --agent claude
-
-# Terminal 2: Cursor on frontend  
-s9n-devops-agent create --task ui --agent cursor
-
-# They work independently, no conflicts!
-```
-
-## What Makes It Special?
-
-✅ **Zero Manual Git Commands** - AI can't run git, we handle it all  
-✅ **Conflict-Free Multi-Agent** - File coordination prevents chaos  
-✅ **Production-Ready** - Used in real projects with multiple developers  
-✅ **Framework Agnostic** - Works with any codebase, any language  
-✅ **Git Platform Agnostic** - GitHub, GitLab, Bitbucket, self-hosted
-
-## Requirements
-
-- Node.js 16.0.0 or higher
-- Git repository
-- Any AI assistant (Claude, Cursor, Copilot, Cline, etc.)
-
-## Documentation
-
-📖 **Getting Started**
-- [Interactive Tutorial](docs/V2_IMPLEMENTATION_GUIDE.md) - Learn by doing
-- [Installation Guide](docs/INSTALLATION_GUIDE.md) - Detailed setup
-
-📚 **Feature Guides**
-- [Version Strategies](docs/version-strategies.md) - Daily version incrementing
-- [File Coordination](docs/file-coordination-guide.md) - Multi-agent prevention
-- [Multi-Agent Setup](docs/multi-agent-guide.md) - Working with multiple AIs
-- [House Rules](docs/houserules-guide.md) - Teaching AI your conventions
-
-🔧 **Advanced Topics**
-- [Branch Management](docs/branch-management.md) - Hierarchical structure
-- [Docker Integration](docs/V2_IMPLEMENTATION_GUIDE.md) - Auto-restart containers
-- [Session Management](docs/SESSION_MANAGEMENT.md) - Advanced workflows
-
-## Troubleshooting
-
-**Session not found?**
-```bash
-s9n-devops-agent list --all    # Check closed sessions
-```
-
-**Agent not detecting changes?**
-```bash
-# Check commit message file exists and has content
-ls -la .devops-commit-*.msg
-# Enable debug mode
-AC_DEBUG=true s9n-devops-agent start
-```
-
-**Need help?**
-```bash
-s9n-devops-agent help-topics   # Browse all help topics
-s9n-devops-agent tutorial      # Re-run tutorial
-```
-
-## Configuration
-
-Configure via environment variables or project settings:
-
-```bash
-# Branch naming
-export AC_BRANCH_PREFIX="dev_initials_"
-
-# Auto-push (default: true)
-export AC_PUSH=true
-
-# Debug logging
-export AC_DEBUG=true
-
-# Timezone for daily rollover
-export AC_TZ="America/New_York"
-```
-
-See [Configuration Guide](docs/INSTALLATION_GUIDE.md#configuration-files) for details.
-
-## Contributing
-
-Contributions welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## License
-
-MIT License - see [LICENSE](LICENSE) file for details.
-
-## Support
-
-- 🐛 [Report Issues](https://github.com/SecondBrainAICo/CS_DevOpsAgent/issues)
-- 💬 [Discussions](https://github.com/SecondBrainAICo/CS_DevOpsAgent/discussions)
-- 📦 [npm Package](https://www.npmjs.com/package/s9n-devops-agent)
-- 📖 [Documentation](https://github.com/SecondBrainAICo/CS_DevOpsAgent/wiki)
+### 🧠 AI-Powered Commits
+The agent analyzes your staged changes and generates semantic, conventional commit messages that adhere to your specific House Rules.
 
 ---
 
-**Built with ❤️ by [SecondBrain Labs](https://secondbrain.ai)**
+## 📦 Installation
 
-*Making AI-powered development safe, efficient, and conflict-free.*
+### Stable Version
+```bash
+npm install -g s9n-devops-agent
+```
+
+### Development Version (Latest Features)
+To access Kora and the latest smart features:
+```bash
+npm install -g s9n-devops-agent@dev
+```
+
+---
+
+## ⚡ Quick Start
+
+### 1. Setup
+Run the setup wizard to configure your environment and API keys.
+```bash
+s9n-devops-agent setup
+```
+> **Note:** You will be prompted for a `GROQ_API_KEY` to enable Kora and AI features.
+
+### 2. Talk to Kora
+Start the conversational interface to manage your work.
+```bash
+s9n-devops-agent chat
+```
+
+### 3. Start a Session (Classic Mode)
+If you prefer the CLI menu:
+```bash
+s9n-devops-agent start
+```
+
+---
+
+## 🛠️ Core Features
+
+### 🔄 Auto-Commit System
+- **Watches** your workspace in real-time.
+- **Commits** changes automatically when your AI assistant saves files.
+- **Pushes** to the remote repository.
+
+### 🛡️ Multi-Agent Coordination
+- **File Locking:** Prevents multiple agents (or humans) from editing the same files simultaneously.
+- **Worktrees:** Each session gets an isolated git worktree, keeping your main branch clean.
+
+### 🌲 Smart Branch Management
+- **Hierarchy:** `session/task` → `daily/date` → `main`.
+- **Auto-Merge:** Sessions automatically merge into daily branches, which roll over to main.
+
+### 📋 House Rules System
+- **Context Injection:** AI agents read `docs/houserules.md` to understand your coding conventions.
+- **Enforcement:** The agent checks commits against these rules.
+
+---
+
+## 📖 Usage Guide
+
+### Using Kora (Chat)
+```bash
+$ s9n-devops-agent chat
+
+🤖 Kora - Smart DevOps Assistant
+Powered by Groq (llama-3.3-70b-versatile)
+============================================================
+
+Kora > Hi! I'm Kora. How can I help you today?
+
+You > Start a session for user auth
+
+Kora > Starting new session for: user-auth...
+```
+
+### Managing Sessions
+```bash
+# List all active sessions
+s9n-devops-agent list
+
+# Close the current session (merge and cleanup)
+s9n-devops-agent close
+```
+
+### Contract Testing
+Run these tests to ensure your code complies with `House_Rules_Contracts/`:
+```bash
+npm run test:contracts
+```
+
+---
+
+## ⚙️ Configuration
+
+The setup wizard (`s9n-devops-agent setup`) creates a `.env` file in your project root.
+
+| Variable | Description |
+|----------|-------------|
+| `GROQ_API_KEY` | **Required** for Kora and AI commits. Get one at [console.groq.com](https://console.groq.com). |
+| `AC_BRANCH_PREFIX` | Prefix for branch names (e.g., `dev_abc_`). |
+| `AC_PUSH` | `true` to auto-push commits, `false` for local only. |
+| `AC_DEBUG` | `true` for verbose logging. |
+
+---
+
+## 📚 Documentation
+- [Installation Guide](docs/INSTALLATION_GUIDE.md)
+- [Testing Guide](TESTING_GUIDE.md)
+- [House Rules Guide](docs/houserules-guide.md)
+- [Contract Automation](scripts/contract-automation/README.md)
+
+---
+
+## Support
+- 🐛 [Report Issues](https://github.com/SecondBrainAICo/CS_DevOpsAgent/issues)
+- 📦 [npm Package](https://www.npmjs.com/package/s9n-devops-agent)
+
+---
+**Built with ❤️ by [SecondBrain Labs](https://secondbrain.ai)**
