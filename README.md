@@ -16,8 +16,11 @@
 ## Quick Start (2 Minutes)
 
 ```bash
-# Install
+# Install Stable Version
 npm install -g s9n-devops-agent
+
+# Install Development Version (Latest Features)
+npm install -g s9n-devops-agent@dev
 
 # Learn (recommended for first-time users)
 s9n-devops-agent tutorial
