@@ -23,7 +23,7 @@ import readline from 'readline';
 import Groq from 'groq-sdk';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import { credentialsManager } from './credentials-manager.js';
 import HouseRulesManager from './house-rules-manager.js';
 // We'll import SessionCoordinator dynamically to avoid circular deps if any
@@ -364,15 +364,50 @@ When you want to perform an action, use the available tools.`;
 
   async listContracts() {
     const contractsDir = path.join(this.repoRoot, 'House_Rules_Contracts');
-    if (!fs.existsSync(contractsDir)) {
-      return JSON.stringify({ exists: false, message: "Contracts folder not found." });
+    const centralExists = fs.existsSync(contractsDir);
+    
+    // Recursive search for contracts (similar to setup script)
+    const findCommand = `find "${this.repoRoot}" -type f \\( -iname "*CONTRACT*.md" -o -iname "*CONTRACT*.json" \\) -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/local_deploy/*"`;
+    
+    let allFiles = [];
+    try {
+        const output = execSync(findCommand, { encoding: 'utf8' }).trim();
+        allFiles = output.split('\n').filter(Boolean);
+    } catch (e) {
+        // Find failed or no files
     }
 
-    const files = fs.readdirSync(contractsDir).filter(f => f.endsWith('.md') || f.endsWith('.json'));
-    return JSON.stringify({
-      exists: true,
-      files: files,
-      location: contractsDir
+    const requiredTypes = [
+      'FEATURES_CONTRACT.md', 'API_CONTRACT.md', 'DATABASE_SCHEMA_CONTRACT.md',
+      'SQL_CONTRACT.json', 'THIRD_PARTY_INTEGRATIONS.md', 'INFRA_CONTRACT.md'
+    ];
+
+    const status = {};
+    let scatteredCount = 0;
+    
+    requiredTypes.forEach(type => {
+        // Check if in central folder
+        const isCentral = fs.existsSync(path.join(contractsDir, type));
+        
+        // Check if anywhere in repo
+        const found = allFiles.filter(f => path.basename(f).toUpperCase() === type || path.basename(f).toUpperCase().includes(type.split('.')[0]));
+        
+        status[type] = {
+            central: isCentral,
+            foundCount: found.length,
+            locations: found.map(f => path.relative(this.repoRoot, f))
+        };
+        
+        if (!isCentral && found.length > 0) scatteredCount++;
+    });
+
+    return JSON.stringify({ 
+      centralFolderExists: centralExists,
+      scatteredContractsCount: scatteredCount,
+      details: status,
+      message: scatteredCount > 0 
+        ? "Contracts found scattered in repository. Recommend running 'npm run setup' to consolidate." 
+        : (centralExists ? "Contracts found in central folder." : "No contracts found.")
     });
   }
 
