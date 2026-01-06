@@ -150,8 +150,22 @@ This structure is compatible with the DevOps Agent's automation tools.
 }
 
 function checkContractsExist(projectRoot) {
-  const contractsDir = path.join(projectRoot, 'House_Rules_Contracts');
-  if (!fs.existsSync(contractsDir)) return false;
+  // Check for contracts in multiple potential locations
+  const locations = [
+    path.join(projectRoot, 'House_Rules_Contracts'),
+    path.join(projectRoot, 'docs', 'contracts'),
+    path.join(projectRoot, 'documentation', 'contracts')
+  ];
+
+  let contractsDir = null;
+  for (const loc of locations) {
+    if (fs.existsSync(loc)) {
+      contractsDir = loc;
+      break;
+    }
+  }
+
+  if (!contractsDir) return false;
   
   const requiredContracts = [
     'FEATURES_CONTRACT.md',
@@ -161,6 +175,20 @@ function checkContractsExist(projectRoot) {
     'THIRD_PARTY_INTEGRATIONS.md',
     'INFRA_CONTRACT.md'
   ];
+  
+  // Check if we have multiple similar contracts that might need merging
+  // This is a simplified check - in reality, we'd scan recursively
+  const files = fs.readdirSync(contractsDir);
+  const potentialDuplicates = files.filter(f => 
+    (f.includes('FEATURE') && f !== 'FEATURES_CONTRACT.md') ||
+    (f.includes('API') && f !== 'API_CONTRACT.md')
+  );
+
+  if (potentialDuplicates.length > 0) {
+    log.info(`Found potential split contract files in ${contractsDir}:`);
+    potentialDuplicates.forEach(f => console.log(` - ${f}`));
+    console.log('You may want to merge these into single contract files per type.');
+  }
   
   return requiredContracts.every(file => fs.existsSync(path.join(contractsDir, file)));
 }
