@@ -830,7 +830,7 @@ export class SessionCoordinator {
    */
   async promptForBaseBranch() {
     console.log(`\n${CONFIG.colors.yellow}═══ Base Branch Selection ═══${CONFIG.colors.reset}`);
-    console.log(`${CONFIG.colors.dim}Select the branch you want to start your work FROM.${CONFIG.colors.reset}`);
+    console.log(`${CONFIG.colors.dim}Which branch should I use as the starting point for your work?${CONFIG.colors.reset}`);
     
     // Get available branches
     const branches = this.getAvailableBranches();
@@ -1270,6 +1270,9 @@ export class SessionCoordinator {
     // Ask for base branch (where to start work from)
     const baseBranch = await this.promptForBaseBranch();
     
+    // Ask for auto-rebase interval
+    const rebaseInterval = await this.promptForRebaseInterval();
+    
     // Check for Docker configuration and ask about restart preference
     let dockerConfig = null;
     
@@ -1425,6 +1428,9 @@ export class SessionCoordinator {
       execSync(`git worktree add -b ${branchName} "${worktreePath}" ${baseRef}`, { stdio: 'pipe' });
       console.log(`${CONFIG.colors.green}✓${CONFIG.colors.reset} Worktree created at: ${worktreePath}`);
       
+      // Store base branch in session data for rebase logic
+      const sessionBaseBranch = baseRef === 'HEAD' ? await this.resolveHeadBranch() : baseRef;
+      
       // If we're in a submodule, set up the correct remote for the worktree
       if (isSubmodule && parentRemote) {
         console.log(`${CONFIG.colors.yellow}Configuring worktree to use parent repository remote...${CONFIG.colors.reset}`);
@@ -1446,11 +1452,13 @@ export class SessionCoordinator {
         task,
         worktreePath,
         branchName,
+        baseBranch: sessionBaseBranch,
         created: new Date().toISOString(),
         status: 'active',
         pid: process.pid,
         developerInitials: devInitials,
         mergeConfig: mergeConfig,
+        rebaseInterval: rebaseInterval,
         dockerConfig: dockerConfig
       };
       
@@ -1486,6 +1494,46 @@ export class SessionCoordinator {
       console.error(`${CONFIG.colors.red}Failed to create session: ${error.message}${CONFIG.colors.reset}`);
       process.exit(1);
     }
+  }
+
+  /**
+   * Prompt for auto-rebase interval
+   */
+  async promptForRebaseInterval() {
+    console.log(`\n${CONFIG.colors.yellow}═══ Auto-Rebase Configuration ═══${CONFIG.colors.reset}`);
+    console.log(`${CONFIG.colors.dim}I can automatically pull updates from the base branch to keep you up-to-date.${CONFIG.colors.reset}`);
+    console.log(`${CONFIG.colors.dim}This helps prevent conflicts later by rebasing your work periodically.${CONFIG.colors.reset}`);
+    
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+    
+    return new Promise((resolve) => {
+      rl.question(`\nHow often should I rebase? (in hours, 0 to disable) [0]: `, (answer) => {
+        rl.close();
+        const hours = parseFloat(answer.trim());
+        if (isNaN(hours) || hours <= 0) {
+            console.log(`${CONFIG.colors.dim}Auto-rebase disabled. I'll let you manage updates manually.${CONFIG.colors.reset}`);
+            resolve(0);
+        } else {
+            console.log(`${CONFIG.colors.green}✓ I'll check for updates and rebase every ${hours} hour(s).${CONFIG.colors.reset}`);
+            resolve(hours);
+        }
+      });
+    });
+  }
+
+  /**
+   * Resolve HEAD to actual branch name
+   */
+  async resolveHeadBranch() {
+      try {
+          const head = execSync('git rev-parse --abbrev-ref HEAD', { cwd: this.repoRoot, encoding: 'utf8' }).trim();
+          return head;
+      } catch (e) {
+          return 'main';
+      }
   }
 
   /**
@@ -1895,7 +1943,11 @@ The DevOps agent is monitoring this worktree for changes.
       AC_DATE_STYLE: process.env.AC_DATE_STYLE || 'dash',  // Preserve date style
       // Apply version configuration if set
       ...(projectSettings.versioningStrategy?.prefix && { AC_VERSION_PREFIX: projectSettings.versioningStrategy.prefix }),
-      ...(projectSettings.versioningStrategy?.startMinor && { AC_VERSION_START_MINOR: projectSettings.versioningStrategy.startMinor.toString() })
+      ...(projectSettings.versioningStrategy?.startMinor && { AC_VERSION_START_MINOR: projectSettings.versioningStrategy.startMinor.toString() }),
+      
+      // Rebase configuration
+      AC_REBASE_INTERVAL: (sessionData.rebaseInterval || 0).toString(),
+      AC_BASE_BRANCH: sessionData.baseBranch || 'HEAD' // We need to pass the base branch for rebasing
     };
     
     const agentScript = path.join(__dirname, 'cs-devops-agent-worker.js');

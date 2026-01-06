@@ -165,6 +165,10 @@ const FORCE_ROLLOVER  = (process.env.AC_FORCE_ROLLOVER  || "false").toLowerCase(
 const VERSION_PREFIX       = process.env.AC_VERSION_PREFIX || "v0.";
 const VERSION_START_MINOR  = Number(process.env.AC_VERSION_START_MINOR || "20");     // Start at v0.20 for micro-revisions
 const VERSION_BASE_REF     = process.env.AC_VERSION_BASE_REF || "origin/main";      // where new version branches start
+
+// Rebase configuration
+const REBASE_INTERVAL_HOURS = Number(process.env.AC_REBASE_INTERVAL || 0);
+const BASE_BRANCH           = process.env.AC_BASE_BRANCH || 'HEAD';
 // ------------------------------------------------
 
 const log  = (...a) => console.log("[cs-devops-agent]", ...a);
@@ -953,6 +957,109 @@ function detectInfrastructureChanges(changedFiles) {
   return detected;
 }
 
+// ============================================================================
+// AUTO-REBASE FUNCTIONALITY
+// ============================================================================
+
+/**
+ * Check if it's time to rebase and perform the operation
+ * @param {string} repoRoot - Repository root
+ * @returns {Promise<boolean>} - True if rebase occurred
+ */
+async function checkAndPerformRebase(repoRoot) {
+  if (REBASE_INTERVAL_HOURS <= 0) return false;
+  if (BASE_BRANCH === 'HEAD') return false; // Can't rebase from HEAD (relative)
+  
+  // Calculate interval in ms
+  const intervalMs = REBASE_INTERVAL_HOURS * 60 * 60 * 1000;
+  const now = Date.now();
+  
+  // Check if enough time has passed
+  if (!global.lastRebaseTime) global.lastRebaseTime = now; // Initialize on first run
+  if (now - global.lastRebaseTime < intervalMs) return false;
+  
+  // Don't rebase if we are busy
+  if (busy) return false;
+  
+  try {
+    busy = true;
+    
+    console.log('\n' + '━'.repeat(60));
+    console.log(`\x1b[33m⚠️  AUTO-REBASE IN PROGRESS - PAUSING AGENT...\x1b[0m`);
+    console.log(`Interval: ${REBASE_INTERVAL_HOURS} hours reached.`);
+    console.log(`Base: ${BASE_BRANCH}`);
+    console.log('━'.repeat(60) + '\n');
+    
+    // Check for uncommitted changes
+    const dirty = await hasUncommittedChanges();
+    let stashed = false;
+    
+    if (dirty) {
+      log('Stashing uncommitted changes before rebase...');
+      const stashRes = await run('git', ['stash', 'push', '-m', `Auto-stash before rebase ${new Date().toISOString()}`]);
+      if (stashRes.ok) stashed = true;
+      else {
+        console.error('\x1b[31m✗ Failed to stash changes. Aborting rebase.\x1b[0m');
+        busy = false;
+        return false;
+      }
+    }
+    
+    // Fetch latest
+    log(`Fetching latest changes from origin...`);
+    await run('git', ['fetch', 'origin', BASE_BRANCH]);
+    
+    // Rebase
+    log(`Rebasing onto origin/${BASE_BRANCH}...`);
+    const rebaseRes = await run('git', ['pull', '--rebase', 'origin', BASE_BRANCH]);
+    
+    if (rebaseRes.ok) {
+      console.log(`\x1b[32m✓ Rebase successful!\x1b[0m`);
+      
+      // Pop stash if needed
+      if (stashed) {
+        log('Restoring stashed changes...');
+        const popRes = await run('git', ['stash', 'pop']);
+        if (!popRes.ok) {
+          console.error('\x1b[31m⚠️  Conflict during stash pop. Manual intervention required.\x1b[0m');
+          console.log('\x1b[33mPlease resolve conflicts and continue.\x1b[0m');
+        } else {
+          console.log('\x1b[32m✓ Stash restored.\x1b[0m');
+        }
+      }
+      
+      global.lastRebaseTime = Date.now();
+    } else {
+      console.error(`\x1b[31m✗ REBASE CONFLICT DETECTED\x1b[0m`);
+      console.error(rebaseRes.stdout);
+      
+      // Abort rebase
+      log('Aborting rebase...');
+      await run('git', ['rebase', '--abort']);
+      
+      // Restore stash if we stashed
+      if (stashed) {
+        await run('git', ['stash', 'pop']);
+      }
+      
+      console.log('\x1b[33mRebase aborted. Please manually rebase your branch.\x1b[0m');
+      // Disable auto-rebase for this session to avoid loop?
+      // Or just wait for next interval.
+    }
+    
+    console.log(`\x1b[32m✓ RESUMING AGENT OPERATION\x1b[0m\n`);
+    return true;
+    
+  } catch (err) {
+    console.error(`Rebase error: ${err.message}`);
+    // Try to recover state
+    try { await run('git', ['rebase', '--abort']); } catch (e) {}
+    return false;
+  } finally {
+    busy = false;
+  }
+}
+
 /**
  * Update infrastructure documentation
  * @param {object} infraChanges - Infrastructure change details
@@ -1498,6 +1605,19 @@ console.log();
     else log("startup commit skipped; watching…");
   } else {
     log("watching…");
+  }
+
+  // Schedule auto-rebase if configured
+  if (REBASE_INTERVAL_HOURS > 0) {
+    log(`Auto-rebase scheduled every ${REBASE_INTERVAL_HOURS} hours (checking every 5m)`);
+    // Initial check (in case we started overdue)
+    // Don't await this so we don't block startup
+    checkAndPerformRebase(repoRoot).catch(err => console.error(err));
+    
+    // Periodic check
+    setInterval(async () => {
+      await checkAndPerformRebase(repoRoot);
+    }, 5 * 60 * 1000); // Check every 5 minutes
   }
 
   // ============================================================================
