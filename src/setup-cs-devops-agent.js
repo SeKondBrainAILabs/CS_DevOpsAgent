@@ -150,47 +150,51 @@ This structure is compatible with the DevOps Agent's automation tools.
 }
 
 function checkContractsExist(projectRoot) {
-  // Check for contracts in multiple potential locations
-  const locations = [
-    path.join(projectRoot, 'House_Rules_Contracts'),
-    path.join(projectRoot, 'docs', 'contracts'),
-    path.join(projectRoot, 'documentation', 'contracts')
-  ];
+  // Search recursively for contract folders
+  try {
+    // Find all directories named 'House_Rules_Contracts' or 'contracts'
+    // Ignoring node_modules and .git
+    const findCommand = `find "${projectRoot}" -type d \\( -name "House_Rules_Contracts" -o -name "contracts" \\) -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/local_deploy/*"`;
+    
+    const output = execSync(findCommand, { encoding: 'utf8' }).trim();
+    const locations = output.split('\n').filter(Boolean);
 
-  let contractsDir = null;
-  for (const loc of locations) {
-    if (fs.existsSync(loc)) {
-      contractsDir = loc;
-      break;
+    let contractsDir = null;
+    if (locations.length > 0) {
+      // Prefer House_Rules_Contracts if available
+      contractsDir = locations.find(l => l.endsWith('House_Rules_Contracts')) || locations[0];
+      log.info(`Found contracts directory at: ${contractsDir}`);
     }
-  }
 
-  if (!contractsDir) return false;
-  
-  const requiredContracts = [
-    'FEATURES_CONTRACT.md',
-    'API_CONTRACT.md',
-    'DATABASE_SCHEMA_CONTRACT.md',
-    'SQL_CONTRACT.json',
-    'THIRD_PARTY_INTEGRATIONS.md',
-    'INFRA_CONTRACT.md'
-  ];
-  
-  // Check if we have multiple similar contracts that might need merging
-  // This is a simplified check - in reality, we'd scan recursively
-  const files = fs.readdirSync(contractsDir);
-  const potentialDuplicates = files.filter(f => 
-    (f.includes('FEATURE') && f !== 'FEATURES_CONTRACT.md') ||
-    (f.includes('API') && f !== 'API_CONTRACT.md')
-  );
+    if (!contractsDir) return false;
+    
+    const requiredContracts = [
+      'FEATURES_CONTRACT.md',
+      'API_CONTRACT.md',
+      'DATABASE_SCHEMA_CONTRACT.md',
+      'SQL_CONTRACT.json',
+      'THIRD_PARTY_INTEGRATIONS.md',
+      'INFRA_CONTRACT.md'
+    ];
+    
+    // Check if we have multiple similar contracts that might need merging
+    const files = fs.readdirSync(contractsDir);
+    const potentialDuplicates = files.filter(f => 
+      (f.includes('FEATURE') && f !== 'FEATURES_CONTRACT.md') ||
+      (f.includes('API') && f !== 'API_CONTRACT.md')
+    );
 
-  if (potentialDuplicates.length > 0) {
-    log.info(`Found potential split contract files in ${contractsDir}:`);
-    potentialDuplicates.forEach(f => console.log(` - ${f}`));
-    console.log('You may want to merge these into single contract files per type.');
+    if (potentialDuplicates.length > 0) {
+      log.info(`Found potential split contract files in ${contractsDir}:`);
+      potentialDuplicates.forEach(f => console.log(` - ${f}`));
+      console.log('You may want to merge these into single contract files per type.');
+    }
+    
+    return requiredContracts.every(file => fs.existsSync(path.join(contractsDir, file)));
+  } catch (error) {
+    log.warn(`Error searching for contracts: ${error.message}`);
+    return false;
   }
-  
-  return requiredContracts.every(file => fs.existsSync(path.join(contractsDir, file)));
 }
 
 async function generateContracts(projectRoot) {
