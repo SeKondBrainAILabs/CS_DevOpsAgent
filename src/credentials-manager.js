@@ -3,11 +3,15 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
+import os from 'os';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const rootDir = path.join(__dirname, '..');
 
-const CREDENTIALS_PATH = process.env.DEVOPS_CREDENTIALS_PATH || path.join(rootDir, 'local_deploy', 'credentials.json');
+// Use home directory for persistent storage across package updates
+const HOME_DIR = os.homedir();
+const CONFIG_DIR = path.join(HOME_DIR, '.devops-agent');
+const CREDENTIALS_PATH = process.env.DEVOPS_CREDENTIALS_PATH || path.join(CONFIG_DIR, 'credentials.json');
 
 // Simple obfuscation to prevent casual shoulder surfing
 // NOTE: This is NOT strong encryption. In a production environment with sensitive keys,
@@ -38,15 +42,33 @@ export class CredentialsManager {
         console.error('Failed to load credentials:', error.message);
         this.credentials = {};
       }
+    } else {
+        // Migration: Check for old local_deploy location
+        const oldPath = path.join(__dirname, '..', 'local_deploy', 'credentials.json');
+        if (fs.existsSync(oldPath)) {
+            try {
+                const rawData = fs.readFileSync(oldPath, 'utf8');
+                const data = JSON.parse(rawData);
+                 // Deobfuscate sensitive values
+                if (data.groqApiKey) {
+                    data.groqApiKey = deobfuscate(data.groqApiKey);
+                }
+                this.credentials = data;
+                // Save to new location immediately
+                this.save();
+            } catch (e) {
+                // Ignore migration errors
+            }
+        }
     }
   }
 
   save() {
     try {
-      // Ensure local_deploy exists
-      const localDeployDir = path.dirname(CREDENTIALS_PATH);
-      if (!fs.existsSync(localDeployDir)) {
-        fs.mkdirSync(localDeployDir, { recursive: true });
+      // Ensure config dir exists
+      const configDir = path.dirname(CREDENTIALS_PATH);
+      if (!fs.existsSync(configDir)) {
+        fs.mkdirSync(configDir, { recursive: true });
       }
 
       // Clone and obfuscate

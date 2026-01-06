@@ -5,7 +5,17 @@ All notable changes to s9n-devops-agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.11-dev.0] - 2025-12-11
+## [2.0.18-dev.3] - 2026-01-06
+
+### Added
+- **Base Branch Selection**: When starting a session, you can now choose which branch to base your work on (rebase from), instead of defaulting to HEAD.
+- **Recursive Contract Search**: Setup now finds contract files across the entire repository (not just in root) and offers to merge duplicates into `House_Rules_Contracts`.
+- **Versioning Setup in Wizard**: The setup wizard (`npm run setup`) now explicitly checks and helps configure the project versioning strategy if missing.
+- **Credentials Persistence**: Moved credentials storage to `~/.devops-agent/credentials.json` to persist API keys across package updates.
+
+### Fixed
+- **Update Checker**: Fixed update check to correctly handle development versions (dev tags) and prevent suggesting downgrades to stable when on a dev build.
+- **Setup Flow**: Improved flow to ensure all critical configurations (versioning, API keys) are addressed.
 
 ### 🐛 Fixed
 - 🔧 **Bin Path**: Fixed incorrect `bin` path in `package.json` (removed leading `./`) to ensure executable works correctly when installed

@@ -28,6 +28,7 @@ import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { credentialsManager } from './credentials-manager.js';
+import { SessionCoordinator } from './session-coordinator.js';
 import {
   colors,
   status,
@@ -149,25 +150,9 @@ This structure is compatible with the DevOps Agent's automation tools.
   return missingFolders;
 }
 
-function checkContractsExist(projectRoot) {
-  // Search recursively for contract folders
+async function checkContractsExist(projectRoot) {
+  // Search recursively for contract folders and files
   try {
-    // Find all directories named 'House_Rules_Contracts' or 'contracts'
-    // Ignoring node_modules and .git
-    const findCommand = `find "${projectRoot}" -type d \\( -name "House_Rules_Contracts" -o -name "contracts" \\) -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/local_deploy/*"`;
-    
-    const output = execSync(findCommand, { encoding: 'utf8' }).trim();
-    const locations = output.split('\n').filter(Boolean);
-
-    let contractsDir = null;
-    if (locations.length > 0) {
-      // Prefer House_Rules_Contracts if available
-      contractsDir = locations.find(l => l.endsWith('House_Rules_Contracts')) || locations[0];
-      log.info(`Found contracts directory at: ${contractsDir}`);
-    }
-
-    if (!contractsDir) return false;
-    
     const requiredContracts = [
       'FEATURES_CONTRACT.md',
       'API_CONTRACT.md',
@@ -176,21 +161,122 @@ function checkContractsExist(projectRoot) {
       'THIRD_PARTY_INTEGRATIONS.md',
       'INFRA_CONTRACT.md'
     ];
-    
-    // Check if we have multiple similar contracts that might need merging
-    const files = fs.readdirSync(contractsDir);
-    const potentialDuplicates = files.filter(f => 
-      (f.includes('FEATURE') && f !== 'FEATURES_CONTRACT.md') ||
-      (f.includes('API') && f !== 'API_CONTRACT.md')
-    );
 
-    if (potentialDuplicates.length > 0) {
-      log.info(`Found potential split contract files in ${contractsDir}:`);
-      potentialDuplicates.forEach(f => console.log(` - ${f}`));
-      console.log('You may want to merge these into single contract files per type.');
+    // Map to hold found files for each type
+    const contractMap = {};
+    requiredContracts.forEach(c => contractMap[c] = []);
+
+    // Find all files that look like contracts
+    // We look for files containing "CONTRACT" in the name, excluding typical ignores
+    const findCommand = `find "${projectRoot}" -type f \\( -name "*CONTRACT*.md" -o -name "*CONTRACT*.json" \\) -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/local_deploy/*"`;
+    
+    let files = [];
+    try {
+        const output = execSync(findCommand, { encoding: 'utf8' }).trim();
+        files = output.split('\n').filter(Boolean);
+    } catch (e) {
+        // find might fail if no matches or other issues, just treat as empty
+    }
+
+    // Categorize found files
+    for (const file of files) {
+        const basename = path.basename(file).toUpperCase();
+        
+        // Skip files in the target directory itself (House_Rules_Contracts) to avoid self-merging if we run this multiple times
+        // actually we SHOULD include them to see if we have them, but valid if we are merging duplicates from elsewhere
+        
+        let matched = false;
+        
+        if (basename.includes('FEATURE')) contractMap['FEATURES_CONTRACT.md'].push(file);
+        else if (basename.includes('API')) contractMap['API_CONTRACT.md'].push(file);
+        else if (basename.includes('DATABASE') || basename.includes('SCHEMA')) contractMap['DATABASE_SCHEMA_CONTRACT.md'].push(file);
+        else if (basename.includes('SQL')) contractMap['SQL_CONTRACT.json'].push(file);
+        else if (basename.includes('INFRA')) contractMap['INFRA_CONTRACT.md'].push(file);
+        else if (basename.includes('THIRD') || basename.includes('INTEGRATION')) contractMap['THIRD_PARTY_INTEGRATIONS.md'].push(file);
+        else {
+             // Fallback or ignore
+        }
+    }
+
+    const targetDir = path.join(projectRoot, 'House_Rules_Contracts');
+    let hasChanges = false;
+
+    // Process each contract type
+    for (const [type, foundFiles] of Object.entries(contractMap)) {
+        // Filter out unique paths (resolve them)
+        const uniqueFiles = [...new Set(foundFiles.map(f => path.resolve(f)))];
+        
+        if (uniqueFiles.length > 1) {
+             console.log();
+             log.info(`Found multiple files for contract type: ${colors.cyan}${type}${colors.reset}`);
+             uniqueFiles.forEach(f => console.log(` - ${path.relative(projectRoot, f)}`));
+             
+             const shouldMerge = await confirm(`Do you want to merge these into House_Rules_Contracts/${type}?`, true);
+             
+             if (shouldMerge) {
+                 ensureDirectoryExists(targetDir);
+                 const targetPath = path.join(targetDir, type);
+                 
+                 let mergedContent = '';
+                 // Handle JSON vs MD
+                 if (type.endsWith('.json')) {
+                     // For JSON, we try to merge arrays/objects or just list them
+                     const mergedJson = [];
+                     for (const file of uniqueFiles) {
+                         try {
+                             const content = JSON.parse(fs.readFileSync(file, 'utf8'));
+                             mergedJson.push({ source: path.relative(projectRoot, file), content });
+                         } catch (e) {
+                             log.warn(`Skipping invalid JSON in ${path.basename(file)}`);
+                         }
+                     }
+                     mergedContent = JSON.stringify(mergedJson, null, 2);
+                 } else {
+                     // Markdown
+                     mergedContent = `# Merged ${type}\n\nGenerated on ${new Date().toISOString()}\n\n`;
+                     for (const file of uniqueFiles) {
+                         const content = fs.readFileSync(file, 'utf8');
+                         mergedContent += `\n<!-- SOURCE: ${path.relative(projectRoot, file)} -->\n`;
+                         mergedContent += `## Source: ${path.basename(file)}\n(Path: ${path.relative(projectRoot, file)})\n\n`;
+                         mergedContent += `${content}\n\n---\n`;
+                     }
+                 }
+                 
+                 fs.writeFileSync(targetPath, mergedContent);
+                 log.success(`Merged contracts into ${path.relative(projectRoot, targetPath)}`);
+                 hasChanges = true;
+             }
+        } else if (uniqueFiles.length === 1) {
+            // If single file exists but is NOT in House_Rules_Contracts, ask to move/copy
+            const file = uniqueFiles[0];
+            const targetPath = path.join(targetDir, type);
+            
+            if (file !== path.resolve(targetPath)) {
+                console.log();
+                log.info(`Found ${type} at: ${path.relative(projectRoot, file)}`);
+                const shouldCopy = await confirm(`Copy this to central House_Rules_Contracts/${type}?`, true);
+                if (shouldCopy) {
+                    ensureDirectoryExists(targetDir);
+                    fs.copyFileSync(file, targetPath);
+                    log.success(`Copied to ${path.relative(projectRoot, targetPath)}`);
+                    hasChanges = true;
+                }
+            }
+        }
+    }
+
+    // Final check: Do we have all required contracts in the target directory?
+    const missing = requiredContracts.filter(file => !fs.existsSync(path.join(targetDir, file)));
+    
+    if (missing.length === 0) {
+        if (hasChanges) log.success('Contract files consolidated successfully.');
+        return true;
     }
     
-    return requiredContracts.every(file => fs.existsSync(path.join(contractsDir, file)));
+    // If we are missing some, but have others, we still return false so generateContracts can run for the missing ones?
+    // Or we return false and generateContracts will run.
+    return false;
+    
   } catch (error) {
     log.warn(`Error searching for contracts: ${error.message}`);
     return false;
@@ -866,30 +952,50 @@ async function setupEnvFile(projectRoot) {
     log.info('Creating .env file');
   }
   
-  // Check for OPENAI_API_KEY
+  // Check if OPENAI_API_KEY is already present in memory (from credentials.json)
+  const existingKey = credentialsManager.getGroqApiKey();
+  
+  // Check for OPENAI_API_KEY in .env content
   if (!envContent.includes('OPENAI_API_KEY=')) {
-    console.log();
-    explain(`
+    if (existingKey) {
+      log.info('Found existing Groq API Key in credentials store.');
+      const newLine = envContent.endsWith('\n') || envContent === '' ? '' : '\n';
+      envContent += `${newLine}# Groq API Key for Contract Automation\nOPENAI_API_KEY=${existingKey}\n`;
+      fs.writeFileSync(envPath, envContent);
+      log.success('Restored OPENAI_API_KEY to .env');
+    } else {
+      console.log();
+      explain(`
 ${colors.bright}Groq API Key Setup${colors.reset}
 The contract automation features use Groq LLM (via OpenAI compatibility).
 You can enter your API key now, or set it later in the .env file.
-    `);
-    
-    const apiKey = await prompt('Enter Groq API Key (leave empty to skip)');
-    
-    if (apiKey) {
-      const newLine = envContent.endsWith('\n') || envContent === '' ? '' : '\n';
-      envContent += `${newLine}# Groq API Key for Contract Automation\nOPENAI_API_KEY=${apiKey}\n`;
-      fs.writeFileSync(envPath, envContent);
-      log.success('Added OPENAI_API_KEY to .env');
-    } else {
-      log.warn('Skipped Groq API Key. Contract automation features may not work.');
-      if (!fs.existsSync(envPath)) {
-        fs.writeFileSync(envPath, '# Environment Variables\n');
+      `);
+      
+      const apiKey = await prompt('Enter Groq API Key (leave empty to skip)');
+      
+      if (apiKey) {
+        const newLine = envContent.endsWith('\n') || envContent === '' ? '' : '\n';
+        envContent += `${newLine}# Groq API Key for Contract Automation\nOPENAI_API_KEY=${apiKey}\n`;
+        fs.writeFileSync(envPath, envContent);
+        
+        // Also save to credentials manager for persistence across updates
+        credentialsManager.setGroqApiKey(apiKey);
+        
+        log.success('Added OPENAI_API_KEY to .env');
+      } else {
+        log.warn('Skipped Groq API Key. Contract automation features may not work.');
+        if (!fs.existsSync(envPath)) {
+          fs.writeFileSync(envPath, '# Environment Variables\n');
+        }
       }
     }
   } else {
     log.info('OPENAI_API_KEY is already configured in .env');
+    // Ensure it's backed up in credentials manager if it exists in .env
+    const match = envContent.match(/OPENAI_API_KEY=(.+)/);
+    if (match && match[1] && !existingKey) {
+        credentialsManager.setGroqApiKey(match[1].trim());
+    }
   }
 }
 
@@ -1125,7 +1231,7 @@ ${colors.bright}Security:${colors.reset} Stored locally in ${colors.yellow}local
     }
 
     // Check for contracts
-    if (!checkContractsExist(projectRoot)) {
+    if (!(await checkContractsExist(projectRoot))) {
       log.header();
       log.title('📜 Contract Files Missing');
       
@@ -1161,6 +1267,34 @@ We can scan your codebase and generate them now.
             fs.writeFileSync(envPath, '# Environment Variables\n');
             log.success('Created .env file');
         }
+    }
+
+    // Initialize SessionCoordinator for versioning setup
+    const coordinator = new SessionCoordinator();
+    
+    // Check/Setup versioning strategy
+    if (!skipPrompts) {
+        const settings = coordinator.loadProjectSettings();
+        if (!settings.versioningStrategy?.configured) {
+             log.header();
+             log.title('📅 Project Versioning Strategy');
+             await coordinator.ensureProjectSetup();
+        } else {
+             // Optional reconfigure
+             log.info('Versioning strategy is already configured.');
+             const reconfigure = await confirm('Do you want to reconfigure versioning?', false);
+             if (reconfigure) {
+                 await coordinator.ensureProjectSetup({ force: true });
+             }
+        }
+    } else {
+         // In non-interactive mode, we only ensure if missing (and hope it doesn't block or has defaults)
+         // Actually promptForStartingVersion is interactive-only, so we skip if missing in non-interactive
+         // or we could force defaults. For now, we skip to avoid hanging.
+         const settings = coordinator.loadProjectSettings();
+         if (!settings.versioningStrategy?.configured) {
+             log.warn('Skipping versioning setup (interactive-only). Run setup without --yes to configure.');
+         }
     }
     
     // Clean up DevOpsAgent files to avoid duplicates

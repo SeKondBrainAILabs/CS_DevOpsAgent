@@ -165,22 +165,42 @@ export class SessionCoordinator {
       // Show checking message
       console.log(`${CONFIG.colors.dim}🔍 Checking for DevOps Agent updates...${CONFIG.colors.reset}`);
       
-      // Check npm for latest version
-      const result = execSync('npm view s9n-devops-agent version', {
+      // Check npm for dist-tags
+      const distTags = JSON.parse(execSync('npm view s9n-devops-agent dist-tags --json', {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: 5000
-      }).trim();
+      }).trim());
+      
+      const latest = distTags.latest;
+      const dev = distTags.dev;
       
       // Update last check time
       globalSettings.lastUpdateCheck = now;
       this.saveGlobalSettings(globalSettings);
       
-      // Compare versions
-      if (result && this.compareVersions(result, this.currentVersion) > 0) {
+      // Determine which version to compare against
+      // If current is a dev version, we check dev tag as well
+      const isDev = this.currentVersion.includes('dev') || this.currentVersion.includes('-');
+      
+      let updateAvailable = false;
+      let targetVersion = latest;
+      let updateTag = 'latest';
+      
+      if (isDev && dev && this.compareVersions(dev, this.currentVersion) > 0) {
+          updateAvailable = true;
+          targetVersion = dev;
+          updateTag = 'dev';
+      } else if (this.compareVersions(latest, this.currentVersion) > 0) {
+          updateAvailable = true;
+          targetVersion = latest;
+          updateTag = 'latest';
+      }
+      
+      if (updateAvailable) {
         console.log(`\n${CONFIG.colors.yellow}▲ Update Available!${CONFIG.colors.reset}`);
         console.log(`${CONFIG.colors.dim}Current version: ${this.currentVersion}${CONFIG.colors.reset}`);
-        console.log(`${CONFIG.colors.bright}Latest version:  ${result}${CONFIG.colors.reset}`);
+        console.log(`${CONFIG.colors.bright}New version:     ${targetVersion} (${updateTag})${CONFIG.colors.reset}`);
         console.log();
         
         // Ask if user wants to update now
@@ -199,7 +219,7 @@ export class SessionCoordinator {
         if (updateNow) {
           console.log(`\n${CONFIG.colors.blue}Updating s9n-devops-agent...${CONFIG.colors.reset}`);
           try {
-            execSync('npm install -g s9n-devops-agent@latest', {
+            execSync(`npm install -g s9n-devops-agent@${updateTag}`, {
               stdio: 'inherit',
               cwd: process.cwd()
             });
@@ -207,10 +227,10 @@ export class SessionCoordinator {
             process.exit(0);
           } catch (err) {
             console.log(`\n${CONFIG.colors.red}✗ Update failed: ${err.message}${CONFIG.colors.reset}`);
-            console.log(`${CONFIG.colors.dim}You can manually update with: npm install -g s9n-devops-agent@latest${CONFIG.colors.reset}`);
+            console.log(`${CONFIG.colors.dim}You can manually update with: npm install -g s9n-devops-agent@${updateTag}${CONFIG.colors.reset}`);
           }
         } else {
-          console.log(`${CONFIG.colors.dim}You can update later with: npm install -g s9n-devops-agent@latest${CONFIG.colors.reset}`);
+          console.log(`${CONFIG.colors.dim}You can update later with: npm install -g s9n-devops-agent@${updateTag}${CONFIG.colors.reset}`);
         }
         console.log();
       } else {
@@ -224,19 +244,22 @@ export class SessionCoordinator {
   }
   
   /**
-   * Compare semantic versions
+   * Compare semantic versions (robust to suffixes)
    * Returns: 1 if v1 > v2, -1 if v1 < v2, 0 if equal
    */
   compareVersions(v1, v2) {
-    const parts1 = v1.split('.').map(Number);
-    const parts2 = v2.split('.').map(Number);
+    if (!v1 || !v2) return 0;
     
-    for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
-      const p1 = parts1[i] || 0;
-      const p2 = parts2[i] || 0;
+    const normalize = v => v.replace(/^v/, '').split('.').map(p => parseInt(p, 10));
+    const p1 = normalize(v1);
+    const p2 = normalize(v2);
+    
+    for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
+      const n1 = isNaN(p1[i]) ? 0 : p1[i];
+      const n2 = isNaN(p2[i]) ? 0 : p2[i];
       
-      if (p1 > p2) return 1;
-      if (p1 < p2) return -1;
+      if (n1 > n2) return 1;
+      if (n1 < n2) return -1;
     }
     
     return 0;
@@ -427,13 +450,18 @@ export class SessionCoordinator {
   /**
    * Ensure project-specific version settings are configured
    */
-  async ensureProjectSetup() {
+  async ensureProjectSetup(options = {}) {
     const projectSettings = this.loadProjectSettings();
     
     // Check if project setup is needed (version strategy)
-    if (!projectSettings.versioningStrategy || !projectSettings.versioningStrategy.configured) {
-      console.log(`\n${CONFIG.colors.yellow}First-time project setup for this repository!${CONFIG.colors.reset}`);
-      console.log(`${CONFIG.colors.dim}Let's configure the versioning strategy for this project${CONFIG.colors.reset}`);
+    if (options.force || !projectSettings.versioningStrategy || !projectSettings.versioningStrategy.configured) {
+      console.log(`\n${CONFIG.colors.yellow}Project Versioning Setup${CONFIG.colors.reset}`);
+      if (options.force) {
+          console.log(`${CONFIG.colors.dim}Reconfiguring version strategy...${CONFIG.colors.reset}`);
+      } else {
+          console.log(`${CONFIG.colors.yellow}First-time project setup for this repository!${CONFIG.colors.reset}`);
+          console.log(`${CONFIG.colors.dim}Let's configure the versioning strategy for this project${CONFIG.colors.reset}`);
+      }
       
       const versionInfo = await this.promptForStartingVersion();
       projectSettings.versioningStrategy = {
@@ -795,6 +823,73 @@ export class SessionCoordinator {
     }
     
     return config;
+  }
+
+  /**
+   * Prompt for base branch (source)
+   */
+  async promptForBaseBranch() {
+    console.log(`\n${CONFIG.colors.yellow}═══ Base Branch Selection ═══${CONFIG.colors.reset}`);
+    console.log(`${CONFIG.colors.dim}Select the branch you want to start your work FROM.${CONFIG.colors.reset}`);
+    
+    // Get available branches
+    const branches = this.getAvailableBranches();
+    // Prioritize main/develop/master
+    const priorityBranches = ['main', 'master', 'develop', 'development'];
+    
+    const sortedBranches = branches.sort((a, b) => {
+        const aP = priorityBranches.indexOf(a);
+        const bP = priorityBranches.indexOf(b);
+        if (aP !== -1 && bP !== -1) return aP - bP;
+        if (aP !== -1) return -1;
+        if (bP !== -1) return 1;
+        return a.localeCompare(b);
+    });
+    
+    const uniqueBranches = [...new Set(sortedBranches)].slice(0, 10);
+    
+    console.log();
+    uniqueBranches.forEach((branch, index) => {
+      const isPriority = priorityBranches.includes(branch);
+      const marker = isPriority ? ` ${CONFIG.colors.green}⭐${CONFIG.colors.reset}` : '';
+      console.log(`  ${index + 1}) ${branch}${marker}`);
+    });
+    console.log(`  0) Enter a different branch name`);
+    console.log(`  Hit Enter for default (HEAD)`);
+    
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+    
+    return new Promise((resolve) => {
+      rl.question(`\nSelect base branch (1-${uniqueBranches.length}, 0, or Enter): `, (answer) => {
+        rl.close();
+        const choice = answer.trim();
+        
+        if (choice === '') {
+             resolve('HEAD');
+             return;
+        }
+        
+        const num = parseInt(choice);
+        
+        if (num === 0) {
+           const rl2 = readline.createInterface({
+               input: process.stdin,
+               output: process.stdout
+           });
+           rl2.question('Enter custom branch name: ', (custom) => {
+               rl2.close();
+               resolve(custom.trim() || 'HEAD');
+           });
+        } else if (num >= 1 && num <= uniqueBranches.length) {
+            resolve(uniqueBranches[num - 1]);
+        } else {
+            resolve('HEAD');
+        }
+      });
+    });
   }
 
   /**
@@ -1172,6 +1267,9 @@ export class SessionCoordinator {
     // Ask for auto-merge configuration
     const mergeConfig = await this.promptForMergeConfig();
     
+    // Ask for base branch (where to start work from)
+    const baseBranch = await this.promptForBaseBranch();
+    
     // Check for Docker configuration and ask about restart preference
     let dockerConfig = null;
     
@@ -1321,7 +1419,10 @@ export class SessionCoordinator {
       
       // Create worktree
       console.log(`\n${CONFIG.colors.yellow}Creating worktree...${CONFIG.colors.reset}`);
-      execSync(`git worktree add -b ${branchName} "${worktreePath}" HEAD`, { stdio: 'pipe' });
+      const baseRef = baseBranch || 'HEAD';
+      console.log(`${CONFIG.colors.dim}Branching off: ${baseRef}${CONFIG.colors.reset}`);
+      
+      execSync(`git worktree add -b ${branchName} "${worktreePath}" ${baseRef}`, { stdio: 'pipe' });
       console.log(`${CONFIG.colors.green}✓${CONFIG.colors.reset} Worktree created at: ${worktreePath}`);
       
       // If we're in a submodule, set up the correct remote for the worktree

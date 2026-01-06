@@ -1,3 +1,18 @@
+# Release Notes - s9n-devops-agent v2.0.18-dev.3
+
+## 🚀 Enhancements
+- **Base Branch Selection**: You can now select a base branch (e.g., main, develop) when starting a session, allowing for cleaner feature branching from stable points.
+- **Enhanced Setup Wizard**: 
+  - Finds and merges contract files from subdirectories.
+  - Ensures versioning strategy is configured.
+  - Persists credentials in user home directory to survive package updates.
+
+## 🐛 Fixes
+- **Update Logic**: Fixed update checker to respect dev versions.
+- **Credentials**: Fixed issue where API keys were lost during updates.
+
+---
+
 # Release Notes - s9n-devops-agent v2.0.11-dev.0
 
 ## 🐛 Fixed
