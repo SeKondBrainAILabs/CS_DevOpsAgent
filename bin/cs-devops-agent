@@ -54,21 +54,11 @@ function runShellScript(scriptPath, scriptArgs = []) {
 switch(command) {
   case 'start':
   case 'session':
-    // Start interactive session manager
-    // On Windows, always use Node.js coordinator (bash may not be available)
-    if (process.platform === 'win32') {
-      console.log('Starting DevOps Agent session manager...\n');
-      runScript(join(rootDir, 'src', 'session-coordinator.js'), ['start', ...args.slice(1)]);
-    } else {
-      // Unix/Mac: use bash script
-      const sessionScript = join(rootDir, 'start-devops-session.sh');
-      if (fs.existsSync(sessionScript)) {
-        runShellScript(sessionScript, args.slice(1));
-      } else {
-        console.error('Session script not found. Please ensure the package is properly installed.');
-        process.exit(1);
-      }
-    }
+  case 'chat':
+    // Unified entry point: Run Kora (Smart Assistant)
+    // Kora handles session creation and management conversationally
+    console.log('Starting Kora (Smart DevOps Assistant)...');
+    runScript(join(rootDir, 'src', 'agent-chat.js'), args.slice(1));
     break;
     
   case 'worker':
@@ -118,7 +108,7 @@ switch(command) {
     break;
     
   case 'chat':
-    // Run the chat agent
+    // Run the chat agent (kept for backward compatibility, now same as start)
     runScript(join(rootDir, 'src', 'agent-chat.js'), args.slice(1));
     break;
 
@@ -207,11 +197,12 @@ For more information, visit: https://github.com/SecondBrainAICo/CS_DevOpsAgent
     break;
 
   default:
-    // Default to chat if no command provided, or if unknown command
-    // This replaces the prior UX where help was default
+    // Default to Kora (Smart Assistant) if no command provided
+    // This provides the unified experience
     if (!command || !command.startsWith('-')) {
-      console.log('Starting Kora Smart Assistant...');
-      runScript(join(rootDir, 'src', 'agent-chat.js'), args.slice(1));
+      console.log('Starting Kora (Smart DevOps Assistant)...');
+      // Pass all args to agent-chat
+      runScript(join(rootDir, 'src', 'agent-chat.js'), args);
     } else {
       // Show help for flags like -h, --help, or unknown flags
       console.log(`\nCS_DevOpsAgent - Intelligent Git Automation System`);

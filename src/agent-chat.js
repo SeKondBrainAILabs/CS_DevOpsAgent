@@ -107,7 +107,24 @@ class SmartAssistant {
       }
     ];
 
-    this.systemPrompt = `You are Kora, the Smart DevOps Assistant. 
+    // Load skills definition
+    let skillsDef = null;
+    try {
+      const skillsPath = path.join(__dirname, 'kora-skills.json');
+      if (fs.existsSync(skillsPath)) {
+        skillsDef = JSON.parse(fs.readFileSync(skillsPath, 'utf8'));
+      }
+    } catch (e) {
+      // Fallback if file missing or invalid
+      console.error('Warning: Could not load kora-skills.json, using defaults.');
+    }
+
+    if (skillsDef) {
+        // Build dynamic system prompt from skills definition
+        const allowedTopics = skillsDef.guardrails.allowed_topics.map(t => `- ${t}`).join('\n');
+        const disallowedTopics = skillsDef.guardrails.disallowed_topics.map(t => `- ${t}`).join('\n');
+        
+        this.systemPrompt = `You are ${skillsDef.assistant_name}, the ${skillsDef.role}.
 Your goal is to help developers follow the House Rules and Contract System while being helpful and efficient.
 
 CONTEXT:
@@ -116,7 +133,49 @@ CONTEXT:
 - Users need to create "Sessions" to do work.
 - You can execute tools to help the user.
 
-STYLE:
+CAPABILITIES (ALLOWED):
+${allowedTopics}
+
+GUARDRAILS (STRICTLY PROHIBITED):
+${disallowedTopics}
+
+AVAILABLE TOOLS:
+1. get_house_rules_summary - Read the project's rules.
+2. list_contracts - Check what contract files exist.
+3. check_session_status - See active work sessions.
+4. start_session - Begin a new task.
+
+IMPORTANT INSTRUCTIONS:
+- ONLY use the tools listed above. Do NOT invent new tools like "check_compliance" or "run_tests".
+- If the user asks for something OUTSIDE your capabilities, you MUST reply with exactly this message:
+  "${skillsDef.guardrails.fallback_response}"
+- Be concise but helpful.
+- Identify yourself as "${skillsDef.assistant_name}".
+- If the user asks about starting a task, ask for a clear task name if not provided.
+- If the user asks about rules, summarize them from the actual files.
+- Always prefer "Structured" organization for new code.
+
+When you want to perform an action, use the available tools.`;
+    } else {
+        // Fallback static prompt
+        this.systemPrompt = `You are Kora, the Smart DevOps Assistant. 
+Your goal is to help developers follow the House Rules and Contract System while being helpful and efficient.
+
+CONTEXT:
+- You are running inside a "DevOps Agent" environment.
+- The project follows a strict "Contract System" (API, DB, Features, etc.).
+- Users need to create "Sessions" to do work.
+- You can execute tools to help the user.
+
+AVAILABLE TOOLS:
+1. get_house_rules_summary - Read the project's rules.
+2. list_contracts - Check what contract files exist.
+3. check_session_status - See active work sessions.
+4. start_session - Begin a new task.
+
+IMPORTANT INSTRUCTIONS:
+- ONLY use the tools listed above. Do NOT invent new tools like "check_compliance" or "run_tests".
+- If a user asks for something you can't do with a tool (like running tests), tell them you can't do it yet but they can run "npm test" themselves.
 - Be concise but helpful.
 - Identify yourself as "Kora".
 - If the user asks about starting a task, ask for a clear task name if not provided.
@@ -124,6 +183,7 @@ STYLE:
 - Always prefer "Structured" organization for new code.
 
 When you want to perform an action, use the available tools.`;
+    }
   }
 
   /**
@@ -183,6 +243,18 @@ When you want to perform an action, use the available tools.`;
     console.log('='.repeat(60));
     console.log(`\n${CONFIG.colors.cyan}Hi! I'm Kora. How can I help you today?${CONFIG.colors.reset}`);
     console.log(`${CONFIG.colors.dim}(Try: "Start a new task for login", "Explain house rules", "Check contracts")${CONFIG.colors.reset}\n`);
+
+    // Check for command line arguments
+    const args = process.argv.slice(2);
+    const taskIndex = args.indexOf('--task') !== -1 ? args.indexOf('--task') : args.indexOf('-t');
+    
+    if (taskIndex !== -1 && args[taskIndex + 1]) {
+      const taskName = args[taskIndex + 1];
+      console.log(`\\n${CONFIG.colors.cyan}Auto-starting session for task: ${taskName}${CONFIG.colors.reset}\\n`);
+      await this.startSession({ taskName });
+      return; // Exit after session? Or continue chat? Usually session start spawns child and returns.
+      // startSession re-initializes readline after child exit, so we can continue chat.
+    }
 
     this.startReadline();
   }
@@ -451,11 +523,13 @@ When you want to perform an action, use the available tools.`;
 
     // We need to run the session coordinator interactively
     // We'll use the 'create-and-start' command to jump straight to the task
+    // Pass --skip-setup to avoid redundant house rules prompts since Kora is handling context
+    // Pass --skip-update to avoid killing the child process on update check
     const scriptPath = path.join(__dirname, 'session-coordinator.js');
     
     return new Promise((resolve, reject) => {
       // Use 'inherit' for stdio to allow interactive input/output
-      const child = spawn('node', [scriptPath, 'create-and-start', '--task', taskName], {
+      const child = spawn('node', [scriptPath, 'create-and-start', '--task', taskName, '--skip-setup', '--skip-update'], {
         stdio: 'inherit',
         cwd: this.repoRoot
       });

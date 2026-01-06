@@ -152,7 +152,9 @@ export class SessionCoordinator {
   /**
    * Check for newer version on npm registry
    */
-  async checkForUpdates() {
+  async checkForUpdates(skip = false) {
+    if (skip) return;
+    
     const globalSettings = this.loadGlobalSettings();
     const now = Date.now();
     
@@ -268,7 +270,9 @@ export class SessionCoordinator {
   /**
    * Ensure developer initials are configured globally
    */
-  async ensureGlobalSetup() {
+  async ensureGlobalSetup(skip = false) {
+    if (skip) return;
+    
     const globalSettings = this.loadGlobalSettings();
     
     // Check if global setup is needed (developer initials)
@@ -344,7 +348,9 @@ export class SessionCoordinator {
   /**
    * Ensure house rules are set up for the project
    */
-  async ensureHouseRulesSetup() {
+  async ensureHouseRulesSetup(skip = false) {
+    if (skip) return;
+    
     const houseRulesManager = new HouseRulesManager(this.repoRoot);
     const houseRulesPath = path.join(this.repoRoot, 'houserules.md');
     
@@ -451,6 +457,8 @@ export class SessionCoordinator {
    * Ensure project-specific version settings are configured
    */
   async ensureProjectSetup(options = {}) {
+    if (options.skip) return;
+    
     const projectSettings = this.loadProjectSettings();
     
     // Check if project setup is needed (version strategy)
@@ -583,7 +591,7 @@ export class SessionCoordinator {
     return {
       ...global,
       ...project,
-      developerInitials: global.developerInitials,
+      developerInitials: project.developerInitials || global.developerInitials,
       configured: global.configured
     };
   }
@@ -685,6 +693,8 @@ export class SessionCoordinator {
     const projectSettings = this.loadProjectSettings();
     if (projectSettings.dockerConfig && projectSettings.dockerConfig.neverAsk === true) {
       // User selected 'Never' - skip Docker configuration
+      // Show a subtle message so they know why it's skipped
+      console.log(`${CONFIG.colors.dim}Skipping Docker config (User preference: Never ask). Edit local_deploy/project-settings.json to enable.${CONFIG.colors.reset}`);
       return { enabled: false, neverAsk: true };
     }
     
@@ -1207,13 +1217,13 @@ export class SessionCoordinator {
    * Create a new session and generate Claude instructions
    */
   async createSession(options = {}) {
-    // Check for updates (once per day)
-    await this.checkForUpdates();
+    // Check for updates (once per day) - skip if requested (e.g. called from Kora)
+    await this.checkForUpdates(options.skipUpdate);
     
     // Ensure both global and project setup are complete
-    await this.ensureGlobalSetup();     // Developer initials (once per user)
-    await this.ensureProjectSetup();    // Version strategy (once per project)
-    await this.ensureHouseRulesSetup(); // House rules setup (once per project)
+    await this.ensureGlobalSetup(options.skipSetup);     // Developer initials (once per user)
+    await this.ensureProjectSetup({ force: false, skip: options.skipSetup });    // Version strategy (once per project)
+    await this.ensureHouseRulesSetup(options.skipSetup); // House rules setup (once per project)
     await this.ensureGroqApiKey();      // GROQ API key for AI commits (once per user)
     
     const sessionId = this.generateSessionId();
@@ -2401,7 +2411,7 @@ async function main() {
   console.log("  CS_DevOpsAgent - Intelligent Git Automation System");
   console.log(`  Version ${packageJson.version} | Build ${new Date().toISOString().split('T')[0].replace(/-/g, '')}`);
   console.log("  ");
-  console.log("  Copyright (c) 2024 SecondBrain Labs");
+  console.log("  Copyright (c) 2024 SeKondBrain AI Labs Limited");
   console.log("  Author: Sachin Dev Duggal");
   console.log("  ");
   console.log("  Licensed under the MIT License");
@@ -2435,15 +2445,15 @@ async function main() {
       const sessionId = args[1];
       if (!sessionId) {
         // Ask if user wants Kora assistance
-        const rl = readline.createInterface({
+        const koraRl = readline.createInterface({
           input: process.stdin,
           output: process.stdout
         });
         
         console.log(`\n${CONFIG.colors.magenta}🤖 Kora AI Assistant Available${CONFIG.colors.reset}`);
         const useKora = await new Promise(resolve => {
-          rl.question(`Would you like Kora to guide you? (Y/n): `, answer => {
-            rl.close();
+          koraRl.question(`Would you like Kora to guide you? (Y/n): `, answer => {
+            koraRl.close();
             resolve(answer.toLowerCase() !== 'n' && answer.toLowerCase() !== 'no');
           });
         });
@@ -2557,7 +2567,10 @@ async function main() {
         args[args.indexOf('--agent') + 1] : 
         undefined; // Pass undefined to trigger prompt in createSession
       
-      await coordinator.createAndStart({ task, agent });
+      const skipSetup = args.includes('--skip-setup');
+      const skipUpdate = args.includes('--skip-update');
+      
+      await coordinator.createAndStart({ task, agent, skipSetup, skipUpdate });
       break;
     }
     

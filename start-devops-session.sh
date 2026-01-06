@@ -50,7 +50,7 @@ show_copyright() {
     echo "  CS_DevOpsAgent - Intelligent Git Automation System"
     echo "  Version 1.7.2 | Build 20251010.03"
     echo "  "
-    echo "  Copyright (c) 2024 SecondBrain Labs"
+    echo "  Copyright (c) 2025 SeKondBrain AI Labs Limited"
     echo "  Author: Sachin Dev Duggal"
     echo "  "
     echo "  Licensed under the MIT License"
@@ -394,32 +394,9 @@ main() {
     echo -e "${DIM}💡 New to DevOps Agent? Run: s9n-devops-agent tutorial${NC}"
     echo
     
-    # Main selection loop
-    while true; do
-        if select_session; then
-            # After agent exits, ask if they want to continue or exit
-            echo
-            echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
-            echo -e "${BOLD}Agent has stopped.${NC}"
-            echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
-            echo
-            echo -e "Would you like to:"
-            echo -e "  ${BOLD}1)${NC} Select another session"
-            echo -e "  ${BOLD}2)${NC} Exit the session manager"
-            echo
-            echo -n "Your choice [1/2]: "
-            read continue_choice
-            
-            if [[ "$continue_choice" == "2" ]]; then
-                echo
-                echo -e "${GREEN}Goodbye! Thank you for using DevOps Session Manager.${NC}"
-                exit 0
-            fi
-            echo
-            echo -e "${BLUE}Returning to session selection...${NC}"
-            echo
-        fi
-    done
+    # Run Kora (Smart Assistant)
+    # This replaces the old menu system with the unified chat interface
+    node "$SRC_DIR/agent-chat.js" "$@"
 }
 
 # Handle Ctrl+C gracefully

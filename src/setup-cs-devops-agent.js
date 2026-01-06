@@ -42,6 +42,7 @@ import {
   error as errorMsg,
   confirm,
   prompt as uiPrompt,
+  choose,
   progressStep,
   drawSection
 } from './ui-utils.js';
@@ -281,31 +282,33 @@ async function checkContractsExist(projectRoot) {
     console.log(); // Spacing
 
     // Final check logic
+    const result = {
+        missingCount,
+        scatteredCount,
+        centralCount,
+        valid: missingCount === 0
+    };
+
     if (missingCount === 0) {
         if (hasChanges) log.success('Contracts consolidated and verified.');
         else log.info('All required contracts are present.');
-        return true;
+        return result;
     }
     
     if (scatteredCount > 0) {
         log.warn(`${scatteredCount} contract types exist but are not centralized.`);
         log.warn('We recommend merging them, but you can proceed without it.');
-        // If we have files but user chose not to merge, we consider them "present" enough to skip generation
-        // UNLESS there are also missing ones.
     }
     
     if (missingCount > 0) {
         log.warn(`${missingCount} contract types are completely missing.`);
-        return false; // Trigger generation prompt
     }
     
-    return true; // All accounted for (either central or scattered)
-    // Or we return false and generateContracts will run.
-    return false;
+    return result;
     
   } catch (error) {
     log.warn(`Error searching for contracts: ${error.message}`);
-    return false;
+    return { missingCount: 1, scatteredCount: 0, valid: false }; // Fallback
   }
 }
 
@@ -1114,17 +1117,15 @@ ${colors.dim}This takes about 2 minutes.${colors.reset}
   const projectRoot = providedRoot ? path.resolve(providedRoot) : findProjectRoot();
   log.info(`Project root: ${projectRoot}`);
   
-  // Ensure ScriptCS_DevOpsAgent directory exists
-  // const scriptsDir = path.join(projectRoot, 'ScriptCS_DevOpsAgent');
-  // if (!fs.existsSync(scriptsDir)) {
-  //   log.warn('ScriptCS_DevOpsAgent folder not found. Assuming global install or custom setup.');
-  // }
+  // Initialize coordinator to access settings
+  const coordinator = new SessionCoordinator();
+  const currentSettings = coordinator.loadSettings();
   
   // Get developer initials
   console.log();
   sectionTitle('Developer Identification');
   
-  let initials = providedInitials;
+  let initials = providedInitials || currentSettings.developerInitials;
   
   if (!initials) {
     explain(`
@@ -1159,6 +1160,7 @@ ${colors.bright}How:${colors.reset} Creates branches like dev_abc_2025-10-31
   sectionTitle('Primary AI Assistant');
   
   let agentName = providedAgent;
+  const defaultAgent = currentSettings.preferences?.primaryAgent || 'Claude';
   
   if (!agentName) {
     explain(`
@@ -1167,15 +1169,51 @@ ${colors.bright}Why:${colors.reset} Customizes file names (e.g., .warp-commit-ms
     `);
     
     if (skipPrompts) {
-        agentName = 'Claude'; // Default if skipping prompts
+        agentName = defaultAgent; // Default if skipping prompts
     } else {
-        agentName = await prompt('Primary AI Assistant? [Claude]');
-        agentName = agentName.trim() || 'Claude';
+        agentName = await prompt(`Primary AI Assistant? [${defaultAgent}]`, defaultAgent);
+        agentName = agentName.trim() || defaultAgent;
     }
   }
   
   success(`Using assistant: ${colors.cyan}${agentName}${colors.reset}`);
   console.log();
+  
+  // Ask to save settings if changed or not saved
+  if (!skipPrompts && (initials !== currentSettings.developerInitials || agentName !== currentSettings.preferences?.primaryAgent)) {
+      console.log();
+      sectionTitle('Save Preferences');
+      explain(`
+${colors.bright}Save these settings for future sessions?${colors.reset}
+• ${colors.bright}Global:${colors.reset} Saves to ~/.devops-agent/settings.json (applies to all projects)
+• ${colors.bright}Project:${colors.reset} Saves to local_deploy/project-settings.json (this project only)
+      `);
+      
+      const saveChoice = await choose('Where should we save these settings?', [
+          'Global (User Profile)',
+          'Project (Local Only)',
+          'Do not save'
+      ], { defaultChoice: '1' });
+      
+      if (saveChoice === 0) {
+          // Global
+          const globalSettings = coordinator.loadGlobalSettings();
+          globalSettings.developerInitials = initials;
+          globalSettings.preferences = globalSettings.preferences || {};
+          globalSettings.preferences.primaryAgent = agentName;
+          globalSettings.configured = true;
+          coordinator.saveGlobalSettings(globalSettings);
+          log.success('Settings saved globally.');
+      } else if (saveChoice === 1) {
+          // Project
+          const projectSettings = coordinator.loadProjectSettings();
+          projectSettings.preferences = projectSettings.preferences || {};
+          projectSettings.developerInitials = initials; // Allow project overrides
+          projectSettings.preferences.primaryAgent = agentName;
+          coordinator.saveProjectSettings(projectSettings);
+          log.success('Settings saved to project.');
+      }
+  }
   
   // Groq API Key Setup
   sectionTitle('Groq API Key (Contract Automation)');
@@ -1257,16 +1295,23 @@ ${colors.bright}Security:${colors.reset} Stored locally in ${colors.yellow}local
     }
 
     // Check for contracts
-    if (!(await checkContractsExist(projectRoot))) {
+    const contractStatus = await checkContractsExist(projectRoot);
+    
+    if (contractStatus.missingCount > 0) {
       log.header();
       log.title('📜 Contract Files Missing');
+      
+      console.log(`${colors.red}Found ${contractStatus.missingCount} missing contract types.${colors.reset}`);
+      if (contractStatus.scatteredCount > 0) {
+        console.log(`${colors.yellow}Note: ${contractStatus.scatteredCount} contract types were found but are scattered/unmerged.${colors.reset}`);
+      }
       
       if (!skipPrompts) {
           explain(`
 ${colors.bright}Contract System:${colors.reset}
 This project uses a Contract System to coordinate multiple AI agents.
-It seems like this is a fresh setup or contracts are missing.
-We can scan your codebase and generate them now.
+Since required contracts are missing, we should generate them to ensure
+all agents understand the project structure and rules.
           `);
       }
       
@@ -1274,6 +1319,10 @@ We can scan your codebase and generate them now.
       if (shouldGenerate) {
         await generateContracts(projectRoot);
       }
+    } else if (contractStatus.scatteredCount > 0) {
+      // All present, but some scattered. The checkContractsExist function already asked to merge.
+      // We don't need to do anything else here.
+      log.info('All contracts present (some were found in scattered locations).');
     }
 
     // Run setup steps
@@ -1295,8 +1344,23 @@ We can scan your codebase and generate them now.
         }
     }
 
-    // Initialize SessionCoordinator for versioning setup
-    const coordinator = new SessionCoordinator();
+    // Initialize SessionCoordinator for versioning and house rules setup
+    // const coordinator = new SessionCoordinator(); // Already initialized at top
+    
+    // Ensure House Rules are set up
+    if (!skipPrompts) {
+        log.header();
+        log.title('🏠 House Rules Setup');
+        await coordinator.ensureHouseRulesSetup();
+    } else {
+        // In non-interactive mode, ensure defaults if missing
+        // ensureHouseRulesSetup has internal logic, but we might want to skip the prompt
+        // Since we can't easily force defaults without modifying coordinator, we'll skip for now
+        // or we could check if it exists and warn
+        if (!fs.existsSync(path.join(projectRoot, 'houserules.md'))) {
+             log.warn('House rules missing. Run setup interactively to configure folder structure.');
+        }
+    }
     
     // Check/Setup versioning strategy
     if (!skipPrompts) {

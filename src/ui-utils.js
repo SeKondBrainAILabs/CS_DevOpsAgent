@@ -478,7 +478,7 @@ export function showWelcome(version = '2.0.0') {
  */
 export function showCopyright() {
   console.log();
-  console.log(`${colors.dim}Copyright © 2024 SecondBrain Labs. All rights reserved.${colors.reset}`);
+  console.log(`${colors.dim}Copyright © 2025 SeKondBrain AI Labs Limited. All rights reserved.${colors.reset}`);
   console.log(`${colors.dim}Licensed under the MIT License${colors.reset}`);
   console.log();
 }

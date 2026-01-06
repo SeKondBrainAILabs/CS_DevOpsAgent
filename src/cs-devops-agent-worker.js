@@ -291,7 +291,15 @@ async function stagedCount() {
   return r.ok ? r.stdout.split("\n").filter(Boolean).length : 0;
 }
 async function unstageIfStaged(file) {
-  await run("git", ["restore", "--staged", file]);
+  try {
+    // Check if file is actually staged first to avoid errors
+    const { ok } = await run("git", ["ls-files", "--error-unmatch", file]);
+    if (ok) {
+        await run("git", ["restore", "--staged", file]);
+    }
+  } catch (e) {
+    // Ignore errors if file not found in index
+  }
 }
 async function defaultRemote() {
   const r = await run("git", ["remote"]);
@@ -828,17 +836,20 @@ const REQUIRE_AI_COMMIT = (process.env.AC_AI_COMMIT || "false").toLowerCase() ==
 
     if (PUSH) {
       const ok = await pushBranch(BRANCH);
-      log(`push ${ok ? "ok" : "failed"}`);
+      // Ensure this log goes to the right panel
+      log(`[push] pushing branch ${BRANCH} result: ${ok ? "ok" : "failed"}`);
+      
       if (ok) {
         if (CLEAR_MSG_WHEN === "push") clearMsgFile(msgPath);
         
-        console.log(`\x1b[32m✓ PUSHED:\x1b[0m ${BRANCH} -> remote`);
-        console.log(""); // Empty line for spacing
+        // This log was going to stdout directly, bypassing TUI buffers
+        // Redirect to TUI log
+        log(`✓ PUSHED: ${BRANCH} -> remote`);
         
         // Handle Docker restart if configured
         await handleDockerRestart();
       } else {
-        console.log(`\x1b[31m✗ PUSH FAILED:\x1b[0m Check logs for details`);
+        console.error(`✗ PUSH FAILED: Check logs for details`);
       }
     }
   } finally {
@@ -1526,7 +1537,7 @@ function saveProjectSettings(settings, settingsPath) {
 console.log("\n" + "=".repeat(70));
 console.log("  CS_DevOpsAgent - Intelligent Git Automation System");
 console.log("  Version 1.4.8 | Build 20251008.1");
-console.log("  \n  Copyright (c) 2024 SecondBrain Labs");
+console.log("  Copyright (c) 2025 SeKondBrain AI Labs Limited");
 console.log("  Author: Sachin Dev Duggal");
 console.log("  \n  Licensed under the MIT License");
 console.log("  This software is provided 'as-is' without any warranty.");
@@ -1750,20 +1761,22 @@ console.log();
       return;
     }
 
-    // Check if file is ignored by git (respect .gitignore)
-    try {
-      // git check-ignore returns 0 if ignored, 1 if not ignored
-      // We use quiet mode (-q) and ignore stdio
-      execSync(`git check-ignore -q "${p}"`, { stdio: 'ignore' });
-      // If we get here, exit code was 0, so file IS ignored
-      if (DEBUG) console.log(`[debug] Ignoring gitignored file: ${p}`);
-      return;
-    } catch (e) {
-      // Exit code 1 means NOT ignored (or other error). Proceed.
-    }
-
-    const now = Date.now();
     const isMsg = samePath(p, relMsg);
+    
+    // Check if file is ignored by git (respect .gitignore)
+    // IMPORTANT: Do NOT ignore the message file, even if it's in .gitignore
+    if (!isMsg) {
+      try {
+        // git check-ignore returns 0 if ignored, 1 if not ignored
+        // We use quiet mode (-q) and ignore stdio
+        execSync(`git check-ignore -q "${p}"`, { stdio: 'ignore' });
+        // If we get here, exit code was 0, so file IS ignored
+        if (DEBUG) console.log(`[debug] Ignoring gitignored file: ${p}`);
+        return;
+      } catch (e) {
+        // Exit code 1 means NOT ignored (or other error). Proceed.
+      }
+    }
     
     // Track timing of non-message changes
     if (!isMsg) {
@@ -1851,12 +1864,156 @@ console.log();
   const rl = readline.createInterface({
     input: input,
     output: output,
-    prompt: '\\x1b[36m[agent] >\\x1b[0m ',
+    prompt: '', // We'll manage the prompt manually
     terminal: true
   });
-  
+
+  // TUI STATE
+  const TUI = {
+    leftLogs: [],
+    rightLogs: [],
+    maxLogs: 200,
+    status: 'ACTIVE',
+    inputBuffer: '',
+    sessionId: sessionId,
+    branch: await currentBranch()
+  };
+
+  // Helper to strip ANSI codes
+  const stripAnsi = (str) => str.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
+
+  // Override log output to split into two panels
+  // Right Panel: [cs-devops-agent], [debug], [cmd], [err] (Background Activity)
+  // Left Panel: Interactive output (status, help, etc)
+  const originalConsoleLog = console.log;
+  const originalConsoleError = console.error;
+
+  const addToBuffers = (msg, isError = false) => {
+    const cleanMsg = stripAnsi(msg);
+    const isBackground = cleanMsg.startsWith('[cs-devops-agent]') || 
+                         cleanMsg.startsWith('[debug]') || 
+                         cleanMsg.startsWith('[cmd]') || 
+                         cleanMsg.startsWith('[err]') ||
+                         cleanMsg.startsWith('ignore') || 
+                         cleanMsg.startsWith('watcher:');
+
+    const targetBuffer = isBackground ? TUI.rightLogs : TUI.leftLogs;
+    
+    // Add timestamp for background logs only
+    let line = msg;
+    if (isBackground) {
+        const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit' });
+        line = `\x1b[2m[${time}]\x1b[0m ${msg}`;
+    }
+    
+    // Split newlines and push
+    const lines = line.split('\n');
+    lines.forEach(l => {
+        targetBuffer.push(l);
+        if (targetBuffer.length > TUI.maxLogs) targetBuffer.shift();
+    });
+    
+    renderTUI();
+  };
+
+  console.log = (...args) => {
+    const msg = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+    // Filter TUI artifacts
+    if (msg.includes('\x1b[2J') || msg.includes('\x1b[0f')) return;
+    addToBuffers(msg, false);
+  };
+
+  console.error = (...args) => {
+    const msg = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+    const colored = msg.startsWith('\x1b') ? msg : `\x1b[31m${msg}\x1b[0m`;
+    addToBuffers(colored, true);
+  };
+
+  // Vertical Split Renderer
+  function renderTUI() {
+    const width = process.stdout.columns || 80;
+    const height = process.stdout.rows || 24;
+    const contentHeight = height - 4; // Header, Divider, Prompt, Margin
+    
+    // Split: Left (Interactive) 40%, Right (Logs) 60%
+    // Ensure minimum widths
+    const leftPercent = 0.4;
+    const leftWidth = Math.floor(width * leftPercent) - 2; 
+    const rightWidth = width - leftWidth - 3; // -3 for separator " | "
+    
+    if (leftWidth < 10 || rightWidth < 10) {
+        // Fallback for very narrow screens? Just clear and print prompt? 
+        // Or simple stacked? Let's just proceed, it will look messy but functional.
+    }
+
+    // Prepare views (Bottom-Anchored)
+    const leftView = TUI.leftLogs.slice(-contentHeight);
+    const rightView = TUI.rightLogs.slice(-contentHeight);
+    
+    const leftEmpty = contentHeight - leftView.length;
+    const rightEmpty = contentHeight - rightView.length;
+
+    // Draw Frame
+    process.stdout.write('\x1b[2J');   // Clear
+    process.stdout.write('\x1b[0f');   // Home
+    
+    // 1. Header
+    const headerText = ` DEVOPS AGENT | Session: ${TUI.sessionId || 'N/A'} | Branch: ${TUI.branch} `;
+    const headPad = Math.max(0, width - headerText.length);
+    process.stdout.write(`\x1b[44m\x1b[37m${headerText}${' '.repeat(headPad)}\x1b[0m\n`);
+    
+    // 2. Columns
+    for (let i = 0; i < contentHeight; i++) {
+        let lLine = (i >= leftEmpty) ? leftView[i - leftEmpty] : '';
+        let rLine = (i >= rightEmpty) ? rightView[i - rightEmpty] : '';
+        
+        // Truncate (simple) - stripping ansi for length check would be better but expensive in loop
+        // Just slice raw string for speed, reset color at end
+        // A better approach for "visual" length requires a library. 
+        // We'll trust the user has a wide enough terminal or wraps naturally.
+        // Actually, wrapping breaks the vertical line.
+        // Let's force strict length slice.
+        
+        // Removing ANSI for length calculation is essential for alignment
+        const lPlain = stripAnsi(lLine);
+        const rPlain = stripAnsi(rLine);
+        
+        // Pad
+        const lPad = Math.max(0, leftWidth - lPlain.length);
+        const rPad = Math.max(0, rightWidth - rPlain.length);
+        
+        // If line is too long, we simply let it bleed or truncate?
+        // Bleeding breaks the wall. Truncating hides info.
+        // Let's truncate with ellipsis if needed.
+        if (lPlain.length > leftWidth) {
+            // Re-adding color reset is tricky if we chop. 
+            // Let's just print it and let it break alignment if massive.
+            // Or stricter:
+            // lLine = ...
+        }
+        
+        process.stdout.write(lLine + ' '.repeat(lPad));
+        process.stdout.write('\x1b[90m │ \x1b[0m');
+        process.stdout.write(rLine + ' '.repeat(rPad));
+        process.stdout.write('\n');
+    }
+    
+    // 3. Divider
+    const lDiv = '─'.repeat(leftWidth);
+    const rDiv = '─'.repeat(rightWidth);
+    process.stdout.write(`\x1b[90m${lDiv}─┴─${rDiv}\x1b[0m\n`);
+    
+    // 4. Prompt
+    process.stdout.write(`\x1b[36m[agent] >\x1b[0m ${TUI.inputBuffer}`);
+  }
+
+  // Initial render
+  renderTUI();
+
   // Command handler
   rl.on('line', async (line) => {
+    TUI.inputBuffer = ''; 
+    addToBuffers(`> ${line}`); // Echo command to left panel
     const cmd = line.trim().toLowerCase();
     
     switch (cmd) {
