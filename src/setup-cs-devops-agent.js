@@ -951,20 +951,9 @@ ${colors.dim}This takes about 2 minutes.${colors.reset}
   log.info(`Project root: ${projectRoot}`);
   
   // Ensure ScriptCS_DevOpsAgent directory exists
-  // If running from npm global install, we don't need to check this if the files are already in place
-  // The npm package structure puts scripts in node_modules/s9n-devops-agent/
-  
-  // Only check for ScriptCS_DevOpsAgent if we are NOT running from an installed package context
-  // or if we expect the user to have copied it manually.
-  
-  // Better check: If we can't find the source files we need, then complain.
-  // But for now, let's make the check optional or smarter.
-  
   // const scriptsDir = path.join(projectRoot, 'ScriptCS_DevOpsAgent');
   // if (!fs.existsSync(scriptsDir)) {
   //   log.warn('ScriptCS_DevOpsAgent folder not found. Assuming global install or custom setup.');
-  //   // log.info('Run: cp -r ScriptCS_DevOpsAgent /path/to/your/project/');
-  //   // process.exit(1); 
   // }
   
   // Get developer initials
