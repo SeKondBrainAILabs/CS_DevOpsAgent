@@ -2434,8 +2434,36 @@ async function main() {
       // Start agent for a session
       const sessionId = args[1];
       if (!sessionId) {
+        // Ask if user wants Kora assistance
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout
+        });
+        
+        console.log(`\n${CONFIG.colors.magenta}🤖 Kora AI Assistant Available${CONFIG.colors.reset}`);
+        const useKora = await new Promise(resolve => {
+          rl.question(`Would you like Kora to guide you? (Y/n): `, answer => {
+            rl.close();
+            resolve(answer.toLowerCase() !== 'n' && answer.toLowerCase() !== 'no');
+          });
+        });
+        
+        if (useKora) {
+          console.log(`\n${CONFIG.colors.magenta}Launching Kora...${CONFIG.colors.reset}`);
+          const chatScript = path.join(__dirname, 'agent-chat.js');
+          const child = spawn('node', [chatScript], { 
+            stdio: 'inherit',
+            env: process.env 
+          });
+          
+          child.on('exit', (code) => {
+            process.exit(code);
+          });
+          return; // Hand off to Kora
+        }
+
         // No session ID provided - show interactive menu
-        console.log(`${CONFIG.colors.bright}DevOps Agent Session Manager${CONFIG.colors.reset}\n`);
+        console.log(`\n${CONFIG.colors.bright}DevOps Agent Session Manager${CONFIG.colors.reset}\n`);
         
         // Show existing sessions first
         const locks = fs.existsSync(coordinator.locksPath) ? 
