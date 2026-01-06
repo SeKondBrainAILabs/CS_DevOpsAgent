@@ -51,9 +51,14 @@ const CONFIG = {
 
 class SmartAssistant {
   constructor() {
-    this.groq = new Groq({
-      apiKey: process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY
-    });
+    // Initialize Groq client lazily or with null if key is missing
+    const apiKey = process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY;
+    
+    if (apiKey) {
+      this.groq = new Groq({ apiKey });
+    } else {
+      this.groq = null; // Will be initialized in start()
+    }
     
     this.history = [];
     this.repoRoot = process.cwd();
@@ -125,8 +130,16 @@ When you want to perform an action, use the available tools.`;
    * Initialize the chat session
    */
   async start() {
+    // Ensure Groq client is initialized
+    if (!this.groq) {
+      const apiKey = credentialsManager.getGroqApiKey();
+      if (apiKey) {
+        this.groq = new Groq({ apiKey });
+      }
+    }
+
     // Check for Groq API Key
-    if (!credentialsManager.hasGroqApiKey()) {
+    if (!this.groq && !credentialsManager.hasGroqApiKey()) {
       console.log('\n' + '='.repeat(60));
       console.log(`${CONFIG.colors.yellow}⚠️  GROQ API KEY MISSING${CONFIG.colors.reset}`);
       console.log('='.repeat(60));
