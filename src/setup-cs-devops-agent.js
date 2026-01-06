@@ -168,7 +168,8 @@ async function checkContractsExist(projectRoot) {
 
     // Find all files that look like contracts
     // We look for files containing "CONTRACT" in the name, excluding typical ignores
-    const findCommand = `find "${projectRoot}" -type f \\( -name "*CONTRACT*.md" -o -name "*CONTRACT*.json" \\) -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/local_deploy/*"`;
+    // Use -iname for case-insensitive matching
+    const findCommand = `find "${projectRoot}" -type f \\( -iname "*CONTRACT*.md" -o -iname "*CONTRACT*.json" \\) -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/local_deploy/*"`;
     
     let files = [];
     try {
@@ -265,11 +266,21 @@ async function checkContractsExist(projectRoot) {
         }
     }
 
-    // Final check: Do we have all required contracts in the target directory?
-    const missing = requiredContracts.filter(file => !fs.existsSync(path.join(targetDir, file)));
+    // Final check: Do we have all required contracts?
+    // We check if they exist in the target directory OR if we found them elsewhere (and user maybe declined to merge)
+    const missing = requiredContracts.filter(contractName => {
+        // 1. Check central folder
+        if (fs.existsSync(path.join(targetDir, contractName))) return false;
+        
+        // 2. Check if we found it anywhere else
+        if (contractMap[contractName] && contractMap[contractName].length > 0) return false;
+        
+        return true;
+    });
     
     if (missing.length === 0) {
         if (hasChanges) log.success('Contract files consolidated successfully.');
+        else log.info('All contract files found in repository.');
         return true;
     }
     
