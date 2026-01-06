@@ -81,6 +81,7 @@ s9n-devops-agent start
 ### 🌲 Smart Branch Management
 - **Hierarchy:** `session/task` → `daily/date` → `main`.
 - **Auto-Merge:** Sessions automatically merge into daily branches, which roll over to main.
+- **Base Branch Selection:** Choose any branch (main, develop, etc.) as the starting point for your session worktree.
 
 ### 📋 House Rules System
 - **Context Injection:** AI agents read `docs/houserules.md` to understand your coding conventions.
