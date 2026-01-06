@@ -2469,6 +2469,53 @@ The DevOps agent is monitoring this worktree for changes.
             fs.writeFileSync(lockFile, JSON.stringify(sessionData, null, 2));
             console.log(`${CONFIG.colors.green}✓ Recovered session ${sessionData.sessionId} (${sessionData.task})${CONFIG.colors.reset}`);
             recovered++;
+
+            // Check for uncommitted changes in the recovered session
+            try {
+              const status = execSync(`git -C "${worktreePath}" status --porcelain`, { encoding: 'utf8' });
+              if (status.trim()) {
+                console.log(`\n${CONFIG.colors.yellow}Uncommitted changes found in recovered session ${sessionData.sessionId}${CONFIG.colors.reset}`);
+                
+                const rl = readline.createInterface({
+                  input: process.stdin,
+                  output: process.stdout
+                });
+                
+                const commitNow = await new Promise(resolve => {
+                  rl.question('Would you like to commit these changes now? (Y/n): ', answer => {
+                    rl.close();
+                    resolve(answer.toLowerCase() !== 'n' && answer.toLowerCase() !== 'no');
+                  });
+                });
+                
+                if (commitNow) {
+                  const timestamp = new Date().toISOString();
+                  execSync(`git -C "${worktreePath}" add -A`, { stdio: 'ignore' });
+                  execSync(`git -C "${worktreePath}" commit -m "chore: recovered session auto-commit at ${timestamp}"`, { stdio: 'ignore' });
+                  console.log(`${CONFIG.colors.green}✓ Changes committed.${CONFIG.colors.reset}`);
+                  
+                  // Ask to push
+                  const rlPush = readline.createInterface({ input: process.stdin, output: process.stdout });
+                  const pushNow = await new Promise(resolve => {
+                    rlPush.question('Push changes to remote? (Y/n): ', answer => {
+                      rlPush.close();
+                      resolve(answer.toLowerCase() !== 'n' && answer.toLowerCase() !== 'no');
+                    });
+                  });
+                  
+                  if (pushNow) {
+                    try {
+                      execSync(`git -C "${worktreePath}" push origin ${sessionData.branchName}`, { stdio: 'ignore' });
+                      console.log(`${CONFIG.colors.green}✓ Changes pushed to ${sessionData.branchName}.${CONFIG.colors.reset}`);
+                    } catch (e) {
+                      console.log(`${CONFIG.colors.red}✗ Push failed. You may need to pull first or check remote.${CONFIG.colors.reset}`);
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              // Ignore git errors during recovery scan
+            }
           }
         } catch (err) {
           console.error(`Failed to recover ${dir}: ${err.message}`);
