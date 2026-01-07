@@ -1537,7 +1537,7 @@ function saveProjectSettings(settings, settingsPath) {
 // Display copyright and license information immediately
 console.log("\n" + "=".repeat(70));
 console.log("  CS_DevOpsAgent - Intelligent Git Automation System");
-console.log("  Version 2.0.18-dev.10 | Build 20260106");
+console.log("  Version 2.0.18-dev.11 | Build 20260107");
 console.log("  Copyright (c) 2026 SeKondBrain AI Labs Limited");
 console.log("  Author: Sachin Dev Duggal");
 console.log("  \n  Licensed under the MIT License");

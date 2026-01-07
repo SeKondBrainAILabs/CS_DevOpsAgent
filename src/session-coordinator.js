@@ -1513,7 +1513,6 @@ export class SessionCoordinator {
       };
       
       const lockFile = path.join(this.locksPath, `${sessionId}.lock`);
-      fs.writeFileSync(lockFile, JSON.stringify(lockData, null, 2));
       
       // Generate Claude instructions
       const instructions = this.generateClaudeInstructions(lockData);
@@ -1530,6 +1529,9 @@ export class SessionCoordinator {
       
       // Store instructions in lockData so createAndStart can access them
       lockData.instructions = instructions;
+      
+      // Write lock file with instructions included
+      fs.writeFileSync(lockFile, JSON.stringify(lockData, null, 2));
       
       return {
         sessionId,
@@ -1993,10 +1995,11 @@ The DevOps agent is monitoring this worktree for changes.
     const instructions = this.generateClaudeInstructions(session);
     // Don't display instructions here - they'll be shown after agent starts
     
-    return {
-      ...session,
-      instructions: instructions
-    };
+    // Add instructions to session object and save to lock file
+    session.instructions = instructions;
+    fs.writeFileSync(lockFile, JSON.stringify(session, null, 2));
+    
+    return session;
   }
 
   /**
