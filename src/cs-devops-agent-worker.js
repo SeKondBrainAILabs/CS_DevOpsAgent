@@ -1952,7 +1952,7 @@ console.log();
     
     // Split: Left (Interactive) 40%, Right (Logs) 60%
     // Ensure minimum widths
-    const leftPercent = 0.4;
+    const leftPercent = 0.3; // Reduce left panel to 30% to give more room for logs
     const leftWidth = Math.floor(width * leftPercent) - 2; 
     const rightWidth = width - leftWidth - 3; // -3 for separator " | "
     
@@ -1998,7 +1998,31 @@ console.log();
         }
         
         if (rPlain.length > rightWidth) {
-            rDisp = rPlain.substring(0, rightWidth - 3) + '...';
+            // Check if it's a long error message that should wrap
+            if (rPlain.length > rightWidth && rPlain.length < rightWidth * 3) {
+                // Allow simple wrapping for up to 3 lines
+                const parts = [];
+                for (let j = 0; j < rPlain.length; j += rightWidth) {
+                    parts.push(rPlain.substring(j, j + rightWidth));
+                }
+                
+                // Print first part normally
+                rDisp = parts[0];
+                
+                // If we have extra space below, insert the rest? 
+                // Since this is a simple line-by-line renderer, inserting lines is hard.
+                // Better approach: soft truncation with ellipsis at the end is better for layout stability
+                // unless we overhaul the renderer to support multi-line items.
+                
+                // Let's stick to truncation but show more content if possible by reducing padding?
+                // No, alignment is key.
+                
+                // Fallback: Truncate but with color preservation if we could...
+                // For now, standard truncation is safest for TUI integrity.
+                rDisp = rPlain.substring(0, rightWidth - 3) + '...';
+            } else {
+                rDisp = rPlain.substring(0, rightWidth - 3) + '...';
+            }
         }
         
         // Pad using the length of the *displayed* string (re-strip to be sure)
