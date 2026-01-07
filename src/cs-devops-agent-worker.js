@@ -1008,10 +1008,20 @@ async function checkAndPerformRebase(repoRoot) {
     
     if (dirty) {
       log('Stashing uncommitted changes before rebase...');
-      const stashRes = await run('git', ['stash', 'push', '-m', `Auto-stash before rebase ${new Date().toISOString()}`]);
-      if (stashRes.ok) stashed = true;
-      else {
-        console.error('\x1b[31m✗ Failed to stash changes. Aborting rebase.\x1b[0m');
+      // Use -u to include untracked files, ensuring we capture everything status --porcelain sees
+      const stashRes = await run('git', ['stash', 'push', '-u', '-m', `Auto-stash before rebase ${new Date().toISOString()}`]);
+      
+      // Only mark as stashed if we actually saved something
+      // git stash returns 0 even if nothing to save, so we must check stdout
+      if (stashRes.ok && stashRes.stdout && stashRes.stdout.includes('Saved working directory')) {
+        stashed = true;
+        log('Changes stashed successfully.');
+      } else if (stashRes.ok && stashRes.stdout && stashRes.stdout.includes('No local changes to save')) {
+        stashed = false;
+        log('No changes needed stashing (git reported no local changes).');
+      } else {
+        console.error('\\x1b[31m✗ Failed to stash changes. Aborting rebase.\\x1b[0m');
+        if (stashRes.stdout) console.error(stashRes.stdout);
         busy = false;
         return false;
       }
@@ -1537,7 +1547,7 @@ function saveProjectSettings(settings, settingsPath) {
 // Display copyright and license information immediately
 console.log("\n" + "=".repeat(70));
 console.log("  CS_DevOpsAgent - Intelligent Git Automation System");
-console.log("  Version 2.0.18-dev.11 | Build 20260107");
+console.log("  Version 2.0.18-dev.12 | Build 20260107");
 console.log("  Copyright (c) 2026 SeKondBrain AI Labs Limited");
 console.log("  Author: Sachin Dev Duggal");
 console.log("  \n  Licensed under the MIT License");
