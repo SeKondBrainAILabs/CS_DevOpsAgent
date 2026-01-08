@@ -1961,13 +1961,40 @@ console.log();
         // Or simple stacked? Let's just proceed, it will look messy but functional.
     }
 
+    // Helper to prepare view buffers with text wrapping
+    function getView(buffer, width, height) {
+        const view = [];
+        for (let i = buffer.length - 1; i >= 0; i--) {
+            if (view.length >= height) break;
+            
+            const line = buffer[i];
+            const plain = stripAnsi(line);
+            
+            if (plain.length <= width) {
+                view.unshift(line);
+            } else {
+                // Wrap long lines (using plain text to avoid ANSI artifacting)
+                const chunks = [];
+                for (let j = 0; j < plain.length; j += width) {
+                    chunks.push(plain.substring(j, j + width));
+                }
+                // Add chunks in reverse order so they appear correctly
+                for (let k = chunks.length - 1; k >= 0; k--) {
+                    if (view.length >= height) break;
+                    view.unshift(chunks[k]);
+                }
+            }
+        }
+        return view;
+    }
+
     // Prepare views (Bottom-Anchored)
-    const leftView = TUI.leftLogs.slice(-contentHeight);
-    const rightView = TUI.rightLogs.slice(-contentHeight);
+    const leftView = getView(TUI.leftLogs, leftWidth, contentHeight);
+    const rightView = getView(TUI.rightLogs, rightWidth, contentHeight);
     
     const leftEmpty = contentHeight - leftView.length;
     const rightEmpty = contentHeight - rightView.length;
-
+    
     // Draw Frame
     process.stdout.write('\x1b[2J');   // Clear
     process.stdout.write('\x1b[H');    // Home (standard ANSI)
@@ -1979,58 +2006,15 @@ console.log();
     
     // 2. Columns
     for (let i = 0; i < contentHeight; i++) {
-        let lLine = (i >= leftEmpty) ? leftView[i - leftEmpty] : '';
-        let rLine = (i >= rightEmpty) ? rightView[i - rightEmpty] : '';
+        let lDisp = (i >= leftEmpty) ? leftView[i - leftEmpty] : '';
+        let rDisp = (i >= rightEmpty) ? rightView[i - rightEmpty] : '';
         
-        // Removing ANSI for length calculation is essential for alignment
-        const lPlain = stripAnsi(lLine);
-        const rPlain = stripAnsi(rLine);
+        // Pad to fill width
+        const lPlain = stripAnsi(lDisp);
+        const rPlain = stripAnsi(rDisp);
         
-        // Truncate to prevent wrapping and breaking layout
-        let lDisp = lLine;
-        let rDisp = rLine;
-        
-        if (lPlain.length > leftWidth) {
-            // Simple truncation (note: might cut ansi codes, but prevents layout break)
-            // We use the plain length to determine cut point
-            // For safety, we just display the plain truncated text to avoid hanging colors
-            lDisp = lPlain.substring(0, leftWidth - 3) + '...';
-        }
-        
-        if (rPlain.length > rightWidth) {
-            // Check if it's a long error message that should wrap
-            if (rPlain.length > rightWidth && rPlain.length < rightWidth * 3) {
-                // Allow simple wrapping for up to 3 lines
-                const parts = [];
-                for (let j = 0; j < rPlain.length; j += rightWidth) {
-                    parts.push(rPlain.substring(j, j + rightWidth));
-                }
-                
-                // Print first part normally
-                rDisp = parts[0];
-                
-                // If we have extra space below, insert the rest? 
-                // Since this is a simple line-by-line renderer, inserting lines is hard.
-                // Better approach: soft truncation with ellipsis at the end is better for layout stability
-                // unless we overhaul the renderer to support multi-line items.
-                
-                // Let's stick to truncation but show more content if possible by reducing padding?
-                // No, alignment is key.
-                
-                // Fallback: Truncate but with color preservation if we could...
-                // For now, standard truncation is safest for TUI integrity.
-                rDisp = rPlain.substring(0, rightWidth - 3) + '...';
-            } else {
-                rDisp = rPlain.substring(0, rightWidth - 3) + '...';
-            }
-        }
-        
-        // Pad using the length of the *displayed* string (re-strip to be sure)
-        const lDispLen = stripAnsi(lDisp).length;
-        const rDispLen = stripAnsi(rDisp).length;
-        
-        const lPad = Math.max(0, leftWidth - lDispLen);
-        const rPad = Math.max(0, rightWidth - rDispLen);
+        const lPad = Math.max(0, leftWidth - lPlain.length);
+        const rPad = Math.max(0, rightWidth - rPlain.length);
         
         process.stdout.write(lDisp + ' '.repeat(lPad));
         process.stdout.write('\x1b[90m │ \x1b[0m');
