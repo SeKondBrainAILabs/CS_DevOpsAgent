@@ -1934,29 +1934,62 @@ The DevOps agent is monitoring this worktree for changes.
   }
 
   /**
-   * Find a session by task name (fuzzy match)
+   * Find a session by task name (fuzzy match with token-based scoring)
    */
   findSessionByTask(taskName) {
     if (!fs.existsSync(this.locksPath)) return null;
     
     const locks = fs.readdirSync(this.locksPath).filter(f => f.endsWith('.lock'));
-    const search = taskName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const inputTokens = taskName.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
     
+    if (inputTokens.length === 0) return null;
+
+    let bestMatch = null;
+    let maxScore = 0;
+
     for (const lockFile of locks) {
       try {
         const lockPath = path.join(this.locksPath, lockFile);
         const session = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-        const task = (session.task || '').toLowerCase().replace(/[^a-z0-9]/g, '');
         
-        // Exact match or significant partial match
-        if (task === search || (task.length > 4 && task.includes(search)) || (search.length > 4 && search.includes(task))) {
-          return session;
+        // Normalize session task
+        const sessionTask = (session.task || '').toLowerCase();
+        const sessionTokens = sessionTask.replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+        
+        // 1. Direct substring check (original logic preserved as high priority)
+        const cleanInput = taskName.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const cleanTask = sessionTask.replace(/[^a-z0-9]/g, '');
+        
+        if (cleanTask === cleanInput || (cleanTask.length > 4 && cleanTask.includes(cleanInput)) || (cleanInput.length > 4 && cleanInput.includes(cleanTask))) {
+           // Strong match found immediately
+           return session;
         }
+
+        // 2. Token-based overlap scoring
+        let matchCount = 0;
+        for (const token of inputTokens) {
+          if (sessionTokens.some(t => t.includes(token) || token.includes(t))) {
+            matchCount++;
+          }
+        }
+        
+        // Calculate score: percentage of input tokens matched
+        const score = matchCount / inputTokens.length;
+        
+        // Threshold: at least 50% of tokens match or 1 strong token match
+        if (score > 0.5 || (inputTokens.length === 1 && score === 1)) {
+           if (score > maxScore) {
+             maxScore = score;
+             bestMatch = session;
+           }
+        }
+        
       } catch (e) {
         // Ignore invalid locks
       }
     }
-    return null;
+    
+    return bestMatch;
   }
 
   /**
