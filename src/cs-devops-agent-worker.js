@@ -730,17 +730,24 @@ async function commitOnce(repoRoot, msgPath) {
     if (needsContractUpdate) {
       log("Contract-related changes detected. Updating contracts...");
       try {
-        // Run the contract generation script
-        // We look for it in the scripts directory
-        const scriptPath = path.join(process.cwd(), 'scripts', 'contract-automation', 'generate-contracts.js');
-        if (fs.existsSync(scriptPath)) {
-          await run('node', [scriptPath]);
-          // Stage any updated contract files
-          await run('git', ['add', 'House_Rules_Contracts']);
-          log("Contracts updated and staged.");
+        // Run the intelligent contract update script
+        const updateScript = path.join(process.cwd(), 'scripts', 'contract-automation', 'update-contracts.js');
+        const generateScript = path.join(process.cwd(), 'scripts', 'contract-automation', 'generate-contracts.js');
+        
+        if (fs.existsSync(updateScript)) {
+          // Pass environment variables to child process so it can access API keys
+          await run('node', [updateScript], { env: { ...process.env } });
+          log("Contracts analysis complete.");
+        } else if (fs.existsSync(generateScript)) {
+          // Fallback to basic generation
+          await run('node', [generateScript]);
+          log("Contracts generated (basic).");
         } else {
-          dlog("Contract generation script not found at", scriptPath);
+          dlog("Contract automation scripts not found.");
         }
+        
+        // Stage any updated contract files
+        await run('git', ['add', 'House_Rules_Contracts']);
       } catch (err) {
         log(`Failed to update contracts: ${err.message}`);
       }
