@@ -714,6 +714,38 @@ async function commitOnce(repoRoot, msgPath) {
       log(infraChanges.summary);
     }
 
+    // Detect contract changes (API, DB, Features)
+    // We check if any changed files match patterns that should trigger contract updates
+    const contractPatterns = [
+      /routes\//, /api\//, /controllers\//, // API
+      /migrations\//, /schema\.prisma/,     // Database
+      /src\/features\//, /src\/modules\//,  // Features
+      /package\.json/, /\.env\.example/     // Integrations/Env
+    ];
+    
+    const needsContractUpdate = changedFilesList.some(file => 
+      contractPatterns.some(pattern => pattern.test(file))
+    );
+
+    if (needsContractUpdate) {
+      log("Contract-related changes detected. Updating contracts...");
+      try {
+        // Run the contract generation script
+        // We look for it in the scripts directory
+        const scriptPath = path.join(process.cwd(), 'scripts', 'contract-automation', 'generate-contracts.js');
+        if (fs.existsSync(scriptPath)) {
+          await run('node', [scriptPath]);
+          // Stage any updated contract files
+          await run('git', ['add', 'House_Rules_Contracts']);
+          log("Contracts updated and staged.");
+        } else {
+          dlog("Contract generation script not found at", scriptPath);
+        }
+      } catch (err) {
+        log(`Failed to update contracts: ${err.message}`);
+      }
+    }
+
     await run("git", ["add", "-A"]);
     await unstageIfStaged(path.relative(repoRoot, msgPath));
 
@@ -1919,6 +1951,17 @@ console.log();
     if (isBackground) {
         const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit' });
         line = `\x1b[2m[${time}]\x1b[0m ${msg}`;
+    }
+    
+    // Grouping/Deduplication Logic for Left Panel (Interactive)
+    if (!isBackground && targetBuffer.length > 0) {
+      const lastLine = targetBuffer[targetBuffer.length - 1];
+      // Check if exact duplicate (ignoring ANSI)
+      if (stripAnsi(lastLine) === cleanMsg) {
+        // It's a duplicate, don't add it again (or maybe add a counter?)
+        // For now, simple deduplication is cleaner
+        return; 
+      }
     }
     
     // Split newlines and push
