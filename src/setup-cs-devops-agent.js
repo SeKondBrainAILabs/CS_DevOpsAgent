@@ -580,27 +580,30 @@ function setupCommitFiles(projectRoot, initials, agentName = 'Claude') {
     log.info(`.${agentName.toLowerCase()}-commit-msg already exists`);
   }
   
-  // Setup CHANGELOG (dynamic name)
-  const changelogPath = path.join(projectRoot, `${agentName.toUpperCase()}_CHANGELOG.md`);
+  // Setup CHANGELOG (standard name in root)
+  const changelogPath = path.join(projectRoot, 'CHANGELOG.md');
   if (!fs.existsSync(changelogPath)) {
-    const initialContent = `# ${agentName} AI Assistant Changelog
+    const initialContent = `# Changelog
 
-This file tracks all changes made by ${agentName} AI assistant to this codebase.
-Each entry includes a timestamp, commit type, and detailed description.
+All notable changes to this project will be documented in this file.
 
-Developer: ${initials.toUpperCase()}
-Branch Prefix: dev_${initials}_
-Initialized: ${new Date().toISOString()}
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- Initial project setup with DevOps Agent integration
 
 ---
 
-## Changelog History
+## Change History (${agentName} Assistant)
 
 `;
     fs.writeFileSync(changelogPath, initialContent);
-    log.success(`Created ${agentName.toUpperCase()}_CHANGELOG.md`);
+    log.success('Created CHANGELOG.md in project root');
   } else {
-    log.info(`${agentName.toUpperCase()}_CHANGELOG.md already exists`);
+    log.info('CHANGELOG.md already exists in project root');
   }
   
   // Setup Documentation/infrastructure.md
@@ -686,8 +689,8 @@ type(scope): subject line describing the change (max 72 characters)
 - Keep the subject line under 72 characters
 - Use present tense ("add" not "added", "fix" not "fixed")
 
-### 2. Changelog Documentation (\`${agentName.toUpperCase()}_CHANGELOG.md\`)
-**Location**: \`/${agentName.toUpperCase()}_CHANGELOG.md\`  
+### 2. Changelog Documentation (\`CHANGELOG.md\`)
+**Location**: \`/CHANGELOG.md\`
 **Action**: APPEND a new section (don't overwrite)  
 **Format**:
 \`\`\`markdown
@@ -713,7 +716,7 @@ feat(api): add webhook support for real-time notifications
 - Integrated webhook triggers into event processing pipeline
 \`\`\`
 
-**${agentName.toUpperCase()}_CHANGELOG.md** (appended):
+**CHANGELOG.md** (appended):
 \`\`\`markdown
 ## 2025-09-15T14:35:00Z
 feat(api): add webhook support for real-time notifications
