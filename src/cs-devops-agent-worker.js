@@ -949,6 +949,68 @@ async function handleDockerRestart() {
       log('✅ Docker containers restarted successfully');
     } else {
       log(`⚠️ Docker restart failed: ${result.error}`);
+      
+      // Use LLM to analyze the error if we have API keys
+      if (process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY) {
+        log('🤔 Analyzing Docker error with LLM...');
+        try {
+          const analyzeScript = path.join(process.cwd(), 'scripts', 'contract-automation', 'analyze-with-llm.js');
+          // Create a temporary error file to pass to the analyzer (since CLI args might be too long)
+          const errorLogPath = path.join(process.cwd(), '.docker-error.log');
+          fs.writeFileSync(errorLogPath, `Docker command failed:\n${result.error}\n\nContext:\nCompose File: ${sessionConfig.dockerConfig.composeFile}\nService: ${sessionConfig.dockerConfig.service || 'all'}\n`);
+          
+          // Use a new dedicated flag or script for ad-hoc analysis? 
+          // Since analyze-with-llm.js is tailored for contracts, let's create a quick inline call or use a dedicated helper.
+          // Or reuse analyze-with-llm.js by adding a generic --analyze-text option?
+          // Let's keep it simple: spawn a node process that runs a small inline script or imports the helper.
+          // Actually, we can reuse `run` to call a new script `scripts/analyze-error.js`.
+          
+          // Let's create `scripts/analyze-error.js` dynamically or assume it exists.
+          // Better: We'll create it.
+          
+          const analyzeErrorScript = path.join(process.cwd(), 'scripts', 'analyze-error.js');
+          if (!fs.existsSync(analyzeErrorScript)) {
+             // Create it on the fly if missing (self-healing/bootstrap)
+             const scriptContent = `
+const fs = require('fs');
+const { Groq } = require('groq-sdk');
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY });
+
+async function main() {
+  const errorFile = process.argv[2];
+  const errorContent = fs.readFileSync(errorFile, 'utf8');
+  
+  const completion = await groq.chat.completions.create({
+    messages: [
+      { role: 'system', content: 'You are a DevOps expert. Analyze the Docker error and provide a concise (1 sentence) diagnosis and a specific command to fix it.' },
+      { role: 'user', content: errorContent }
+    ],
+    model: 'llama-3.1-70b-versatile',
+  });
+  
+  console.log(completion.choices[0].message.content);
+}
+main().catch(console.error);
+`;
+             fs.writeFileSync(analyzeErrorScript, scriptContent);
+          }
+          
+          const { stdout: fixSuggestion } = await run('node', [analyzeErrorScript, errorLogPath], { 
+            env: { ...process.env },
+            stdio: 'pipe' 
+          });
+          
+          if (fixSuggestion) {
+            log(`\n💡 Suggestion: ${fixSuggestion.trim()}\n`);
+          }
+          
+          // Cleanup
+          try { fs.unlinkSync(errorLogPath); } catch (e) {}
+          
+        } catch (llmErr) {
+          dlog('LLM analysis failed:', llmErr.message);
+        }
+      }
     }
   } catch (error) {
     // Don't fail the commit/push if Docker restart fails
