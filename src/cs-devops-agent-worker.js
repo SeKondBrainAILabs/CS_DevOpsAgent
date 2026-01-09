@@ -714,6 +714,41 @@ async function commitOnce(repoRoot, msgPath) {
       log(infraChanges.summary);
     }
 
+    // Detect Playwright configuration
+    const playwrightConfig = ['playwright.config.ts', 'playwright.config.js'].find(c => fs.existsSync(path.join(process.cwd(), c)));
+    
+    // Check if source files changed (js/ts/jsx/tsx)
+    const sourceFilesChanged = changedFilesList.filter(f => 
+      !f.includes('.spec.') && 
+      !f.includes('.test.') && 
+      /\.(js|ts|jsx|tsx)$/.test(f)
+    );
+
+    if (playwrightConfig && sourceFilesChanged.length > 0) {
+      log(`🎭 Playwright project detected with ${sourceFilesChanged.length} changed source files.`);
+      log("Generating/Updating tests...");
+      
+      try {
+        const testScript = path.join(process.cwd(), 'scripts', 'test-automation', 'generate-tests.js');
+        if (fs.existsSync(testScript)) {
+          // Run test generation for changed files
+          // Join files with comma for the script argument
+          const filesArg = `--files=${sourceFilesChanged.join(',')}`;
+          
+          // Pass environment variables to child process so it can access API keys
+          await run('node', [testScript, filesArg], { env: { ...process.env }, stdio: 'inherit' });
+          
+          // Stage any generated/updated test files
+          // We assume tests are in tests/ or e2e/ directories
+          await run('git', ['add', 'tests/', 'e2e/']);
+          log("Test files updated and staged.");
+        } else {
+          dlog("Test automation script not found at", testScript);
+        }
+      } catch (err) {
+        log(`Failed to generate tests: ${err.message}`);
+      }
+    }
     // Detect contract changes (API, DB, Features)
     // We check if any changed files match patterns that should trigger contract updates
     const contractPatterns = [
@@ -723,7 +758,7 @@ async function commitOnce(repoRoot, msgPath) {
       /package\.json/, /\.env\.example/     // Integrations/Env
     ];
     
-    const needsContractUpdate = changedFilesList.some(file => 
+    const needsContractUpdate = changedFilesList.some(file =>
       contractPatterns.some(pattern => pattern.test(file))
     );
 
