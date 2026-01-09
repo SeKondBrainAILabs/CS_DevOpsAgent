@@ -854,10 +854,7 @@ if (mode === 'production') {
       '**/Archive/',
       '*.backup.*',
       'local_deploy/',
-      '.file-coordination/',
-      'package-lock.json',
-      'yarn.lock',
-      'pnpm-lock.yaml'
+      '.file-coordination/'
     ];
     
     let modified = false;
