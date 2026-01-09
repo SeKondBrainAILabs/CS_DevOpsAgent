@@ -1738,6 +1738,18 @@ The DevOps agent will automatically:
     console.log(`⚠️ FILE COORDINATION (MANDATORY):`);
     console.log(`Shared coordination directory: local_deploy/.file-coordination/`);
     console.log(``);
+    console.log(`⛔ ABSOLUTE RULE: ALWAYS USE THE WORKTREE PATH`);
+    console.log(`Even if you compact context or restart, you MUST ALWAYS operate in:`);
+    console.log(`\"${instructions.worktreePath}\"`);
+    console.log(`NEVER fall back to the main repository root.`);
+    console.log(``);
+    console.log(`🔄 CONTEXT RECOVERY (If you get lost):`);
+    console.log(`1. Check current directory: pwd`);
+    console.log(`   It MUST match: ${instructions.worktreePath}`);
+    console.log(`2. If not, switch immediately: cd \"${instructions.worktreePath}\"`);
+    console.log(`3. Verify git branch: git branch --show-current`);
+    console.log(`   It MUST be: ${instructions.branchName}`);
+    console.log(``);
     console.log(`BEFORE editing ANY files:`);
     console.log(`1. Check for conflicts: ls ../../../local_deploy/.file-coordination/active-edits/`);
     console.log(`2. Create declaration: local_deploy/.file-coordination/active-edits/<agent>-${sessionId}.json`);
