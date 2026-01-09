@@ -2670,6 +2670,9 @@ async function main() {
   
   switch (command) {
     case 'create': {
+      // Clean up orphaned sessions first
+      await coordinator.recoverSessions();
+      
       // Create a new session
       const task = args.includes('--task') ? 
         args[args.indexOf('--task') + 1] : 
@@ -2801,6 +2804,9 @@ async function main() {
     }
     
     case 'create-and-start': {
+      // Clean up orphaned sessions first
+      await coordinator.recoverSessions();
+      
       // Create session and immediately start agent
       const task = args.includes('--task') ? 
         args[args.indexOf('--task') + 1] : 
