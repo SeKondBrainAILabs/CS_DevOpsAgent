@@ -2015,6 +2015,17 @@ The DevOps agent is monitoring this worktree for changes.
     
     const sessionData = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
     
+    if (!fs.existsSync(sessionData.worktreePath)) {
+      console.error(`${CONFIG.colors.red}Worktree directory not found: ${sessionData.worktreePath}${CONFIG.colors.reset}`);
+      console.log(`${CONFIG.colors.yellow}This session appears to be broken or the worktree was deleted manually.${CONFIG.colors.reset}`);
+      console.log(`Marking session as stopped.`);
+      
+      sessionData.status = 'stopped';
+      sessionData.agentPid = null;
+      fs.writeFileSync(lockFile, JSON.stringify(sessionData, null, 2));
+      return false;
+    }
+
     console.log(`\n${CONFIG.colors.bgYellow}${CONFIG.colors.bright} Starting DevOps Agent ${CONFIG.colors.reset}`);
     console.log(`${CONFIG.colors.blue}Session:${CONFIG.colors.reset} ${sessionId}`);
     console.log(`${CONFIG.colors.blue}Worktree:${CONFIG.colors.reset} ${sessionData.worktreePath}`);
@@ -2060,30 +2071,49 @@ The DevOps agent is monitoring this worktree for changes.
     
     // Use fork for better Node.js script handling
     // Fork automatically uses the same node executable and handles paths better
-    const child = fork(agentScript, [], {
-      cwd: sessionData.worktreePath,
-      env,
-      stdio: 'inherit',
-      silent: false
-    });
-    
-    child.on('exit', (code) => {
-      console.log(`${CONFIG.colors.yellow}Agent exited with code: ${code}${CONFIG.colors.reset}`);
-      
-      // Update session status
-      sessionData.agentStopped = new Date().toISOString();
-      sessionData.status = 'stopped';
-      fs.writeFileSync(lockFile, JSON.stringify(sessionData, null, 2));
-    });
-    
-    // Handle graceful shutdown
-    process.on('SIGINT', () => {
-      console.log(`\n${CONFIG.colors.yellow}Stopping agent...${CONFIG.colors.reset}`);
-      child.kill('SIGINT');
-      setTimeout(() => process.exit(0), 1000);
-    });
-    
-    return true;
+    try {
+        const child = fork(agentScript, [], {
+          cwd: sessionData.worktreePath,
+          env,
+          stdio: 'inherit',
+          silent: false
+        });
+        
+        child.on('error', (err) => {
+            console.error(`\n${CONFIG.colors.red}Failed to start agent process: ${err.message}${CONFIG.colors.reset}`);
+            if (err.code === 'ENOENT') {
+                console.error(`${CONFIG.colors.yellow}This usually means the worktree directory is missing or inaccessible.${CONFIG.colors.reset}`);
+            }
+            
+            // Mark as stopped
+            sessionData.status = 'stopped';
+            sessionData.agentPid = null;
+            fs.writeFileSync(lockFile, JSON.stringify(sessionData, null, 2));
+        });
+        
+        child.on('exit', (code) => {
+          console.log(`${CONFIG.colors.yellow}Agent exited with code: ${code}${CONFIG.colors.reset}`);
+          
+          // Update session status
+          sessionData.agentStopped = new Date().toISOString();
+          sessionData.status = 'stopped';
+          fs.writeFileSync(lockFile, JSON.stringify(sessionData, null, 2));
+        });
+        
+        // Handle graceful shutdown
+        process.on('SIGINT', () => {
+          console.log(`\n${CONFIG.colors.yellow}Stopping agent...${CONFIG.colors.reset}`);
+          if (child && !child.killed) {
+             child.kill('SIGINT');
+          }
+          setTimeout(() => process.exit(0), 1000);
+        });
+        
+        return true;
+    } catch (err) {
+        console.error(`${CONFIG.colors.red}Critical error starting agent: ${err.message}${CONFIG.colors.reset}`);
+        return false;
+    }
   }
 
   /**
@@ -2423,6 +2453,29 @@ The DevOps agent is monitoring this worktree for changes.
   async recoverSessions() {
     console.log(`\n${CONFIG.colors.yellow}Scanning for recoverable sessions...${CONFIG.colors.reset}`);
     
+    // First, verify existing locks
+    if (fs.existsSync(this.locksPath)) {
+      const locks = fs.readdirSync(this.locksPath);
+      for (const lockFile of locks) {
+        if (!lockFile.endsWith('.lock')) continue;
+        
+        const lockPath = path.join(this.locksPath, lockFile);
+        try {
+          const sessionData = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+          
+          // Check if worktree actually exists
+          if (sessionData.worktreePath && !fs.existsSync(sessionData.worktreePath)) {
+             console.log(`${CONFIG.colors.red}Found invalid lock for ${sessionData.sessionId}: Worktree missing${CONFIG.colors.reset}`);
+             console.log(`Removing broken lock file...`);
+             fs.unlinkSync(lockPath);
+          }
+        } catch (e) {
+          // Invalid JSON or file read error, remove it
+          try { fs.unlinkSync(lockPath); } catch (err) {}
+        }
+      }
+    }
+
     if (!fs.existsSync(this.worktreesPath)) {
       console.log('No worktrees directory found.');
       return 0;
