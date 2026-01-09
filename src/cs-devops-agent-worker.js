@@ -2133,7 +2133,14 @@ console.log();
         
       case 'settings':
       case 'config':
+      case 'info':
         await handleSettingsCommand();
+        // Also show extra info not currently in handleSettingsCommand
+        console.log("\nSession Configuration:");
+        console.log(`  Base Branch: ${process.env.AC_BASE_BRANCH || 'HEAD'}`);
+        console.log(`  Rebase Interval: ${process.env.AC_REBASE_INTERVAL || '0'} hours`);
+        console.log(`  Auto-Push: ${PUSH ? 'Enabled' : 'Disabled'}`);
+        console.log(`  Contract Updates: ${fs.existsSync(path.join(process.cwd(), 'scripts', 'contract-automation', 'update-contracts.js')) ? 'Enabled (Intelligent)' : 'Basic'}`);
         break;
         
       case 'verbose':
