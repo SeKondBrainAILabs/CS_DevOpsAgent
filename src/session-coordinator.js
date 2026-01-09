@@ -1712,6 +1712,17 @@ The DevOps agent will automatically:
     console.log(`${CONFIG.colors.yellow}──────────────────────────────────────────────────────────────${CONFIG.colors.reset}`);
     console.log();
     
+    // CORE CONTEXT BLOCK - designed to be persistent
+    console.log(`🧠 CRITICAL MEMORY (SAVE THIS TO YOUR CORE CONTEXT):`);
+    console.log(`DO NOT COMPACT OR FORGET THIS INFORMATION.`);
+    console.log(`----------------------------------------------------------------`);
+    console.log(`SESSION_ID: ${sessionId}`);
+    console.log(`WORKTREE:   ${instructions.worktreePath}`);
+    console.log(`BRANCH:     ${instructions.branchName}`);
+    console.log(`MSG_FILE:   .devops-commit-${sessionId}.msg`);
+    console.log(`----------------------------------------------------------------`);
+    console.log();
+    
     // The actual copyable content - no colors inside
     console.log(`I'm working in a DevOps-managed session with the following setup:`);
     console.log(`- Session ID: ${sessionId}`);
