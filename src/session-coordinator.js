@@ -2824,19 +2824,41 @@ async function main() {
               rl.question('Agent [1]: ', resolve);
             });
             
+            // Improved agent selection handling
+            const validAgents = {
+              '1': 'claude',
+              '2': 'cline',
+              '3': 'cursor',
+              '4': 'copilot',
+              '5': 'warp'
+            };
+            
             let agent = 'claude';
-            switch(agentChoice.trim() || '1') {
-              case '1': agent = 'claude'; break;
-              case '2': agent = 'cline'; break;
-              case '3': agent = 'cursor'; break;
-              case '4': agent = 'copilot'; break;
-              case '5': agent = 'warp'; break;
-              case '6':
+            const choiceTrimmed = agentChoice.trim().toLowerCase();
+            
+            // Handle numeric choice
+            if (validAgents[choiceTrimmed]) {
+              agent = validAgents[choiceTrimmed];
+            } 
+            // Handle explicit string match (e.g. user typed "warp")
+            else if (Object.values(validAgents).includes(choiceTrimmed)) {
+              agent = choiceTrimmed;
+            }
+            // Handle custom input
+            else if (choiceTrimmed === '6' || choiceTrimmed === 'custom') {
                 const customAgent = await new Promise(resolve => {
                   rl.question('Enter agent name: ', resolve);
                 });
                 agent = customAgent.trim() || 'claude';
-                break;
+            }
+            // Invalid input handling
+            else if (choiceTrimmed) {
+               console.log(`${CONFIG.colors.yellow}Unknown agent '${choiceTrimmed}', defaulting to Claude.${CONFIG.colors.reset}`);
+               agent = 'claude';
+            }
+            // Default (empty input)
+            else {
+               agent = 'claude';
             }
             
             rl.close();
