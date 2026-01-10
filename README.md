@@ -196,6 +196,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
-**Built with ❤️ by [SecondBrain Labs](https://secondbrain.ai)**
+**Built with ❤️ by [SeKondBrain AI Labs](https://sekondbrain.ai)**
 
 *Making AI-powered development safe, efficient, and conflict-free.*
