@@ -125,11 +125,14 @@ export const IPC = {
   INSTANCE_LIST: 'instance:list',
   INSTANCE_GET: 'instance:get',
   INSTANCE_DELETE: 'instance:delete',
+  INSTANCE_CLEAR_ALL: 'instance:clear-all',
   RECENT_REPOS_LIST: 'recent-repos:list',
   RECENT_REPOS_ADD: 'recent-repos:add',
   RECENT_REPOS_REMOVE: 'recent-repos:remove',
   // Events (main → renderer)
   INSTANCE_STATUS_CHANGED: 'instance:status-changed',
+  INSTANCE_DELETED: 'instance:deleted',
+  INSTANCES_CLEARED: 'instances:cleared',
 
   // ==========================================================================
   // SESSION RECOVERY CHANNELS

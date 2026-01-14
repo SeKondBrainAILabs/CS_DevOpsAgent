@@ -300,6 +300,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.agentInstance.deleteInstance(instanceId);
   });
 
+  ipcMain.handle(IPC.INSTANCE_CLEAR_ALL, async () => {
+    return services.agentInstance.clearAllInstances();
+  });
+
   ipcMain.handle(IPC.RECENT_REPOS_LIST, async () => {
     return services.agentInstance.getRecentRepos();
   });

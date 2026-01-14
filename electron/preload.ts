@@ -364,6 +364,9 @@ const api = {
     delete: (instanceId: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.INSTANCE_DELETE, instanceId),
 
+    clearAll: (): Promise<IpcResult<{ count: number }>> =>
+      ipcRenderer.invoke(IPC.INSTANCE_CLEAR_ALL),
+
     getRecentRepos: (): Promise<IpcResult<RecentRepo[]>> =>
       ipcRenderer.invoke(IPC.RECENT_REPOS_LIST),
 
@@ -377,6 +380,18 @@ const api = {
       const handler = (_event: IpcRendererEvent, instance: AgentInstance) => callback(instance);
       ipcRenderer.on(IPC.INSTANCE_STATUS_CHANGED, handler);
       return () => ipcRenderer.removeListener(IPC.INSTANCE_STATUS_CHANGED, handler);
+    },
+
+    onDeleted: (callback: (instanceId: string) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, instanceId: string) => callback(instanceId);
+      ipcRenderer.on(IPC.INSTANCE_DELETED, handler);
+      return () => ipcRenderer.removeListener(IPC.INSTANCE_DELETED, handler);
+    },
+
+    onCleared: (callback: () => void): (() => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(IPC.INSTANCES_CLEARED, handler);
+      return () => ipcRenderer.removeListener(IPC.INSTANCES_CLEARED, handler);
     },
   },
 
