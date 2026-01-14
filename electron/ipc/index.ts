@@ -271,9 +271,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   ipcMain.handle(IPC.INSTANCE_CREATE, async (_, config) => {
     const result = await services.agentInstance.createInstance(config);
 
-    // Auto-start file watcher for the new session
+    // Auto-start file watcher for the new session (use worktree if available)
     if (result.success && result.data?.sessionId) {
-      services.watcher.startWithPath(result.data.sessionId, config.repoPath).catch((err) => {
+      const watchPath = result.data.worktreePath || config.repoPath;
+      services.watcher.startWithPath(result.data.sessionId, watchPath).catch((err) => {
         console.warn('[IPC] Failed to start watcher for new session:', err);
       });
     }
@@ -518,6 +519,28 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   ipcMain.on(IPC.APP_QUIT, () => {
     app.quit();
   });
+
+  // Start watchers for existing sessions
+  startWatchersForExistingSessions(services);
+}
+
+/**
+ * Start file watchers for all existing sessions
+ */
+async function startWatchersForExistingSessions(services: Services): Promise<void> {
+  const result = services.agentInstance.listInstances();
+  if (result.success && result.data) {
+    console.log(`[IPC] Starting watchers for ${result.data.length} existing sessions`);
+    for (const instance of result.data) {
+      // Use worktree path if available, otherwise fallback to repo path
+      const watchPath = instance.worktreePath || instance.config?.repoPath;
+      if (watchPath) {
+        services.watcher.startWithPath(instance.sessionId, watchPath).catch((err) => {
+          console.warn(`[IPC] Failed to start watcher for session ${instance.sessionId}:`, err);
+        });
+      }
+    }
+  }
 }
 
 /**

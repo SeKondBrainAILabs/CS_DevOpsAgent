@@ -248,6 +248,9 @@ ${DEVOPS_KIT_DIR}/
         if (!gitignore.includes('.devops-commit-')) {
           gitignore += '\n# DevOps commit message files\n.devops-commit-*.msg\n';
         }
+        if (!gitignore.includes('local_deploy/')) {
+          gitignore += '\n# Local worktrees for isolated development\nlocal_deploy/\n';
+        }
         await writeFile(gitignorePath, gitignore);
       } catch {
         // Ignore gitignore errors
@@ -340,8 +343,26 @@ ${DEVOPS_KIT_DIR}/
       // Create the branch if it doesn't exist
       await this.createBranchIfNeeded(config);
 
-      // Create session file so it appears in the dashboard
-      await this.createSessionFile(config, sessionId);
+      // Create worktree for isolated development
+      const worktreePath = await this.createWorktreeIfNeeded(config);
+
+      // Update instance with worktree path
+      instance.worktreePath = worktreePath;
+
+      // Regenerate instructions with worktree path
+      if (worktreePath !== config.repoPath) {
+        const updatedInstructionVars: InstructionVars = {
+          ...instructionVars,
+          repoPath: worktreePath,
+        };
+        instance.instructions = getAgentInstructions(config.agentType, updatedInstructionVars);
+        if (config.agentType === 'claude') {
+          instance.prompt = generateClaudePrompt(updatedInstructionVars);
+        }
+      }
+
+      // Create session file so it appears in the dashboard (use worktree path)
+      await this.createSessionFile({ ...config, repoPath: config.repoPath }, sessionId, worktreePath);
 
       // Emit status change event
       this.emitStatusChange(instance);
@@ -363,7 +384,7 @@ ${DEVOPS_KIT_DIR}/
   /**
    * Create session file in .kanvas/sessions/ so it appears in dashboard
    */
-  private async createSessionFile(config: AgentInstanceConfig, sessionId: string): Promise<void> {
+  private async createSessionFile(config: AgentInstanceConfig, sessionId: string, worktreePath?: string): Promise<void> {
     try {
       const sessionsDir = join(config.repoPath, KANVAS_PATHS.sessions);
 
@@ -382,7 +403,7 @@ ${DEVOPS_KIT_DIR}/
         agentType: config.agentType,
         task: config.taskDescription || `${config.agentType} session`,
         branchName: config.branchName,
-        worktreePath: config.repoPath,
+        worktreePath: worktreePath || config.repoPath,
         repoPath: config.repoPath,
         status: 'idle' as const,
         created: now,
@@ -455,6 +476,44 @@ ${DEVOPS_KIT_DIR}/
     } catch (error) {
       console.warn(`[AgentInstanceService] Could not create branch: ${error}`);
       // Don't fail the whole operation if branch creation fails
+    }
+  }
+
+  /**
+   * Create worktree for isolated development
+   * Creates worktree in local_deploy/{branchName} directory
+   */
+  private async createWorktreeIfNeeded(config: AgentInstanceConfig): Promise<string> {
+    try {
+      const { execa } = await import('execa');
+
+      // Worktree directory: local_deploy/{branchName}
+      const worktreeDir = join(config.repoPath, 'local_deploy', config.branchName);
+
+      // Check if worktree already exists
+      if (existsSync(worktreeDir)) {
+        console.log(`[AgentInstanceService] Worktree already exists at ${worktreeDir}`);
+        return worktreeDir;
+      }
+
+      // Ensure local_deploy directory exists
+      const localDeployDir = join(config.repoPath, 'local_deploy');
+      if (!existsSync(localDeployDir)) {
+        await mkdir(localDeployDir, { recursive: true });
+      }
+
+      // Create worktree
+      await execa('git', ['worktree', 'add', worktreeDir, config.branchName], { cwd: config.repoPath });
+      console.log(`[AgentInstanceService] Created worktree at ${worktreeDir} for branch ${config.branchName}`);
+
+      // Initialize .S9N_KIT_DevOpsAgent in the worktree
+      await this.initializeKanvasDirectory(worktreeDir);
+
+      return worktreeDir;
+    } catch (error) {
+      console.warn(`[AgentInstanceService] Could not create worktree: ${error}`);
+      // Fall back to using main repo path
+      return config.repoPath;
     }
   }
 

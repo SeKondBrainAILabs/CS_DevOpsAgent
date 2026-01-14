@@ -101,7 +101,8 @@ export class WatcherService extends BaseService {
       });
 
       this.watchers.set(sessionId, instance);
-      this.activityService.log(sessionId, 'success', 'File watcher started');
+      console.log(`[WatcherService] Started watching ${worktreePath} for session ${sessionId}`);
+      this.activityService.log(sessionId, 'success', `File watcher started for ${worktreePath}`);
     }, 'WATCHER_START_FAILED');
   }
 
@@ -143,6 +144,7 @@ export class WatcherService extends BaseService {
       type,
       timestamp: new Date().toISOString(),
     };
+    console.log(`[WatcherService] File ${type}: ${relativePath} (session: ${sessionId})`);
     this.emitToRenderer(IPC.FILE_CHANGED, event);
     this.activityService.log(sessionId, 'file', `File ${type}: ${relativePath}`);
 
