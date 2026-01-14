@@ -5,7 +5,7 @@
  * Follows SeKondBrain design aesthetics
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AgentList } from '../features/AgentList';
 import { KanvasLogo } from '../ui/KanvasLogo';
 import { useAgentStore, selectSessionsByAgent } from '../../store/agentStore';
@@ -282,6 +282,10 @@ function RepoSessionGroup({
 
 /**
  * SessionCard - Individual session display within repo group
+ * Status indicator colors:
+ * - Green (pulsing): Active - changes in last 30 seconds
+ * - Orange: Dormant - no recent activity
+ * - Red: Error/damaged config
  */
 function SessionCard({
   session,
@@ -295,17 +299,58 @@ function SessionCard({
   onDelete: () => void;
 }): React.ReactElement {
   const [showConfirm, setShowConfirm] = useState(false);
+  const [, forceUpdate] = useState(0);
+  const recentActivity = useAgentStore((state) => state.recentActivity);
 
-  const statusConfig: Record<string, { color: string; label: string }> = {
-    idle: { color: 'bg-gray-400', label: 'Idle' },
-    active: { color: 'bg-green-500 animate-pulse', label: 'Active' },
-    watching: { color: 'bg-kanvas-blue', label: 'Watching' },
-    paused: { color: 'bg-yellow-500', label: 'Paused' },
-    error: { color: 'bg-red-500', label: 'Error' },
-    closed: { color: 'bg-gray-300', label: 'Closed' },
+  // Force re-render every 10 seconds to update activity status
+  useEffect(() => {
+    const interval = setInterval(() => forceUpdate(n => n + 1), 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Calculate activity-based status
+  const getActivityStatus = (): { color: string; label: string; title: string } => {
+    // Check for error/damaged config
+    if (session.status === 'error') {
+      return { color: 'bg-red-500', label: 'Error', title: 'Session has errors' };
+    }
+
+    // Get last activity for this session
+    const sessionActivity = recentActivity.filter(a => a.sessionId === session.sessionId);
+    const lastActivity = sessionActivity[0]; // Most recent first
+
+    if (lastActivity) {
+      const lastActivityTime = new Date(lastActivity.timestamp).getTime();
+      const now = Date.now();
+      const secondsSinceActivity = (now - lastActivityTime) / 1000;
+
+      if (secondsSinceActivity < 30) {
+        return {
+          color: 'bg-green-500 animate-pulse',
+          label: 'Active',
+          title: `Active - last activity ${Math.round(secondsSinceActivity)}s ago`
+        };
+      }
+    }
+
+    // Check session updated timestamp as fallback
+    if (session.updated) {
+      const updatedTime = new Date(session.updated).getTime();
+      const secondsSinceUpdate = (Date.now() - updatedTime) / 1000;
+      if (secondsSinceUpdate < 30) {
+        return {
+          color: 'bg-green-500 animate-pulse',
+          label: 'Active',
+          title: 'Active - recently updated'
+        };
+      }
+    }
+
+    // Dormant - no recent activity
+    return { color: 'bg-orange-400', label: 'Dormant', title: 'Dormant - no recent activity' };
   };
 
-  const status = statusConfig[session.status] || statusConfig.idle;
+  const status = getActivityStatus();
 
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -331,7 +376,10 @@ function SessionCard({
       `}
     >
       <div className="flex items-start gap-2">
-        <span className={`w-2 h-2 mt-1.5 rounded-full flex-shrink-0 ${status.color}`} />
+        <span
+          className={`w-2 h-2 mt-1.5 rounded-full flex-shrink-0 ${status.color}`}
+          title={status.title}
+        />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <p className={`text-sm truncate flex-1 ${isSelected ? 'text-kanvas-blue font-medium' : 'text-text-primary'}`}>
