@@ -364,6 +364,9 @@ const api = {
     delete: (instanceId: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.INSTANCE_DELETE, instanceId),
 
+    restart: (sessionId: string): Promise<IpcResult<AgentInstance>> =>
+      ipcRenderer.invoke(IPC.INSTANCE_RESTART, sessionId),
+
     clearAll: (): Promise<IpcResult<{ count: number }>> =>
       ipcRenderer.invoke(IPC.INSTANCE_CLEAR_ALL),
 

@@ -539,6 +539,122 @@ ${DEVOPS_KIT_DIR}/
   }
 
   /**
+   * Restart an instance - reinitializes repo, creates new session with same config
+   */
+  async restartInstance(sessionId: string): Promise<IpcResult<AgentInstance>> {
+    try {
+      // Find instance by sessionId
+      let targetInstance: AgentInstance | undefined;
+      for (const instance of this.instances.values()) {
+        if (instance.sessionId === sessionId) {
+          targetInstance = instance;
+          break;
+        }
+      }
+
+      if (!targetInstance) {
+        return {
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: `Instance with session ${sessionId} not found`,
+          },
+        };
+      }
+
+      const config = targetInstance.config;
+      const oldInstanceId = targetInstance.id;
+
+      console.log(`[AgentInstanceService] Restarting session ${sessionId} in ${config.repoPath}`);
+
+      // Clean up old session files from .S9N_KIT_DevOpsAgent
+      await this.cleanupSessionFiles(config.repoPath, sessionId);
+
+      // Delete old instance
+      this.instances.delete(oldInstanceId);
+
+      // Re-initialize the .S9N_KIT_DevOpsAgent directory (ensures structure is correct)
+      const initResult = await this.initializeKanvasDirectory(config.repoPath);
+      if (!initResult.success) {
+        return {
+          success: false,
+          error: initResult.error || { code: 'INIT_ERROR', message: 'Failed to reinitialize directory' },
+        };
+      }
+
+      // Create new instance with same config (this generates new session ID)
+      const newInstance = await this.createInstance(config);
+
+      if (newInstance.success && newInstance.data) {
+        // Notify renderer of the restart (old session removed, new one added)
+        const windows = BrowserWindow.getAllWindows();
+        for (const win of windows) {
+          win.webContents.send('session:closed', sessionId);
+        }
+
+        console.log(`[AgentInstanceService] Session restarted: ${sessionId} -> ${newInstance.data.sessionId}`);
+      }
+
+      return newInstance;
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'RESTART_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to restart instance',
+        },
+      };
+    }
+  }
+
+  /**
+   * Clean up session files from .S9N_KIT_DevOpsAgent directory
+   */
+  private async cleanupSessionFiles(repoPath: string, sessionId: string): Promise<void> {
+    const { unlink } = await import('fs/promises');
+    const shortSessionId = sessionId.replace('sess_', '').slice(0, 8);
+
+    // Files to clean up
+    const filesToRemove = [
+      // Session file
+      join(repoPath, KANVAS_PATHS.sessions, `${sessionId}.json`),
+      // Activity log
+      join(repoPath, KANVAS_PATHS.activity, `${sessionId}.log`),
+      // Command file
+      join(repoPath, KANVAS_PATHS.commands, `${sessionId}.cmd`),
+      // Commit message file
+      join(repoPath, `.devops-commit-${shortSessionId}.msg`),
+    ];
+
+    // Also clean up any active edit declarations for this session
+    const activeEditsDir = join(repoPath, FILE_COORDINATION_PATHS.activeEdits);
+    if (existsSync(activeEditsDir)) {
+      try {
+        const editFiles = await readdir(activeEditsDir);
+        for (const file of editFiles) {
+          if (file.includes(shortSessionId)) {
+            filesToRemove.push(join(activeEditsDir, file));
+          }
+        }
+      } catch {
+        // Ignore errors reading active edits
+      }
+    }
+
+    // Remove files
+    for (const filePath of filesToRemove) {
+      try {
+        if (existsSync(filePath)) {
+          await unlink(filePath);
+          console.log(`[AgentInstanceService] Cleaned up: ${filePath}`);
+        }
+      } catch (error) {
+        console.warn(`[AgentInstanceService] Could not remove ${filePath}:`, error);
+      }
+    }
+  }
+
+  /**
    * Clear all instances and sessions
    */
   clearAllInstances(): IpcResult<{ count: number }> {

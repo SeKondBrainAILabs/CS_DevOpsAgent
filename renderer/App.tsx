@@ -90,11 +90,22 @@ export default function App(): React.ReactElement {
     }
   };
 
-  // Handle session restart (delete and recreate)
+  // Handle session restart - reinitializes repo, creates new session with same config
   const handleRestartSession = async (sessionId: string): Promise<void> => {
-    // For now, restart means delete - we can enhance this later to recreate with same config
-    await handleDeleteSession(sessionId);
-    // TODO: Optionally trigger CreateAgentWizard with pre-filled values
+    try {
+      const result = await window.api.instance?.restart?.(sessionId);
+      if (result?.success && result.data) {
+        // Remove old session from store
+        removeReportedSession(sessionId);
+        setSelectedSession(null);
+        // The new session will be emitted via IPC and added to store automatically
+        console.log(`Session restarted: ${sessionId} -> ${result.data.sessionId}`);
+      } else {
+        console.error('Failed to restart session:', result?.error);
+      }
+    } catch (error) {
+      console.error('Failed to restart session:', error);
+    }
   };
 
   // Determine what to show in main content
