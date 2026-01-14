@@ -27,6 +27,25 @@ export function Sidebar(): React.ReactElement {
     ? useAgentStore((state) => selectSessionsByAgent(state, selectedAgentId))
     : Array.from(reportedSessions.values());
 
+  const removeReportedSession = useAgentStore((state) => state.removeReportedSession);
+
+  // Handle session deletion
+  const handleDeleteSession = async (sessionId: string): Promise<void> => {
+    try {
+      const result = await window.api.instance?.delete?.(sessionId);
+      if (result?.success) {
+        // Remove from store
+        removeReportedSession(sessionId);
+        // Clear selection if deleted session was selected
+        if (selectedSessionId === sessionId) {
+          setSelectedSession(null);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to delete session:', error);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col bg-surface">
       {/* Logo */}
@@ -77,6 +96,7 @@ export function Sidebar(): React.ReactElement {
             sessions={sessions}
             selectedSessionId={selectedSessionId}
             onSelectSession={setSelectedSession}
+            onDeleteSession={handleDeleteSession}
           />
         )}
       </div>
@@ -119,9 +139,10 @@ interface SessionListProps {
   sessions: SessionReport[];
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string | null) => void;
+  onDeleteSession: (sessionId: string) => void;
 }
 
-function SessionList({ sessions, selectedSessionId, onSelectSession }: SessionListProps): React.ReactElement {
+function SessionList({ sessions, selectedSessionId, onSelectSession, onDeleteSession }: SessionListProps): React.ReactElement {
   if (sessions.length === 0) {
     return (
       <div className="text-center py-8">
@@ -180,6 +201,7 @@ function SessionList({ sessions, selectedSessionId, onSelectSession }: SessionLi
             sessions={repoSessions}
             selectedSessionId={selectedSessionId}
             onSelectSession={onSelectSession}
+            onDeleteSession={onDeleteSession}
           />
         );
       })}
@@ -196,12 +218,14 @@ function RepoSessionGroup({
   sessions,
   selectedSessionId,
   onSelectSession,
+  onDeleteSession,
 }: {
   repoName: string;
   repoPath: string;
   sessions: SessionReport[];
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string | null) => void;
+  onDeleteSession: (sessionId: string) => void;
 }): React.ReactElement {
   const [isExpanded, setIsExpanded] = useState(true);
 
@@ -247,6 +271,7 @@ function RepoSessionGroup({
               onClick={() => onSelectSession(
                 selectedSessionId === session.sessionId ? null : session.sessionId
               )}
+              onDelete={() => onDeleteSession(session.sessionId)}
             />
           ))}
         </div>
@@ -262,11 +287,15 @@ function SessionCard({
   session,
   isSelected,
   onClick,
+  onDelete,
 }: {
   session: SessionReport;
   isSelected: boolean;
   onClick: () => void;
+  onDelete: () => void;
 }): React.ReactElement {
+  const [showConfirm, setShowConfirm] = useState(false);
+
   const statusConfig: Record<string, { color: string; label: string }> = {
     idle: { color: 'bg-gray-400', label: 'Idle' },
     active: { color: 'bg-green-500 animate-pulse', label: 'Active' },
@@ -278,11 +307,23 @@ function SessionCard({
 
   const status = statusConfig[session.status] || statusConfig.idle;
 
+  const handleDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (showConfirm) {
+      onDelete();
+      setShowConfirm(false);
+    } else {
+      setShowConfirm(true);
+      // Auto-hide confirm after 3 seconds
+      setTimeout(() => setShowConfirm(false), 3000);
+    }
+  };
+
   return (
     <div
       onClick={onClick}
       className={`
-        px-3 py-2.5 transition-colors cursor-pointer
+        px-3 py-2.5 transition-colors cursor-pointer group
         ${isSelected
           ? 'bg-kanvas-blue/10 border-l-2 border-kanvas-blue'
           : 'hover:bg-surface-secondary border-l-2 border-transparent'
@@ -311,11 +352,27 @@ function SessionCard({
             )}
           </div>
         </div>
-        {isSelected && (
-          <svg className="w-4 h-4 text-kanvas-blue flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-        )}
+        {/* Delete button - shows on hover or when selected */}
+        <button
+          onClick={handleDelete}
+          className={`
+            flex-shrink-0 p-1 rounded transition-all
+            ${showConfirm
+              ? 'bg-red-500 text-white'
+              : 'text-text-secondary hover:text-red-500 hover:bg-red-500/10 opacity-0 group-hover:opacity-100'
+            }
+            ${isSelected ? 'opacity-100' : ''}
+          `}
+          title={showConfirm ? 'Click again to confirm' : 'Delete session'}
+        >
+          {showConfirm ? (
+            <span className="text-xs px-1">Delete?</span>
+          ) : (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          )}
+        </button>
       </div>
     </div>
   );
