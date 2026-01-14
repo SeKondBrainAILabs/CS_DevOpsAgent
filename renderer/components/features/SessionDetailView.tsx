@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import type { SessionReport } from '../../../shared/agent-protocol';
 import type { AgentInstance, ContractType, Contract } from '../../../shared/types';
-import { ActivityLog } from './ActivityLog';
+import { useAgentStore } from '../../store/agentStore';
 
 type DetailTab = 'prompt' | 'activity' | 'files' | 'contracts';
 
@@ -176,7 +176,7 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
           />
         )}
         {activeTab === 'activity' && (
-          <ActivityLog sessionId={session.sessionId} />
+          <ActivityTab sessionId={session.sessionId} />
         )}
         {activeTab === 'files' && (
           <FilesTab session={session} />
@@ -274,6 +274,88 @@ function InfoCard({ label, value, mono = false }: { label: string; value: string
       <div className="text-xs text-text-secondary mb-1">{label}</div>
       <div className={`text-sm text-text-primary truncate ${mono ? 'font-mono' : ''}`}>
         {value}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * ActivityTab - Shows activity log for this session
+ */
+function ActivityTab({ sessionId }: { sessionId: string }): React.ReactElement {
+  const recentActivity = useAgentStore((state) => state.recentActivity);
+
+  // Filter activity for this session
+  const sessionActivity = recentActivity.filter(a => a.sessionId === sessionId);
+
+  if (sessionActivity.length === 0) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-surface-tertiary flex items-center justify-center">
+            <svg className="w-8 h-8 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+          </div>
+          <h3 className="text-lg font-medium text-text-primary mb-2">No Activity Yet</h3>
+          <p className="text-sm text-text-secondary max-w-xs">
+            Activity will appear here as the agent reports progress.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const formatTime = (timestamp: string): string => {
+    return new Date(timestamp).toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  };
+
+  const logTypeStyles: Record<string, { color: string; bg: string }> = {
+    success: { color: 'text-green-600', bg: 'bg-green-50' },
+    error: { color: 'text-red-600', bg: 'bg-red-50' },
+    warning: { color: 'text-yellow-600', bg: 'bg-yellow-50' },
+    info: { color: 'text-kanvas-blue', bg: 'bg-kanvas-blue/5' },
+    commit: { color: 'text-purple-600', bg: 'bg-purple-50' },
+    file: { color: 'text-text-secondary', bg: 'bg-surface-tertiary' },
+    git: { color: 'text-orange-600', bg: 'bg-orange-50' },
+  };
+
+  return (
+    <div className="h-full overflow-auto">
+      <div className="divide-y divide-border">
+        {sessionActivity.map((entry, index) => {
+          const style = logTypeStyles[entry.type] || logTypeStyles.info;
+          return (
+            <div
+              key={`${entry.timestamp}-${index}`}
+              className="px-4 py-3 hover:bg-surface-secondary transition-colors"
+            >
+              <div className="flex items-start gap-3">
+                <div className={`flex-shrink-0 w-6 h-6 rounded-full ${style.bg} flex items-center justify-center mt-0.5`}>
+                  <span className={`text-xs font-bold ${style.color}`}>
+                    {entry.type.charAt(0).toUpperCase()}
+                  </span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-text-primary break-words">{entry.message}</p>
+                  <span className="text-xs text-text-secondary">{formatTime(entry.timestamp)}</span>
+                  {entry.details && Object.keys(entry.details).length > 0 && (
+                    <div className="mt-2 p-2 rounded-lg bg-surface-tertiary">
+                      <pre className="text-xs text-text-secondary font-mono whitespace-pre-wrap break-all">
+                        {JSON.stringify(entry.details, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

@@ -97,9 +97,13 @@ export default function App(): React.ReactElement {
       if (result?.success && result.data) {
         // Remove old session from store
         removeReportedSession(sessionId);
-        setSelectedSession(null);
-        // The new session will be emitted via IPC and added to store automatically
-        console.log(`Session restarted: ${sessionId} -> ${result.data.sessionId}`);
+        // Select the new session (it will be added to store via IPC event)
+        const newSessionId = result.data.sessionId;
+        if (newSessionId) {
+          // Small delay to allow IPC event to populate the store
+          setTimeout(() => setSelectedSession(newSessionId), 100);
+        }
+        console.log(`Session restarted: ${sessionId} -> ${newSessionId}`);
       } else {
         console.error('Failed to restart session:', result?.error);
       }
