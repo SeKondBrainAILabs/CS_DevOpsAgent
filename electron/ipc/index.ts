@@ -269,7 +269,16 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   // Create and manage agent instances from Kanvas dashboard
   // ==========================================================================
   ipcMain.handle(IPC.INSTANCE_CREATE, async (_, config) => {
-    return services.agentInstance.createInstance(config);
+    const result = await services.agentInstance.createInstance(config);
+
+    // Auto-start file watcher for the new session
+    if (result.success && result.data?.sessionId) {
+      services.watcher.startWithPath(result.data.sessionId, config.repoPath).catch((err) => {
+        console.warn('[IPC] Failed to start watcher for new session:', err);
+      });
+    }
+
+    return result;
   });
 
   ipcMain.handle(IPC.INSTANCE_VALIDATE_REPO, async (_, path: string) => {
@@ -297,11 +306,25 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   });
 
   ipcMain.handle(IPC.INSTANCE_DELETE, async (_, instanceId: string) => {
+    // Stop watcher before deleting
+    await services.watcher.stop(instanceId).catch(() => {});
     return services.agentInstance.deleteInstance(instanceId);
   });
 
   ipcMain.handle(IPC.INSTANCE_RESTART, async (_, sessionId: string) => {
-    return services.agentInstance.restartInstance(sessionId);
+    // Stop old watcher
+    await services.watcher.stop(sessionId).catch(() => {});
+
+    const result = await services.agentInstance.restartInstance(sessionId);
+
+    // Start watcher for new session
+    if (result.success && result.data?.sessionId && result.data?.config?.repoPath) {
+      services.watcher.startWithPath(result.data.sessionId, result.data.config.repoPath).catch((err) => {
+        console.warn('[IPC] Failed to start watcher for restarted session:', err);
+      });
+    }
+
+    return result;
   });
 
   ipcMain.handle(IPC.INSTANCE_CLEAR_ALL, async () => {

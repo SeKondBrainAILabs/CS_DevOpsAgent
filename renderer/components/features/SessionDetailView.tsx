@@ -281,31 +281,19 @@ function InfoCard({ label, value, mono = false }: { label: string; value: string
 
 /**
  * ActivityTab - Shows activity log for this session
+ * Includes verbose mode toggle to show/hide file changes and debug info
  */
 function ActivityTab({ sessionId }: { sessionId: string }): React.ReactElement {
+  const [verboseMode, setVerboseMode] = useState(false);
   const recentActivity = useAgentStore((state) => state.recentActivity);
 
   // Filter activity for this session
   const sessionActivity = recentActivity.filter(a => a.sessionId === sessionId);
 
-  if (sessionActivity.length === 0) {
-    return (
-      <div className="h-full flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-surface-tertiary flex items-center justify-center">
-            <svg className="w-8 h-8 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-          </div>
-          <h3 className="text-lg font-medium text-text-primary mb-2">No Activity Yet</h3>
-          <p className="text-sm text-text-secondary max-w-xs">
-            Activity will appear here as the agent reports progress.
-          </p>
-        </div>
-      </div>
-    );
-  }
+  // In non-verbose mode, hide file changes to reduce noise
+  const filteredActivity = verboseMode
+    ? sessionActivity
+    : sessionActivity.filter(a => a.type !== 'file');
 
   const formatTime = (timestamp: string): string => {
     return new Date(timestamp).toLocaleTimeString('en-US', {
@@ -315,47 +303,106 @@ function ActivityTab({ sessionId }: { sessionId: string }): React.ReactElement {
     });
   };
 
-  const logTypeStyles: Record<string, { color: string; bg: string }> = {
-    success: { color: 'text-green-600', bg: 'bg-green-50' },
-    error: { color: 'text-red-600', bg: 'bg-red-50' },
-    warning: { color: 'text-yellow-600', bg: 'bg-yellow-50' },
-    info: { color: 'text-kanvas-blue', bg: 'bg-kanvas-blue/5' },
-    commit: { color: 'text-purple-600', bg: 'bg-purple-50' },
-    file: { color: 'text-text-secondary', bg: 'bg-surface-tertiary' },
-    git: { color: 'text-orange-600', bg: 'bg-orange-50' },
+  const logTypeStyles: Record<string, { color: string; bg: string; label: string }> = {
+    success: { color: 'text-green-600', bg: 'bg-green-50', label: 'Success' },
+    error: { color: 'text-red-600', bg: 'bg-red-50', label: 'Error' },
+    warning: { color: 'text-yellow-600', bg: 'bg-yellow-50', label: 'Warning' },
+    info: { color: 'text-kanvas-blue', bg: 'bg-kanvas-blue/5', label: 'Info' },
+    commit: { color: 'text-purple-600', bg: 'bg-purple-50', label: 'Commit' },
+    file: { color: 'text-text-secondary', bg: 'bg-surface-tertiary', label: 'File' },
+    git: { color: 'text-orange-600', bg: 'bg-orange-50', label: 'Git' },
   };
 
+  const fileChangeCount = sessionActivity.filter(a => a.type === 'file').length;
+
   return (
-    <div className="h-full overflow-auto">
-      <div className="divide-y divide-border">
-        {sessionActivity.map((entry, index) => {
-          const style = logTypeStyles[entry.type] || logTypeStyles.info;
-          return (
+    <div className="h-full flex flex-col">
+      {/* Header with verbose toggle */}
+      <div className="px-4 py-3 border-b border-border bg-surface flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium text-text-primary">Activity Log</span>
+          <span className="text-xs px-2 py-0.5 rounded-full bg-surface-tertiary text-text-secondary">
+            {filteredActivity.length} events
+          </span>
+          {!verboseMode && fileChangeCount > 0 && (
+            <span className="text-xs text-text-secondary">
+              ({fileChangeCount} file changes hidden)
+            </span>
+          )}
+        </div>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <span className="text-xs text-text-secondary">Verbose</span>
+          <div
+            onClick={() => setVerboseMode(!verboseMode)}
+            className={`relative w-9 h-5 rounded-full transition-colors ${
+              verboseMode ? 'bg-kanvas-blue' : 'bg-surface-tertiary'
+            }`}
+          >
             <div
-              key={`${entry.timestamp}-${index}`}
-              className="px-4 py-3 hover:bg-surface-secondary transition-colors"
-            >
-              <div className="flex items-start gap-3">
-                <div className={`flex-shrink-0 w-6 h-6 rounded-full ${style.bg} flex items-center justify-center mt-0.5`}>
-                  <span className={`text-xs font-bold ${style.color}`}>
-                    {entry.type.charAt(0).toUpperCase()}
-                  </span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-text-primary break-words">{entry.message}</p>
-                  <span className="text-xs text-text-secondary">{formatTime(entry.timestamp)}</span>
-                  {entry.details && Object.keys(entry.details).length > 0 && (
-                    <div className="mt-2 p-2 rounded-lg bg-surface-tertiary">
-                      <pre className="text-xs text-text-secondary font-mono whitespace-pre-wrap break-all">
-                        {JSON.stringify(entry.details, null, 2)}
-                      </pre>
-                    </div>
-                  )}
-                </div>
+              className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
+                verboseMode ? 'translate-x-4' : 'translate-x-0.5'
+              }`}
+            />
+          </div>
+        </label>
+      </div>
+
+      {/* Activity list */}
+      <div className="flex-1 overflow-auto">
+        {filteredActivity.length === 0 ? (
+          <div className="h-full flex items-center justify-center">
+            <div className="text-center">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-surface-tertiary flex items-center justify-center">
+                <svg className="w-8 h-8 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                    d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
               </div>
+              <h3 className="text-lg font-medium text-text-primary mb-2">No Activity Yet</h3>
+              <p className="text-sm text-text-secondary max-w-xs">
+                {verboseMode
+                  ? 'Activity will appear here as the agent works.'
+                  : 'Enable verbose mode to see file changes, or wait for commits and status updates.'}
+              </p>
             </div>
-          );
-        })}
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {filteredActivity.map((entry, index) => {
+              const style = logTypeStyles[entry.type] || logTypeStyles.info;
+              return (
+                <div
+                  key={`${entry.timestamp}-${index}`}
+                  className="px-4 py-3 hover:bg-surface-secondary transition-colors"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className={`flex-shrink-0 w-6 h-6 rounded-full ${style.bg} flex items-center justify-center mt-0.5`}>
+                      <span className={`text-xs font-bold ${style.color}`}>
+                        {entry.type.charAt(0).toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm text-text-primary break-words flex-1">{entry.message}</p>
+                        <span className={`text-xs px-1.5 py-0.5 rounded ${style.bg} ${style.color}`}>
+                          {style.label}
+                        </span>
+                      </div>
+                      <span className="text-xs text-text-secondary">{formatTime(entry.timestamp)}</span>
+                      {entry.details && Object.keys(entry.details).length > 0 && (
+                        <div className="mt-2 p-2 rounded-lg bg-surface-tertiary">
+                          <pre className="text-xs text-text-secondary font-mono whitespace-pre-wrap break-all">
+                            {JSON.stringify(entry.details, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
