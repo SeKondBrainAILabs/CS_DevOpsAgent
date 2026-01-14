@@ -2,7 +2,7 @@
  * AgentInstanceService
  *
  * Manages creation of agent instances from Kanvas dashboard.
- * Handles repository validation, .kanvas directory initialization,
+ * Handles repository validation, .S9N_KIT_DevOpsAgent directory initialization,
  * and instruction generation for different agent types.
  */
 
@@ -13,7 +13,7 @@ import { join, basename } from 'path';
 import { BrowserWindow } from 'electron';
 import Store from 'electron-store';
 import { BaseService } from './BaseService';
-import { KANVAS_PATHS, FILE_COORDINATION_PATHS } from '../../shared/agent-protocol';
+import { KANVAS_PATHS, FILE_COORDINATION_PATHS, DEVOPS_KIT_DIR } from '../../shared/agent-protocol';
 import { getAgentInstructions, generateClaudePrompt, InstructionVars } from '../../shared/agent-instructions';
 import type {
   AgentType,
@@ -130,9 +130,9 @@ export class AgentInstanceService extends BaseService {
         // No remote configured
       }
 
-      // Check if .kanvas directory exists
-      const kanvasDir = join(repoPath, KANVAS_PATHS.baseDir);
-      const hasKanvasDir = existsSync(kanvasDir);
+      // Check if DevOps Kit directory exists
+      const devopsKitDir = join(repoPath, KANVAS_PATHS.baseDir);
+      const hasKanvasDir = existsSync(devopsKitDir);
 
       return {
         success: true,
@@ -158,15 +158,16 @@ export class AgentInstanceService extends BaseService {
   }
 
   /**
-   * Initialize .kanvas directory in a repository
+   * Initialize .S9N_KIT_DevOpsAgent directory in a repository
+   * This is the per-repo installation directory for the DevOps Agent
    */
   async initializeKanvasDirectory(repoPath: string): Promise<IpcResult<void>> {
     try {
-      const kanvasDir = join(repoPath, KANVAS_PATHS.baseDir);
+      const devopsKitDir = join(repoPath, KANVAS_PATHS.baseDir);
 
       // Create all required directories
       const dirs = [
-        // Kanvas dashboard directories
+        // DevOps Agent Kit directories
         KANVAS_PATHS.baseDir,
         KANVAS_PATHS.agents,
         KANVAS_PATHS.sessions,
@@ -195,14 +196,40 @@ export class AgentInstanceService extends BaseService {
           autoCommit: true,
           commitInterval: 30000,
           watchPatterns: ['**/*'],
-          ignorePatterns: ['node_modules/**', '.git/**', '.kanvas/**'],
+          ignorePatterns: ['node_modules/**', '.git/**', `${DEVOPS_KIT_DIR}/**`],
         },
       };
 
-      const configPath = join(kanvasDir, 'config.json');
+      const configPath = join(devopsKitDir, 'config.json');
       await writeFile(configPath, JSON.stringify(config, null, 2));
 
-      // Add .kanvas to .gitignore if not already there
+      // Create placeholder houserules.md (teams can commit this)
+      const houserulesPath = join(devopsKitDir, 'houserules.md');
+      if (!existsSync(houserulesPath)) {
+        const houserulesContent = `# House Rules for DevOps Agent
+
+This file defines team-specific rules and guidelines for AI agents working in this repository.
+You can commit this file to share rules with your team.
+
+## Code Style
+- Follow existing patterns in the codebase
+- Use TypeScript strict mode
+
+## Git Workflow
+- Create feature branches from main
+- Use conventional commit messages
+
+## Testing
+- Write tests for new features
+- Ensure existing tests pass before committing
+
+---
+*This file was auto-generated. Feel free to customize it for your team.*
+`;
+        await writeFile(houserulesPath, houserulesContent);
+      }
+
+      // Add .S9N_KIT_DevOpsAgent to .gitignore (except houserules.md)
       const gitignorePath = join(repoPath, '.gitignore');
       try {
         let gitignore = '';
@@ -210,11 +237,13 @@ export class AgentInstanceService extends BaseService {
           gitignore = await readFile(gitignorePath, 'utf-8');
         }
 
-        if (!gitignore.includes('.kanvas')) {
-          gitignore += '\n# Kanvas agent data (local only)\n.kanvas/\n';
-        }
-        if (!gitignore.includes('.file-coordination')) {
-          gitignore += '\n# File coordination (multi-agent locking)\n.file-coordination/\n';
+        // Add DevOps Kit directory but exclude houserules.md so it can be committed
+        if (!gitignore.includes(DEVOPS_KIT_DIR)) {
+          gitignore += `
+# DevOps Agent Kit (local data - do not commit)
+${DEVOPS_KIT_DIR}/
+!${DEVOPS_KIT_DIR}/houserules.md
+`;
         }
         if (!gitignore.includes('.devops-commit-')) {
           gitignore += '\n# DevOps commit message files\n.devops-commit-*.msg\n';
@@ -224,14 +253,14 @@ export class AgentInstanceService extends BaseService {
         // Ignore gitignore errors
       }
 
-      console.log(`[AgentInstanceService] Initialized .kanvas directory in ${repoPath}`);
+      console.log(`[AgentInstanceService] Initialized ${DEVOPS_KIT_DIR} directory in ${repoPath}`);
       return { success: true };
     } catch (error) {
       return {
         success: false,
         error: {
           code: 'INIT_ERROR',
-          message: error instanceof Error ? error.message : 'Failed to initialize Kanvas directory',
+          message: error instanceof Error ? error.message : 'Failed to initialize DevOps Kit directory',
         },
       };
     }
