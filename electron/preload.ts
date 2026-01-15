@@ -1200,6 +1200,86 @@ const api = {
     }): Promise<IpcResult<string>> =>
       ipcRenderer.invoke(IPC.ANALYSIS_EXPORT_GRAPH_JSON, graph),
 
+    // Phase 3: Infrastructure Parsing
+    parseInfrastructure: (repoPath: string): Promise<IpcResult<{
+      terraform: {
+        resources: Array<{
+          type: string;
+          name: string;
+          provider: string;
+          file: string;
+          line: number;
+          dependencies: string[];
+        }>;
+        providers: Array<{ name: string; version?: string; file: string; line: number }>;
+        variables: Array<{ name: string; type?: string; description?: string; file: string; line: number }>;
+        outputs: Array<{ name: string; value: string; description?: string; file: string; line: number }>;
+        modules: string[];
+      };
+      kubernetes: {
+        resources: Array<{
+          apiVersion: string;
+          kind: string;
+          name: string;
+          namespace?: string;
+          file: string;
+        }>;
+        namespaces: string[];
+        deployments: string[];
+        services: string[];
+        configMaps: string[];
+        secrets: string[];
+        ingresses: string[];
+      };
+      docker: {
+        composeFiles: Array<{
+          version?: string;
+          services: Array<{ name: string; image?: string; file: string }>;
+          networks: string[];
+          volumes: string[];
+          file: string;
+        }>;
+        services: Array<{ name: string; image?: string; depends_on?: string[]; file: string }>;
+        networks: string[];
+        volumes: string[];
+      };
+    }>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_PARSE_INFRA, repoPath),
+
+    parseTerraformFile: (filePath: string): Promise<IpcResult<{
+      resources: Array<{ type: string; name: string; provider: string; file: string; line: number }>;
+      providers: Array<{ name: string; version?: string; file: string; line: number }>;
+      variables: Array<{ name: string; type?: string; file: string; line: number }>;
+      outputs: Array<{ name: string; value: string; file: string; line: number }>;
+      modules: string[];
+    }>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_PARSE_TERRAFORM, filePath),
+
+    parseKubernetesFile: (filePath: string): Promise<IpcResult<Array<{
+      apiVersion: string;
+      kind: string;
+      name: string;
+      namespace?: string;
+      file: string;
+    }>>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_PARSE_KUBERNETES, filePath),
+
+    parseDockerComposeFile: (filePath: string): Promise<IpcResult<{
+      version?: string;
+      services: Array<{ name: string; image?: string; depends_on?: string[]; file: string }>;
+      networks: string[];
+      volumes: string[];
+      file: string;
+    } | null>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_PARSE_DOCKER_COMPOSE, filePath),
+
+    getInfraSummary: (analysis: unknown): Promise<IpcResult<{
+      terraform: { resourceCount: number; providerCount: number; moduleCount: number };
+      kubernetes: { resourceCount: number; namespaceCount: number };
+      docker: { serviceCount: number; networkCount: number };
+    }>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_GET_INFRA_SUMMARY, analysis),
+
     // Events
     onProgress: (callback: (progress: {
       phase: string;

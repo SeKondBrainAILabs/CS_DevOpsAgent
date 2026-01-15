@@ -9,6 +9,7 @@ import { APIExtractorService } from './APIExtractorService';
 import { SchemaExtractorService } from './SchemaExtractorService';
 import { EventTrackerService } from './EventTrackerService';
 import { DependencyGraphService } from './DependencyGraphService';
+import { InfraParserService } from './InfraParserService';
 
 // Service instances
 let astParserService: ASTParserService | null = null;
@@ -17,6 +18,7 @@ let apiExtractorService: APIExtractorService | null = null;
 let schemaExtractorService: SchemaExtractorService | null = null;
 let eventTrackerService: EventTrackerService | null = null;
 let dependencyGraphService: DependencyGraphService | null = null;
+let infraParserService: InfraParserService | null = null;
 
 /**
  * Initialize all analysis services
@@ -28,6 +30,7 @@ export async function initializeAnalysisServices(): Promise<{
   schemaExtractor: SchemaExtractorService;
   eventTracker: EventTrackerService;
   dependencyGraph: DependencyGraphService;
+  infraParser: InfraParserService;
 }> {
   // Create service instances
   astParserService = new ASTParserService();
@@ -35,6 +38,7 @@ export async function initializeAnalysisServices(): Promise<{
   schemaExtractorService = new SchemaExtractorService();
   eventTrackerService = new EventTrackerService();
   dependencyGraphService = new DependencyGraphService();
+  infraParserService = new InfraParserService();
 
   // Repository Analysis Service depends on all extractors
   repositoryAnalysisService = new RepositoryAnalysisService(
@@ -49,7 +53,7 @@ export async function initializeAnalysisServices(): Promise<{
   await astParserService.initialize();
   await repositoryAnalysisService.initialize();
 
-  console.log('[AnalysisServices] All analysis services initialized (Phase 1 + Phase 2)');
+  console.log('[AnalysisServices] All analysis services initialized (Phase 1 + Phase 2 + Phase 3)');
 
   return {
     astParser: astParserService,
@@ -58,6 +62,7 @@ export async function initializeAnalysisServices(): Promise<{
     schemaExtractor: schemaExtractorService,
     eventTracker: eventTrackerService,
     dependencyGraph: dependencyGraphService,
+    infraParser: infraParserService,
   };
 }
 
@@ -71,6 +76,7 @@ export function getAnalysisServices(): {
   schemaExtractor: SchemaExtractorService | null;
   eventTracker: EventTrackerService | null;
   dependencyGraph: DependencyGraphService | null;
+  infraParser: InfraParserService | null;
 } {
   return {
     astParser: astParserService,
@@ -79,6 +85,7 @@ export function getAnalysisServices(): {
     schemaExtractor: schemaExtractorService,
     eventTracker: eventTrackerService,
     dependencyGraph: dependencyGraphService,
+    infraParser: infraParserService,
   };
 }
 
@@ -99,6 +106,7 @@ export async function disposeAnalysisServices(): Promise<void> {
   schemaExtractorService = null;
   eventTrackerService = null;
   dependencyGraphService = null;
+  infraParserService = null;
 
   console.log('[AnalysisServices] All analysis services disposed');
 }
@@ -110,3 +118,4 @@ export { APIExtractorService } from './APIExtractorService';
 export { SchemaExtractorService } from './SchemaExtractorService';
 export { EventTrackerService } from './EventTrackerService';
 export { DependencyGraphService } from './DependencyGraphService';
+export { InfraParserService } from './InfraParserService';

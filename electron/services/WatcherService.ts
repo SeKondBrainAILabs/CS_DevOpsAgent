@@ -14,6 +14,11 @@ import type {
 } from '../../shared/types';
 import type { GitService } from './GitService';
 import type { ActivityService } from './ActivityService';
+import type { TerminalLogService } from './TerminalLogService';
+import type { AgentInstanceService } from './AgentInstanceService';
+import type { ASTParserService } from './analysis/ASTParserService';
+import type { RepositoryAnalysisService } from './analysis/RepositoryAnalysisService';
+import { databaseService } from './DatabaseService';
 import chokidar, { FSWatcher } from 'chokidar';
 import { promises as fs } from 'fs';
 import { existsSync } from 'fs';
@@ -24,18 +29,61 @@ interface WatcherInstance {
   worktreePath: string;
   watcher: FSWatcher;
   commitMsgFile: string;
+  claudeCommitMsgFile: string; // Fallback: .claude-commit-msg
 }
 
 export class WatcherService extends BaseService {
   private watchers: Map<string, WatcherInstance> = new Map();
   private gitService: GitService;
   private activityService: ActivityService;
+  private terminalLogService: TerminalLogService | null = null;
+  private agentInstanceService: AgentInstanceService | null = null;
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
+
+  // Phase 4: Analysis services for incremental analysis
+  private astParser: ASTParserService | null = null;
+  private repositoryAnalysis: RepositoryAnalysisService | null = null;
+  private incrementalAnalysisEnabled = false;
+  private analysisDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
 
   constructor(git: GitService, activity: ActivityService) {
     super();
     this.gitService = git;
     this.activityService = activity;
+  }
+
+  /**
+   * Set analysis services for incremental analysis (Phase 4)
+   */
+  setAnalysisServices(
+    astParser: ASTParserService,
+    repositoryAnalysis: RepositoryAnalysisService
+  ): void {
+    this.astParser = astParser;
+    this.repositoryAnalysis = repositoryAnalysis;
+    console.log('[WatcherService] Analysis services configured for incremental analysis');
+  }
+
+  /**
+   * Enable/disable incremental analysis on file changes
+   */
+  setIncrementalAnalysisEnabled(enabled: boolean): void {
+    this.incrementalAnalysisEnabled = enabled;
+    console.log(`[WatcherService] Incremental analysis ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
+  /**
+   * Set the agent instance service for tracking commits (crash recovery)
+   */
+  setAgentInstanceService(agentInstance: AgentInstanceService): void {
+    this.agentInstanceService = agentInstance;
+  }
+
+  /**
+   * Set the terminal log service for logging to terminal view
+   */
+  setTerminalLogService(terminalLog: TerminalLogService): void {
+    this.terminalLogService = terminalLog;
   }
 
   async start(sessionId: string): Promise<IpcResult<void>> {
@@ -64,23 +112,43 @@ export class WatcherService extends BaseService {
         return; // Already watching
       }
 
-      const commitMsgFile = path.join(worktreePath, `.devops-commit-${sessionId.replace('sess_', '').slice(0, 8)}.msg`);
+      // Register the worktree with GitService so commits can work
+      // For worktrees, repoPath is the parent of local_deploy
+      const repoPath = worktreePath.includes('/local_deploy/')
+        ? worktreePath.split('/local_deploy/')[0]
+        : worktreePath;
+      this.gitService.registerWorktree(sessionId, repoPath, worktreePath);
+      console.log(`[WatcherService] Registered worktree for ${sessionId}: ${worktreePath} (repo: ${repoPath})`);
 
-      // Create watcher
+      const shortSessionId = sessionId.replace('sess_', '').slice(0, 8);
+      const commitMsgFile = path.join(worktreePath, `.devops-commit-${shortSessionId}.msg`);
+      // Also watch for common Claude commit msg file
+      const claudeCommitMsgFile = path.join(worktreePath, '.claude-commit-msg');
+
+      // Create watcher - custom ignore function to allow commit msg files
       const watcher = chokidar.watch(worktreePath, {
-        ignored: [
-          /(^|[\/\\])\../, // Ignore dotfiles
-          '**/node_modules/**',
-          '**/.git/**',
-          '**/.worktrees/**',
-          '**/dist/**',
-          '**/build/**',
-        ],
+        ignored: (filePath: string) => {
+          const basename = path.basename(filePath);
+          // Allow commit message files (dotfiles we want to watch)
+          if (basename === '.claude-commit-msg' ||
+              basename.startsWith('.devops-commit-') ||
+              basename.startsWith('.claude-session-')) {
+            return false; // Don't ignore these
+          }
+          // Ignore other dotfiles and common directories
+          if (basename.startsWith('.')) return true;
+          if (filePath.includes('node_modules')) return true;
+          if (filePath.includes('.git')) return true;
+          if (filePath.includes('.worktrees')) return true;
+          if (filePath.includes('/dist/')) return true;
+          if (filePath.includes('/build/')) return true;
+          return false;
+        },
         persistent: true,
         ignoreInitial: true,
         awaitWriteFinish: {
-          stabilityThreshold: 500,
-          pollInterval: 100,
+          stabilityThreshold: 1000,  // Increased from 500ms for performance
+          pollInterval: 500,         // Increased from 100ms for performance
         },
       });
 
@@ -89,6 +157,7 @@ export class WatcherService extends BaseService {
         worktreePath,
         watcher,
         commitMsgFile,
+        claudeCommitMsgFile,
       };
 
       // Handle file events
@@ -103,6 +172,7 @@ export class WatcherService extends BaseService {
       this.watchers.set(sessionId, instance);
       console.log(`[WatcherService] Started watching ${worktreePath} for session ${sessionId}`);
       this.activityService.log(sessionId, 'success', `File watcher started for ${worktreePath}`);
+      this.terminalLogService?.logSystem(`Watcher started: ${worktreePath}`, sessionId);
     }, 'WATCHER_START_FAILED');
   }
 
@@ -146,16 +216,34 @@ export class WatcherService extends BaseService {
     };
     console.log(`[WatcherService] File ${type}: ${relativePath} (session: ${sessionId})`);
     this.emitToRenderer(IPC.FILE_CHANGED, event);
-    this.activityService.log(sessionId, 'file', `File ${type}: ${relativePath}`);
 
-    // Check if this is the commit message file
-    if (filePath === commitMsgFile && type === 'change') {
-      this.triggerCommit(instance);
+    // Log file activity with path for commit linking
+    this.activityService.logFileActivity(
+      sessionId,
+      'file',
+      `File ${type}: ${relativePath}`,
+      relativePath,
+      { type, fullPath: filePath }
+    );
+
+    this.terminalLogService?.log('info', `File ${type}: ${relativePath}`, { sessionId, source: 'Watcher' });
+
+    // Check if this is a commit message file (either session-specific or .claude-commit-msg)
+    const isCommitMsgFile = filePath === instance.commitMsgFile || filePath === instance.claudeCommitMsgFile;
+    // Trigger commit on both 'add' (first creation) and 'change' (update) events
+    if (isCommitMsgFile && (type === 'change' || type === 'add')) {
+      console.log(`[WatcherService] Commit message file ${type}: ${relativePath}`);
+      this.triggerCommit(instance, filePath);
     }
+
+    // Phase 4: Trigger incremental analysis for source files
+    this.triggerIncrementalAnalysis(instance, filePath, type);
   }
 
-  private async triggerCommit(instance: WatcherInstance): Promise<void> {
-    const { sessionId, commitMsgFile } = instance;
+  private async triggerCommit(instance: WatcherInstance, commitMsgFilePath?: string): Promise<void> {
+    const { sessionId } = instance;
+    // Use the provided path or default to session-specific file
+    const commitMsgFile = commitMsgFilePath || instance.commitMsgFile;
 
     // Debounce commits
     const existingTimer = this.debounceTimers.get(sessionId);
@@ -194,13 +282,16 @@ export class WatcherService extends BaseService {
         const status = await this.gitService.getStatus(sessionId);
         const filesChanged = status.data?.changes.length || 0;
 
+        const commitHash = result.data!.hash;
+        const timestamp = new Date().toISOString();
+
         // Emit commit completed event
         const completeEvent: CommitCompleteEvent = {
           sessionId,
-          commitHash: result.data!.hash,
+          commitHash,
           message,
           filesChanged,
-          timestamp: new Date().toISOString(),
+          timestamp,
         };
         this.emitToRenderer(IPC.COMMIT_COMPLETED, completeEvent);
         this.activityService.log(
@@ -208,6 +299,30 @@ export class WatcherService extends BaseService {
           'success',
           `Commit complete: ${result.data!.shortHash}`
         );
+
+        // Link all uncommitted activities to this commit
+        // This associates file changes, messages, etc. with the commit that included them
+        try {
+          const linkedCount = this.activityService.linkToCommit(sessionId, commitHash);
+          console.log(`[WatcherService] Linked ${linkedCount} activities to commit ${result.data!.shortHash}`);
+        } catch (error) {
+          console.warn('[WatcherService] Failed to link activities to commit:', error);
+        }
+
+        // Record the commit in the database for history tracking
+        try {
+          databaseService.recordCommit(commitHash, sessionId, message, timestamp, {
+            filesChanged,
+          });
+          databaseService.recordSessionEvent(sessionId, 'commit', { message, filesChanged }, commitHash);
+        } catch (error) {
+          console.warn('[WatcherService] Failed to record commit in database:', error);
+        }
+
+        // Track the commit for crash recovery
+        if (this.agentInstanceService) {
+          this.agentInstanceService.updateLastProcessedCommit(sessionId, commitHash);
+        }
 
         // Auto-push (could be configurable)
         await this.gitService.push(sessionId);
@@ -226,9 +341,89 @@ export class WatcherService extends BaseService {
     return null;
   }
 
+  /**
+   * Trigger incremental analysis for a changed file (Phase 4)
+   */
+  private triggerIncrementalAnalysis(
+    instance: WatcherInstance,
+    filePath: string,
+    changeType: 'add' | 'change' | 'unlink'
+  ): void {
+    if (!this.incrementalAnalysisEnabled || !this.astParser) {
+      return;
+    }
+
+    const { sessionId, worktreePath } = instance;
+
+    // Only analyze source files
+    const ext = path.extname(filePath).toLowerCase();
+    const sourceExtensions = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs'];
+    if (!sourceExtensions.includes(ext)) {
+      return;
+    }
+
+    // Debounce analysis per session
+    const existingTimer = this.analysisDebounceTimers.get(sessionId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const timer = setTimeout(async () => {
+      this.analysisDebounceTimers.delete(sessionId);
+
+      try {
+        // 1. Invalidate AST cache for the changed file
+        if (changeType === 'unlink') {
+          // File was deleted - invalidate cache
+          this.astParser!.invalidateCache(filePath);
+          console.log(`[WatcherService] Invalidated AST cache for deleted file: ${filePath}`);
+        } else {
+          // File was added or modified - re-parse
+          const ast = await this.astParser!.parseFile(filePath);
+          if (ast) {
+            console.log(`[WatcherService] Re-parsed file: ${filePath} (${ast.exports.length} exports)`);
+          }
+        }
+
+        // 2. Emit incremental analysis event
+        this.emitToRenderer(IPC.ANALYSIS_PROGRESS, {
+          phase: 'incremental',
+          totalFiles: 1,
+          processedFiles: 1,
+          currentFile: path.relative(worktreePath, filePath),
+          errors: [],
+          startedAt: new Date().toISOString(),
+        });
+
+        // 3. Optionally trigger full feature re-analysis
+        // This is expensive, so only do it for significant changes
+        if (this.repositoryAnalysis && changeType !== 'unlink') {
+          // Detect which feature this file belongs to
+          const relativePath = path.relative(worktreePath, filePath);
+          const featureName = relativePath.split(path.sep)[0];
+
+          console.log(`[WatcherService] File ${relativePath} may affect feature: ${featureName}`);
+          // Note: Full re-analysis is deferred to user action to avoid performance impact
+        }
+
+        this.terminalLogService?.log('info', `Incremental analysis: ${path.basename(filePath)}`, { sessionId, source: 'Analysis' });
+      } catch (error) {
+        console.error('[WatcherService] Incremental analysis error:', error);
+      }
+    }, 2000); // 2 second debounce for analysis
+
+    this.analysisDebounceTimers.set(sessionId, timer);
+  }
+
   async dispose(): Promise<void> {
     for (const [sessionId] of this.watchers) {
       await this.stop(sessionId);
     }
+
+    // Clear analysis debounce timers
+    for (const timer of this.analysisDebounceTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.analysisDebounceTimers.clear();
   }
 }

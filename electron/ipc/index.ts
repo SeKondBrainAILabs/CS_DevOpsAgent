@@ -779,6 +779,84 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   });
 
   // ==========================================================================
+  // PHASE 3: INFRASTRUCTURE PARSING HANDLERS
+  // ==========================================================================
+  ipcMain.handle(IPC.ANALYSIS_PARSE_INFRA, async (_, repoPath: string) => {
+    try {
+      const analysis = await services.infraParser.analyzeInfrastructure(repoPath);
+      return { success: true, data: analysis };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'INFRA_PARSE_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to parse infrastructure',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.ANALYSIS_PARSE_TERRAFORM, async (_, filePath: string) => {
+    try {
+      const analysis = await services.infraParser.parseTerraformFile(filePath);
+      return { success: true, data: analysis };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'TERRAFORM_PARSE_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to parse Terraform file',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.ANALYSIS_PARSE_KUBERNETES, async (_, filePath: string) => {
+    try {
+      const resources = await services.infraParser.parseKubernetesFile(filePath);
+      return { success: true, data: resources };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'KUBERNETES_PARSE_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to parse Kubernetes file',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.ANALYSIS_PARSE_DOCKER_COMPOSE, async (_, filePath: string) => {
+    try {
+      const config = await services.infraParser.parseDockerComposeFile(filePath);
+      return { success: true, data: config };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'DOCKER_COMPOSE_PARSE_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to parse Docker Compose file',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.ANALYSIS_GET_INFRA_SUMMARY, async (_, analysis: unknown) => {
+    try {
+      const summary = services.infraParser.getSummary(analysis as any);
+      return { success: true, data: summary };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'SUMMARY_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to get infrastructure summary',
+        },
+      };
+    }
+  });
+
+  // ==========================================================================
   // REBASE WATCHER HANDLERS
   // Auto-rebase on remote changes (on-demand mode)
   // ==========================================================================

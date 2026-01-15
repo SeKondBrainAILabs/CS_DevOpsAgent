@@ -259,6 +259,12 @@ export const IPC = {
   ANALYSIS_GET_GRAPH_STATS: 'analysis:get-graph-stats',
   ANALYSIS_EXPORT_GRAPH_DOT: 'analysis:export-graph-dot',
   ANALYSIS_EXPORT_GRAPH_JSON: 'analysis:export-graph-json',
+  // Phase 3: Infrastructure parsing
+  ANALYSIS_PARSE_INFRA: 'analysis:parse-infra',
+  ANALYSIS_PARSE_TERRAFORM: 'analysis:parse-terraform',
+  ANALYSIS_PARSE_KUBERNETES: 'analysis:parse-kubernetes',
+  ANALYSIS_PARSE_DOCKER_COMPOSE: 'analysis:parse-docker-compose',
+  ANALYSIS_GET_INFRA_SUMMARY: 'analysis:get-infra-summary',
   // Events
   ANALYSIS_PROGRESS: 'analysis:progress',
   ANALYSIS_COMPLETE: 'analysis:complete',
@@ -381,6 +387,12 @@ export const REQUEST_CHANNELS = [
   IPC.ANALYSIS_GET_GRAPH_STATS,
   IPC.ANALYSIS_EXPORT_GRAPH_DOT,
   IPC.ANALYSIS_EXPORT_GRAPH_JSON,
+  // Phase 3: Infrastructure parsing
+  IPC.ANALYSIS_PARSE_INFRA,
+  IPC.ANALYSIS_PARSE_TERRAFORM,
+  IPC.ANALYSIS_PARSE_KUBERNETES,
+  IPC.ANALYSIS_PARSE_DOCKER_COMPOSE,
+  IPC.ANALYSIS_GET_INFRA_SUMMARY,
 ] as const;
 
 export const EVENT_CHANNELS = [

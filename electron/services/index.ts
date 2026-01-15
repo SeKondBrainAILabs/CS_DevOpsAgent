@@ -33,6 +33,7 @@ import {
   SchemaExtractorService,
   EventTrackerService,
   DependencyGraphService,
+  InfraParserService,
 } from './analysis';
 
 export interface Services {
@@ -63,6 +64,8 @@ export interface Services {
   schemaExtractor: SchemaExtractorService;
   eventTracker: EventTrackerService;
   dependencyGraph: DependencyGraphService;
+  // Analysis services (Phase 3)
+  infraParser: InfraParserService;
 }
 
 let services: Services | null = null;
@@ -167,6 +170,20 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   const analysisServices = await initializeAnalysisServices();
   analysisServices.repositoryAnalysis.setMainWindow(mainWindow);
 
+  // Connect analysis services to contract generation for enhanced contracts (Phase 3)
+  contractGeneration.setAnalysisServices(
+    analysisServices.astParser,
+    analysisServices.apiExtractor,
+    analysisServices.schemaExtractor,
+    analysisServices.dependencyGraph
+  );
+
+  // Connect analysis services to watcher for incremental analysis (Phase 4)
+  watcher.setAnalysisServices(
+    analysisServices.astParser,
+    analysisServices.repositoryAnalysis
+  );
+
   services = {
     session,
     git,
@@ -195,6 +212,8 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     schemaExtractor: analysisServices.schemaExtractor,
     eventTracker: analysisServices.eventTracker,
     dependencyGraph: analysisServices.dependencyGraph,
+    // Analysis services (Phase 3)
+    infraParser: analysisServices.infraParser,
   };
 
   // Log initial startup message to terminal
@@ -258,7 +277,7 @@ export { QuickActionService } from './QuickActionService';
 export { MergeService } from './MergeService';
 export { HeartbeatService } from './HeartbeatService';
 export { databaseService } from './DatabaseService';
-// Analysis services (Phase 1 + Phase 2)
+// Analysis services (Phase 1 + Phase 2 + Phase 3)
 export {
   ASTParserService,
   RepositoryAnalysisService,
@@ -266,4 +285,5 @@ export {
   SchemaExtractorService,
   EventTrackerService,
   DependencyGraphService,
+  InfraParserService,
 } from './analysis';
