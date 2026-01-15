@@ -25,13 +25,37 @@ import type {
   SymbolType,
 } from '../../../shared/analysis-types';
 
-// Tree-sitter types
+// Tree-sitter types - loaded lazily to handle Electron native module issues
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const Parser = require('tree-sitter');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const TypeScript = require('tree-sitter-typescript').typescript;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const JavaScript = require('tree-sitter-javascript');
+let Parser: typeof import('tree-sitter') | null = null;
+let TypeScript: unknown = null;
+let JavaScript: unknown = null;
+
+function loadTreeSitter(): boolean {
+  if (Parser !== null) return true;
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    Parser = require('tree-sitter');
+
+    // tree-sitter-typescript exports { typescript, tsx }
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const tsModule = require('tree-sitter-typescript');
+    TypeScript = tsModule.typescript || tsModule.default?.typescript || tsModule;
+
+    // tree-sitter-javascript exports the language directly
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const jsModule = require('tree-sitter-javascript');
+    JavaScript = jsModule.default || jsModule;
+
+    console.log('[ASTParserService] Tree-sitter modules loaded successfully');
+    return true;
+  } catch (error) {
+    console.error('[ASTParserService] Failed to load tree-sitter modules:', error);
+    Parser = null;
+    return false;
+  }
+}
 
 interface TreeSitterNode {
   type: string;
@@ -52,33 +76,57 @@ interface TreeSitterTree {
 }
 
 export class ASTParserService extends BaseService {
-  private parser: typeof Parser;
-  private tsParser: typeof Parser;
-  private jsParser: typeof Parser;
+  private parser: InstanceType<typeof import('tree-sitter')> | null = null;
+  private tsParser: InstanceType<typeof import('tree-sitter')> | null = null;
+  private jsParser: InstanceType<typeof import('tree-sitter')> | null = null;
   private cache: Map<string, ASTCacheEntry> = new Map();
   private cacheHits = 0;
   private cacheMisses = 0;
   private maxCacheSize = 500; // Max files to cache
   private initialized = false;
+  private available = false; // Whether AST parsing is available
 
   constructor() {
     super();
-    this.parser = new Parser();
-    this.tsParser = new Parser();
-    this.jsParser = new Parser();
+  }
+
+  /**
+   * Check if AST parsing is available (tree-sitter loaded successfully)
+   */
+  isAvailable(): boolean {
+    return this.available;
   }
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
+    this.initialized = true;
+
+    // Try to load tree-sitter - gracefully degrade if it fails
+    if (!loadTreeSitter() || !Parser) {
+      console.warn('[ASTParserService] Tree-sitter not available - AST features disabled');
+      this.available = false;
+      return;
+    }
 
     try {
-      this.tsParser.setLanguage(TypeScript);
-      this.jsParser.setLanguage(JavaScript);
-      this.initialized = true;
+      this.parser = new Parser();
+      this.tsParser = new Parser();
+      this.jsParser = new Parser();
+
+      // Try setting languages - may fail with native module issues
+      if (TypeScript) {
+        this.tsParser.setLanguage(TypeScript);
+      }
+      if (JavaScript) {
+        this.jsParser.setLanguage(JavaScript);
+      }
+
+      this.available = true;
       console.log('[ASTParserService] Initialized with TypeScript and JavaScript grammars');
     } catch (error) {
-      console.error('[ASTParserService] Failed to initialize:', error);
-      throw error;
+      console.warn('[ASTParserService] Failed to initialize languages - AST features disabled:', error);
+      this.available = false;
+      // Don't throw - allow app to continue without AST parsing
     }
   }
 
@@ -91,6 +139,23 @@ export class ASTParserService extends BaseService {
 
     // Read file content
     const absolutePath = path.isAbsolute(filePath) ? filePath : path.resolve(filePath);
+
+    // If AST parsing is not available, return empty result
+    if (!this.available) {
+      const ext = path.extname(absolutePath).toLowerCase();
+      const language = this.detectLanguage(ext);
+      return {
+        language,
+        filePath: absolutePath,
+        contentHash: '',
+        exports: [],
+        imports: [],
+        functions: [],
+        classes: [],
+        types: [],
+        parseTimeMs: 0,
+      };
+    }
     const content = await fs.promises.readFile(absolutePath, 'utf-8');
     const contentHash = this.hashContent(content);
 
