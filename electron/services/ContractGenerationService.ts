@@ -110,12 +110,26 @@ const FEATURE_FOLDER_PATTERNS = [
   '*',
 ];
 
-// Folders to ignore when scanning top-level
+// Folders to ignore when scanning top-level (common gitignore patterns + submodules)
 const IGNORE_FOLDERS = new Set([
-  'node_modules', '.git', 'dist', 'build', '.next', '.nuxt',
-  'coverage', '.cache', 'tmp', 'temp', '.vscode', '.idea',
-  'backups', 'docs', 'Documentation', '.S9N_KIT_DevOpsAgent',
-  'local_deploy', 'playwright-report', 'test-results',
+  // Build outputs
+  'node_modules', 'dist', 'build', 'out', '.next', '.nuxt', '.output',
+  // Git and version control
+  '.git', 'submodules', '.worktrees',
+  // IDE and editor
+  '.vscode', '.idea', '.eclipse', '.settings',
+  // Test and coverage
+  'coverage', 'playwright-report', 'test-results', '.nyc_output',
+  // Cache and temp
+  '.cache', 'tmp', 'temp', '.temp', '.tmp',
+  // Documentation (usually not features)
+  'docs', 'Documentation', 'doc',
+  // DevOps/Kanvas specific
+  '.S9N_KIT_DevOpsAgent', 'local_deploy', 'backups',
+  // Vendor and third-party
+  'vendor', 'third_party', 'external', 'deps',
+  // Logs
+  'logs', 'log',
 ]);
 
 export class ContractGenerationService extends BaseService {
