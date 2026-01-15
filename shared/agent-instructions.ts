@@ -38,57 +38,112 @@ export function getAgentInstructions(
 
 /**
  * Generate the comprehensive prompt for Claude Code agent
- * Uses the exact format from the original DevOps Agent
+ * Balanced format: concise but preserves essential guidance
  */
 export function generateClaudePrompt(vars: InstructionVars): string {
   const shortSessionId = vars.sessionId.replace('sess_', '').slice(0, 8);
-  const timestamp = new Date().toISOString();
   const task = vars.taskDescription || vars.branchName || 'development';
 
-  return `I'm working in a DevOps-managed session with the following setup:
-- Session ID: ${shortSessionId}
-- Working Directory: ${vars.repoPath}
-- Task: ${task}
+  return `# SESSION ${shortSessionId}
 
-Please switch to this directory before making any changes:
+# ⚠️ CRITICAL: WRONG DIRECTORY = WASTED WORK ⚠️
+WORKDIR: ${vars.repoPath}
+YOU MUST WORK ONLY IN THIS DIRECTORY - NOT THE MAIN REPO
+
+🛑 FIRST: Run \`pwd\` and show me the output to prove you're in the worktree
+🛑 DO NOT proceed until you confirm you're in: ${vars.repoPath}
+
+BRANCH: ${vars.branchName}
+TASK: ${task}
+
+## MANDATORY FIRST RESPONSE
+Before doing ANY other work, you MUST respond with:
+✓ Current directory: [output of pwd]
+✓ Houserules read: [yes/no - if yes, summarize key rules]
+✓ File locks checked: [yes/no]
+
+## 1. SETUP (run first)
+\`\`\`bash
 cd "${vars.repoPath}"
+pwd  # Verify correct location before any changes
 
-📋 IMPORTANT - READ PROJECT RULES FIRST:
-Before making ANY changes, you MUST read the project's house rules at:
-${vars.repoPath}/houserules.md
+# ⚠️ CRITICAL: Read house rules BEFORE making any changes!
+cat houserules.md 2>/dev/null || echo "No houserules.md - create one as you learn the codebase"
+\`\`\`
 
-The house rules file contains:
-- Project coding conventions and standards
-- Required commit message formats
-- File coordination protocols
-- Branch naming and workflow rules
-- Testing and review requirements
+📋 **HOUSE RULES** contain project-specific patterns, conventions, testing requirements, and gotchas.
+If houserules.md exists, you MUST follow its rules. If it doesn't exist, create one as you work.
 
-You must follow ALL rules in this file. Read it carefully before proceeding.
+## 2. CONTEXT FILE (critical - survives context compaction)
+Create immediately so you can recover after compaction:
+\`\`\`bash
+cat > .claude-session-${shortSessionId}.md << 'EOF'
+# Session ${shortSessionId}
+Dir: ${vars.repoPath}
+Branch: ${vars.branchName}
+Task: ${task}
 
-⚠️ FILE COORDINATION (MANDATORY):
-Shared coordination directory: ${vars.repoPath}/.file-coordination/
+## Files to Re-read After Compaction
+1. This file: .claude-session-${shortSessionId}.md
+2. House rules: houserules.md
+3. File locks: .file-coordination/active-edits/
 
-BEFORE editing ANY files:
-1. Check for conflicts: ls ${vars.repoPath}/.file-coordination/active-edits/
-2. Create declaration: ${vars.repoPath}/.file-coordination/active-edits/<agent>-${shortSessionId}.json
+## Progress (update as you work)
+- [ ] Task started
+- [ ] Files identified
+- [ ] Implementation in progress
+- [ ] Testing complete
+- [ ] Ready for commit
 
-Example declaration:
-{
-  "agent": "claude", "session": "${shortSessionId}",
-  "files": ["src/app.js"], "operation": "edit",
-  "reason": "${task}", "declaredAt": "${timestamp}",
-  "estimatedDuration": 300
-}
+## Key Findings (add to houserules.md too)
+- e.g. "Uses Zustand for state" or "Tests need build first"
 
-Write commit messages to: .devops-commit-${shortSessionId}.msg
-(Use '>>' to append if you want to add to an existing message)
-The DevOps agent will automatically commit and push changes.
+## Notes (context for after compaction)
+- e.g. "Working on AuthService.ts" or "Blocked on X"
+EOF
+\`\`\`
 
-⛔ IMPORTANT: STOP HERE AND WAIT
-Do NOT start coding or making changes yet!
-Follow the steps above in order when instructed by the user.
-Wait for further instructions before proceeding.`;
+## 3. AFTER CONTEXT COMPACTION
+If you see "context compacted", IMMEDIATELY:
+1. cd "${vars.repoPath}"
+2. cat .claude-session-${shortSessionId}.md
+3. cat houserules.md
+4. ls .file-coordination/active-edits/
+
+## 4. FILE LOCKS (before editing any file)
+\`\`\`bash
+ls .file-coordination/active-edits/  # Check for conflicts first
+# Replace <FILES> with actual files you're editing:
+cat > .file-coordination/active-edits/claude-${shortSessionId}.json << 'EOF'
+{"agent":"claude","session":"${shortSessionId}","files":["<file1.ts>","<file2.ts>"],"operation":"edit","reason":"${task}"}
+EOF
+\`\`\`
+
+## 5. HOUSE RULES (read first, update as you learn)
+Update houserules.md with patterns you discover (conventions, architecture, testing, gotchas):
+\`\`\`bash
+# Replace <CATEGORY> and <RULE> with actual findings:
+cat >> houserules.md << 'EOF'
+
+## <CATEGORY> - Claude ${shortSessionId}
+- <RULE OR PATTERN>
+EOF
+\`\`\`
+
+## 6. COMMITS
+📝 **Write commit messages to: \`.devops-commit-${shortSessionId}.msg\`** (this session's file)
+⚠️ DO NOT use .claude-commit-msg - use the session-specific file above!
+**One story = one commit.** If given multiple stories, complete and commit each separately.
+
+### ⚠️ IMPORTANT: Git Attribution
+Commits should be attributed to the USER, not to Claude/AI:
+- NEVER change git config user.name or user.email
+- NEVER use --author flag to set author to Claude
+- The user's existing git identity will be used automatically
+- NEVER add "Co-Authored-By: Claude" footers - commits are USER's work assisted by AI
+
+---
+⛔ STOP: Run setup commands, read houserules.md, then await instructions.`;
 }
 
 function getClaudeInstructions(vars: InstructionVars): string {
@@ -102,9 +157,14 @@ function getClaudeInstructions(vars: InstructionVars): string {
 
   return `## Setup Claude Code for ${vars.repoName}
 
+### Session Info
+- **Session ID**: \`${shortSessionId}\`
+- **Working Directory**: \`${vars.repoPath}\`
+- **Branch**: \`${vars.branchName}\`
+
 ### Quick Start
 
-1. **Open a terminal** and navigate to your repository:
+1. **Open a terminal** and navigate to the working directory:
 \`\`\`bash
 cd "${vars.repoPath}"
 \`\`\`
@@ -128,29 +188,42 @@ cd "${vars.repoPath}" && git checkout ${vars.branchName} && claude
 
 ### Prompt for Claude Code
 
-Copy and paste this when starting your session:
+Copy and paste this ENTIRE prompt when starting your session:
 
 \`\`\`
 ${agentPrompt}
 \`\`\`
 
-${vars.contextPreservation ? `---
+---
 
-### Context Preservation (houserules.md)
+### Context Preservation
 
-If this repository doesn't have a \`houserules.md\` file, create one with your project rules:
+The prompt above includes instructions to create a session context file:
+\`.claude-session-${shortSessionId}.md\`
+
+This file will persist your session context and can be re-read after context compaction.
+
+**Key files to update as you work:**
+1. \`.claude-session-${shortSessionId}.md\` - Update progress and notes
+2. \`.devops-commit-${shortSessionId}.msg\` - Write commit messages here
+
+${vars.contextPreservation ? `
+### Custom House Rules
+
+If needed, update \`houserules.md\` with your project rules:
 
 \`\`\`bash
-cat > "${vars.repoPath}/houserules.md" << 'EOF'
+cat >> "${vars.repoPath}/houserules.md" << 'EOF'
+
+## Session-Specific Notes
 ${vars.contextPreservation}
 EOF
 \`\`\`
-
-You can also create a \`temp_todo.md\` file to track session progress for context recovery.
 ` : ''}
 ---
 
 ### Git Workflow
+- **Working directory**: \`${vars.repoPath}\`
 - **Working branch**: \`${vars.branchName}\`
 - **Base branch**: The branch this was created from
 ${rebaseNote ? `- **Rebase**: ${vars.rebaseFrequency}` : ''}

@@ -18,6 +18,7 @@ export interface Session {
   agentType: AgentType;
   status: SessionStatus;
   branchName: string;
+  baseBranch: string; // The branch this session was created from (merge target)
   worktreePath: string;
   repoPath: string;
   created: string;
@@ -111,6 +112,8 @@ export interface ActivityLogEntry {
   type: LogType;
   message: string;
   details?: Record<string, unknown>;
+  commitHash?: string; // Linked when commit completes - identifies which commit included this activity
+  filePath?: string; // If activity relates to a specific file
 }
 
 // =============================================================================
@@ -286,7 +289,7 @@ export interface KanvasConfig {
  * - infra: Infrastructure contracts
  * - integrations: Third-party service integrations
  */
-export type ContractType = 'api' | 'schema' | 'events' | 'css' | 'features' | 'infra' | 'integrations';
+export type ContractType = 'api' | 'schema' | 'events' | 'css' | 'features' | 'infra' | 'integrations' | 'e2e' | 'unit' | 'integration' | 'fixtures';
 
 export type ContractStatus = 'active' | 'modified' | 'deprecated' | 'breaking' | 'beta';
 
@@ -431,4 +434,173 @@ export interface ContractFileChange {
   deletions: number;
   impactLevel: 'breaking' | 'non-breaking' | 'unknown';
   details?: string;
+}
+
+// =============================================================================
+// TERMINAL LOG TYPES
+// System-level logging for terminal view
+// =============================================================================
+
+export type TerminalLogLevel = 'debug' | 'info' | 'warn' | 'error' | 'git' | 'system';
+
+export interface TerminalLogEntry {
+  id: string;
+  timestamp: string;
+  level: TerminalLogLevel;
+  message: string;
+  sessionId?: string;
+  source?: string; // e.g., 'GitService', 'WatcherService', 'LockService'
+  command?: string; // For git commands
+  output?: string; // Command output
+  exitCode?: number; // For commands
+  duration?: number; // ms
+}
+
+// =============================================================================
+// MERGE PREVIEW TYPES
+// =============================================================================
+
+export interface MergePreview {
+  sourceBranch: string;
+  targetBranch: string;
+  canMerge: boolean;
+  hasConflicts: boolean;
+  conflictingFiles: string[];
+  filesChanged: Array<{
+    path: string;
+    additions: number;
+    deletions: number;
+    status: 'added' | 'modified' | 'deleted';
+  }>;
+  commitCount: number;
+  aheadBy: number;
+  behindBy: number;
+}
+
+export interface MergeResult {
+  success: boolean;
+  message: string;
+  mergeCommitHash?: string;
+  filesChanged?: number;
+  conflictingFiles?: string[];
+}
+
+// =============================================================================
+// HEARTBEAT TYPES
+// =============================================================================
+
+export interface HeartbeatStatus {
+  sessionId: string;
+  agentId?: string;
+  lastHeartbeat: string | null;
+  isConnected: boolean;
+  connectionDuration?: number; // seconds since first heartbeat
+  missedHeartbeats: number;
+}
+
+// =============================================================================
+// CONTRACT GENERATION TYPES
+// For scanning codebases and generating contract documentation
+// =============================================================================
+
+/**
+ * A feature discovered during codebase scan
+ */
+export interface DiscoveredFeature {
+  name: string;
+  basePath: string;
+  files: {
+    api: string[];      // API routes, OpenAPI, GraphQL, etc.
+    schema: string[];   // Types, interfaces, database schemas
+    tests: {
+      e2e: string[];
+      unit: string[];
+      integration: string[];
+    };
+    fixtures: string[];
+    config: string[];
+    other: string[];
+  };
+  contractPatternMatches: number; // How many contract patterns matched
+}
+
+/**
+ * Options for contract generation
+ */
+export interface ContractGenerationOptions {
+  includeCodeSamples?: boolean;
+  maxFilesPerFeature?: number;
+  skipExisting?: boolean;
+  features?: string[]; // Generate only specific features (empty = all)
+}
+
+/**
+ * Progress during batch contract generation
+ */
+export interface ContractGenerationProgress {
+  total: number;
+  completed: number;
+  currentFeature: string;
+  currentStep: 'discovering' | 'analyzing' | 'generating' | 'saving';
+  errors: string[];
+}
+
+/**
+ * Result of generating a single feature's contract
+ */
+export interface GeneratedContractResult {
+  feature: string;
+  success: boolean;
+  markdownPath?: string;
+  jsonPath?: string;
+  error?: string;
+}
+
+/**
+ * Result of batch contract generation
+ */
+export interface BatchContractGenerationResult {
+  totalFeatures: number;
+  generated: number;
+  skipped: number;
+  failed: number;
+  results: GeneratedContractResult[];
+  duration: number; // ms
+}
+
+/**
+ * Generated contract JSON structure (saved to registry)
+ */
+export interface GeneratedContractJSON {
+  feature: string;
+  version: string;
+  lastGenerated: string;
+  generatorVersion: string;
+  overview: string;
+  apis: {
+    endpoints: Array<{
+      method: string;
+      path: string;
+      description: string;
+      authRequired?: boolean;
+    }>;
+    exports: Array<{
+      name: string;
+      type: 'function' | 'type' | 'interface' | 'class' | 'const';
+      file: string;
+    }>;
+  };
+  schemas: Array<{
+    name: string;
+    type: 'interface' | 'type' | 'enum' | 'database';
+    file: string;
+  }>;
+  dependencies: string[];
+  testCoverage: {
+    e2e: { count: number; files: string[] };
+    unit: { count: number; files: string[] };
+    integration: { count: number; files: string[] };
+  };
+  breakingChangeFiles: string[];
+  sourceFiles: string[];
 }

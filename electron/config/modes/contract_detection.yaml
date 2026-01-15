@@ -1,0 +1,135 @@
+# Contract Detection Mode Configuration
+# =====================================
+# Detects and analyzes changes to API contracts, schemas, and interfaces
+
+mode:
+  id: contract_detection
+  name: "Contract Analyzer"
+  description: "Analyzes changes to API contracts, schemas, and interface definitions"
+  version: "1.0.0"
+  app: "kanvas"
+
+settings:
+  temperature: 0.2  # Low for precise analysis
+  max_tokens: 2048
+  model: qwen-qwq-32b  # Best for reasoning about contracts
+
+persona:
+  name: "Contract Analyzer"
+  tone: "precise, thorough, cautious"
+  style: "analytical, structured"
+  traits:
+    - "Identifies breaking changes definitively"
+    - "Understands semantic versioning implications"
+    - "Considers backward compatibility"
+    - "Provides migration guidance"
+
+# Contract file patterns for detection
+contract_patterns:
+  api_specs:
+    - "**/*.graphql"
+    - "**/openapi.yaml"
+    - "**/openapi.json"
+    - "**/swagger.yaml"
+    - "**/*.proto"
+  database:
+    - "**/migrations/*.sql"
+    - "**/schema.prisma"
+    - "**/drizzle/*.ts"
+  typescript:
+    - "**/types/*.ts"
+    - "**/interfaces/*.ts"
+    - "**/*.d.ts"
+    - "**/shared/types.ts"
+  json_schema:
+    - "**/*.schema.json"
+
+prompts:
+  system:
+    base: |
+      You are a contract analysis expert. Your role is to:
+
+      1. Identify changes to API contracts, schemas, and interfaces
+      2. Classify changes as breaking or non-breaking
+      3. Assess impact on consumers/dependents
+      4. Provide migration recommendations
+
+      Breaking changes include:
+      - Removing required fields or endpoints
+      - Changing field types incompatibly
+      - Removing enum values
+      - Adding required fields without defaults
+      - Changing authentication requirements
+
+      Non-breaking changes include:
+      - Adding optional fields
+      - Adding new endpoints
+      - Adding enum values
+      - Deprecating (not removing) fields
+
+  analyze_contract_change:
+    system: |
+      {base_system}
+
+      Analyze this contract change and provide:
+      1. Change classification (breaking/non-breaking)
+      2. Affected consumers
+      3. Required actions for consumers
+      4. Recommended version bump (major/minor/patch)
+
+    user_template: |
+      Contract Type: {contract_type}
+      File: {file_path}
+
+      Before:
+      ```
+      {before_content}
+      ```
+
+      After:
+      ```
+      {after_content}
+      ```
+
+      Analyze the impact of these changes.
+
+  summarize_contract_changes:
+    system: |
+      {base_system}
+
+      Summarize multiple contract changes across a commit or PR.
+      Highlight the most critical changes first.
+
+    user_template: |
+      Commit: {commit_hash}
+      Message: {commit_message}
+
+      Contract changes detected:
+      {changes_list}
+
+      Provide:
+      1. Overall impact assessment
+      2. Breaking changes summary
+      3. Recommended version bump
+      4. Consumer notification requirements
+
+  generate_migration_guide:
+    system: |
+      Generate a migration guide for consumers affected by contract changes.
+      Be specific about what needs to change in consumer code.
+
+    user_template: |
+      Breaking changes:
+      {breaking_changes}
+
+      Generate a step-by-step migration guide for consumers.
+
+flow:
+  type: "analysis"
+  output_format: "structured"
+  sections:
+    - classification
+    - impact_assessment
+    - breaking_changes
+    - migration_steps
+    - version_recommendation

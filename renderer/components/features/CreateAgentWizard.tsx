@@ -14,7 +14,9 @@ interface CreateAgentWizardProps {
   onClose: () => void;
 }
 
-type WizardStep = 'repo' | 'agent' | 'workflow' | 'prompt' | 'complete';
+type WizardStep = 'repo' | 'setup' | 'agent' | 'workflow' | 'prompt' | 'complete';
+
+type FeatureOrgStructure = 'feature-folders' | 'flat' | 'migrate';
 
 interface AgentSettings {
   branchName: string;
@@ -62,14 +64,73 @@ export function CreateAgentWizard({ onClose }: CreateAgentWizardProps): React.Re
   // Result
   const [createdInstance, setCreatedInstance] = useState<AgentInstance | null>(null);
 
-  const handleRepoSelect = (path: string, validation: RepoValidation) => {
+  // First-run setup
+  const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
+  const [featureOrgChoice, setFeatureOrgChoice] = useState<FeatureOrgStructure>('feature-folders');
+
+  const handleRepoSelect = async (path: string, validation: RepoValidation) => {
     setRepoPath(path);
     setRepoValidation(validation);
     setError(null);
     if (validation.currentBranch) {
       setSettings(s => ({ ...s, baseBranch: validation.currentBranch || 'main' }));
     }
-    setTimeout(() => setCurrentStep('agent'), 300);
+
+    // Check if first-run setup is needed
+    try {
+      const result = await window.api?.contractRegistry?.needsFirstRunSetup(path);
+      if (result?.success && result.data) {
+        setNeedsSetup(true);
+        setTimeout(() => setCurrentStep('setup'), 300);
+      } else {
+        setNeedsSetup(false);
+        setTimeout(() => setCurrentStep('agent'), 300);
+      }
+    } catch {
+      // If check fails, skip setup step
+      setNeedsSetup(false);
+      setTimeout(() => setCurrentStep('agent'), 300);
+    }
+  };
+
+  const handleSetupComplete = async () => {
+    if (!repoPath) return;
+
+    try {
+      // Save organization config
+      await window.api?.contractRegistry?.setOrganizationConfig(repoPath, {
+        enabled: featureOrgChoice === 'feature-folders',
+        structure: featureOrgChoice === 'migrate' ? 'flat' : featureOrgChoice,
+        setupCompleted: true,
+        setupCompletedAt: new Date().toISOString(),
+      });
+
+      // Initialize contract registry
+      await window.api?.contractRegistry?.initialize(repoPath);
+
+      setCurrentStep('agent');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save setup');
+    }
+  };
+
+  const handleSkipSetup = async () => {
+    if (!repoPath) return;
+
+    try {
+      // Mark setup as completed but keep flat structure
+      await window.api?.contractRegistry?.setOrganizationConfig(repoPath, {
+        enabled: false,
+        structure: 'flat',
+        setupCompleted: true,
+        setupCompletedAt: new Date().toISOString(),
+      });
+
+      setCurrentStep('agent');
+    } catch {
+      // Continue anyway
+      setCurrentStep('agent');
+    }
   };
 
   const handleAgentSelect = (type: AgentType) => {
@@ -129,12 +190,15 @@ export function CreateAgentWizard({ onClose }: CreateAgentWizardProps): React.Re
     );
   }
 
+  // Calculate step number (setup step is optional)
+  const totalSteps = needsSetup ? 5 : 4;
   const stepNumber = {
     repo: 1,
-    agent: 2,
-    workflow: 3,
-    prompt: 4,
-    complete: 5,
+    setup: 2,
+    agent: needsSetup ? 3 : 2,
+    workflow: needsSetup ? 4 : 3,
+    prompt: needsSetup ? 5 : 4,
+    complete: needsSetup ? 6 : 5,
   }[currentStep];
 
   return (
@@ -150,7 +214,7 @@ export function CreateAgentWizard({ onClose }: CreateAgentWizardProps): React.Re
             <KanvasLogo size="lg" />
             <div>
               <h2 className="text-lg font-semibold text-text-primary">Set Up Agent Session</h2>
-              <p className="text-sm text-text-secondary">Step {stepNumber} of 4</p>
+              <p className="text-sm text-text-secondary">Step {stepNumber} of {totalSteps}</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="btn-icon">
@@ -163,9 +227,9 @@ export function CreateAgentWizard({ onClose }: CreateAgentWizardProps): React.Re
         {/* Progress bar */}
         <div className="px-6 py-2 bg-surface-secondary border-b border-border">
           <div className="flex gap-2">
-            {['repo', 'agent', 'workflow', 'prompt'].map((step, idx) => (
+            {Array.from({ length: totalSteps }, (_, idx) => (
               <div
-                key={step}
+                key={idx}
                 className={`h-1 flex-1 rounded-full transition-colors ${
                   idx < stepNumber ? 'bg-kanvas-blue' : 'bg-border'
                 }`}
@@ -201,7 +265,78 @@ export function CreateAgentWizard({ onClose }: CreateAgentWizardProps): React.Re
             </div>
           )}
 
-          {/* Step 2: Agent Type */}
+          {/* Step 2: First-Run Setup (only shows if needsSetup) */}
+          {currentStep === 'setup' && (
+            <div className="space-y-6">
+              <CompletedStep>
+                {repoValidation?.repoName || 'Repository'} selected
+              </CompletedStep>
+
+              <ConversationBubble>
+                <p className="text-lg font-medium">Set up code organization for this repo?</p>
+                <p className="text-sm text-text-secondary mt-1">
+                  Feature-based folders help keep code organized and make test coverage tracking easier.
+                </p>
+              </ConversationBubble>
+
+              <div className="space-y-3 mt-4">
+                {/* Option 1: Feature Folders (Recommended) */}
+                <SetupOption
+                  selected={featureOrgChoice === 'feature-folders'}
+                  onClick={() => setFeatureOrgChoice('feature-folders')}
+                  recommended
+                  title="Enable Feature Folders"
+                  description="New code will be organized into src/features/{name}/ with tests alongside code"
+                  icon={
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                    </svg>
+                  }
+                />
+
+                {/* Option 2: Keep Current */}
+                <SetupOption
+                  selected={featureOrgChoice === 'flat'}
+                  onClick={() => setFeatureOrgChoice('flat')}
+                  title="Keep Current Structure"
+                  description="Agent will follow existing patterns in the codebase"
+                  icon={
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
+                    </svg>
+                  }
+                />
+
+                {/* Option 3: Migrate (Coming Soon) */}
+                <SetupOption
+                  selected={featureOrgChoice === 'migrate'}
+                  onClick={() => setFeatureOrgChoice('migrate')}
+                  title="Migrate Existing Code"
+                  description="AI will analyze and reorganize your codebase into feature folders"
+                  comingSoon
+                  icon={
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  }
+                />
+              </div>
+
+              {/* House Rules Preview */}
+              {featureOrgChoice === 'feature-folders' && (
+                <div className="mt-4 p-4 rounded-xl border border-border bg-surface-secondary">
+                  <p className="text-sm font-medium text-text-primary mb-2">This will add to house rules:</p>
+                  <div className="text-xs text-text-secondary font-mono space-y-1">
+                    <p>• Features go in src/features/{'{name}'}/ folders</p>
+                    <p>• Tests live with their feature code</p>
+                    <p>• Each feature has index.ts for public exports</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Step 3: Agent Type */}
           {currentStep === 'agent' && (
             <div className="space-y-6">
               <CompletedStep>
@@ -369,7 +504,8 @@ export function CreateAgentWizard({ onClose }: CreateAgentWizardProps): React.Re
                 onClick={() => {
                   const prevStep: Record<WizardStep, WizardStep> = {
                     repo: 'repo',
-                    agent: 'repo',
+                    setup: 'repo',
+                    agent: needsSetup ? 'setup' : 'repo',
                     workflow: 'agent',
                     prompt: 'workflow',
                     complete: 'prompt',
@@ -393,6 +529,26 @@ export function CreateAgentWizard({ onClose }: CreateAgentWizardProps): React.Re
             >
               Cancel
             </button>
+
+            {currentStep === 'setup' && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleSkipSetup}
+                  className="btn-ghost text-text-secondary"
+                >
+                  Skip for now
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSetupComplete}
+                  className="btn-primary"
+                  disabled={featureOrgChoice === 'migrate'}
+                >
+                  {featureOrgChoice === 'migrate' ? 'Coming Soon' : 'Apply & Continue'}
+                </button>
+              </>
+            )}
 
             {currentStep === 'workflow' && (
               <button
@@ -504,6 +660,80 @@ function OptionButton({
       `}
     >
       {children}
+    </button>
+  );
+}
+
+/**
+ * Setup option card for feature organization
+ */
+function SetupOption({
+  selected,
+  onClick,
+  title,
+  description,
+  icon,
+  recommended,
+  comingSoon,
+}: {
+  selected: boolean;
+  onClick: () => void;
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+  recommended?: boolean;
+  comingSoon?: boolean;
+}): React.ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={comingSoon}
+      className={`
+        w-full p-4 rounded-xl border-2 text-left transition-all
+        ${selected
+          ? 'border-kanvas-blue bg-kanvas-blue/5'
+          : 'border-border hover:border-text-secondary bg-surface'
+        }
+        ${comingSoon ? 'opacity-50 cursor-not-allowed' : ''}
+      `}
+    >
+      <div className="flex items-start gap-3">
+        <div className={`
+          w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0
+          ${selected ? 'bg-kanvas-blue text-white' : 'bg-surface-secondary text-text-secondary'}
+        `}>
+          {icon}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className={`font-medium ${selected ? 'text-kanvas-blue' : 'text-text-primary'}`}>
+              {title}
+            </span>
+            {recommended && (
+              <span className="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded-full">
+                Recommended
+              </span>
+            )}
+            {comingSoon && (
+              <span className="px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-700 rounded-full">
+                Coming Soon
+              </span>
+            )}
+          </div>
+          <p className="text-sm text-text-secondary mt-0.5">{description}</p>
+        </div>
+        <div className={`
+          w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0
+          ${selected ? 'border-kanvas-blue bg-kanvas-blue' : 'border-border'}
+        `}>
+          {selected && (
+            <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+          )}
+        </div>
+      </div>
     </button>
   );
 }

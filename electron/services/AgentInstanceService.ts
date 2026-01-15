@@ -24,15 +24,33 @@ import type {
   KanvasConfig,
   IpcResult,
 } from '../../shared/types';
+import type { TerminalLogService } from './TerminalLogService';
+
+interface SessionState {
+  sessionId: string;
+  lastProcessedCommit: string | null;
+  lastProcessedAt: string | null;
+  contractChangesCount: number;
+  breakingChangesCount: number;
+}
 
 interface StoreSchema {
   recentRepos: RecentRepo[];
   instances: AgentInstance[];
+  sessionStates: Record<string, SessionState>;
 }
 
 export class AgentInstanceService extends BaseService {
   private store: Store<StoreSchema>;
   private instances: Map<string, AgentInstance> = new Map();
+  private terminalLogService: TerminalLogService | null = null;
+
+  /**
+   * Set the terminal log service for logging restart operations
+   */
+  setTerminalLogService(terminalLog: TerminalLogService): void {
+    this.terminalLogService = terminalLog;
+  }
 
   constructor() {
     super();
@@ -41,6 +59,7 @@ export class AgentInstanceService extends BaseService {
       defaults: {
         recentRepos: [],
         instances: [],
+        sessionStates: {},
       },
     });
 
@@ -49,6 +68,9 @@ export class AgentInstanceService extends BaseService {
     for (const instance of savedInstances) {
       this.instances.set(instance.id, instance);
     }
+
+    // Fix stale agent counts in recent repos on startup
+    this.recalculateRepoAgentCounts();
   }
 
   /**
@@ -251,6 +273,9 @@ ${DEVOPS_KIT_DIR}/
         if (!gitignore.includes('local_deploy/')) {
           gitignore += '\n# Local worktrees for isolated development\nlocal_deploy/\n';
         }
+        if (!gitignore.includes('.agent-config')) {
+          gitignore += '\n# Agent session config (auto-generated per session)\n.agent-config\n';
+        }
         await writeFile(gitignorePath, gitignore);
       } catch {
         // Ignore gitignore errors
@@ -349,17 +374,25 @@ ${DEVOPS_KIT_DIR}/
       // Update instance with worktree path
       instance.worktreePath = worktreePath;
 
-      // Regenerate instructions with worktree path
-      if (worktreePath !== config.repoPath) {
-        const updatedInstructionVars: InstructionVars = {
-          ...instructionVars,
-          repoPath: worktreePath,
-        };
-        instance.instructions = getAgentInstructions(config.agentType, updatedInstructionVars);
-        if (config.agentType === 'claude') {
-          instance.prompt = generateClaudePrompt(updatedInstructionVars);
-        }
+      // ALWAYS regenerate instructions with the actual working directory (worktree path)
+      // This ensures the agent works in the isolated worktree, not the main repo
+      const workingDirectory = worktreePath; // The agent should work HERE
+      console.log(`[AgentInstanceService] Working directory for agent: ${workingDirectory}`);
+      console.log(`[AgentInstanceService] Main repo path: ${config.repoPath}`);
+      console.log(`[AgentInstanceService] Worktree created: ${worktreePath !== config.repoPath}`);
+
+      const finalInstructionVars: InstructionVars = {
+        ...instructionVars,
+        repoPath: workingDirectory, // CRITICAL: Use worktree path, not main repo
+      };
+      instance.instructions = getAgentInstructions(config.agentType, finalInstructionVars);
+      if (config.agentType === 'claude') {
+        instance.prompt = generateClaudePrompt(finalInstructionVars);
       }
+
+      // Save instance with updated instructions
+      this.instances.set(id, instance);
+      this.saveInstances();
 
       // Create session file so it appears in the dashboard (use worktree path)
       await this.createSessionFile({ ...config, repoPath: config.repoPath }, sessionId, worktreePath);
@@ -367,7 +400,11 @@ ${DEVOPS_KIT_DIR}/
       // Emit status change event
       this.emitStatusChange(instance);
 
-      console.log(`[AgentInstanceService] Created agent instance ${id} for ${config.agentType} in ${config.repoPath}`);
+      console.log(`[AgentInstanceService] Created agent instance ${id} for ${config.agentType}`);
+      console.log(`[AgentInstanceService] Agent should work in: ${workingDirectory}`);
+
+      // Setup agent environment (.agent-config, .vscode/settings.json)
+      await this.setupAgentEnvironment(id);
 
       return { success: true, data: instance };
     } catch (error) {
@@ -403,6 +440,7 @@ ${DEVOPS_KIT_DIR}/
         agentType: config.agentType,
         task: config.taskDescription || `${config.agentType} session`,
         branchName: config.branchName,
+        baseBranch: config.baseBranch, // The branch this session was created from (merge target)
         worktreePath: worktreePath || config.repoPath,
         repoPath: config.repoPath,
         status: 'idle' as const,
@@ -518,6 +556,114 @@ ${DEVOPS_KIT_DIR}/
   }
 
   /**
+   * Create .agent-config file in worktree root
+   * Contains agent identification and session info for external tools
+   */
+  private async createAgentConfigFile(
+    worktreePath: string,
+    instance: AgentInstance
+  ): Promise<void> {
+    try {
+      const agentConfig = {
+        version: '1.0.0',
+        sessionId: instance.sessionId,
+        instanceId: instance.id,
+        agentType: instance.config.agentType,
+        branchName: instance.config.branchName,
+        baseBranch: instance.config.baseBranch,
+        taskDescription: instance.config.taskDescription,
+        createdAt: instance.createdAt,
+        worktreePath,
+        repoPath: instance.config.repoPath,
+        environment: {
+          KANVAS_SESSION_ID: instance.sessionId,
+          KANVAS_AGENT_TYPE: instance.config.agentType,
+          KANVAS_WORKTREE_PATH: worktreePath,
+          KANVAS_BRANCH_NAME: instance.config.branchName,
+        },
+      };
+
+      const configPath = join(worktreePath, '.agent-config');
+      await writeFile(configPath, JSON.stringify(agentConfig, null, 2));
+      console.log(`[AgentInstanceService] Created .agent-config at ${configPath}`);
+    } catch (error) {
+      console.warn(`[AgentInstanceService] Could not create .agent-config: ${error}`);
+    }
+  }
+
+  /**
+   * Create .vscode/settings.json with agent-specific settings
+   * Sets window title to include agent name for easy identification
+   */
+  private async createVSCodeSettings(
+    worktreePath: string,
+    instance: AgentInstance
+  ): Promise<void> {
+    try {
+      const vscodeDir = join(worktreePath, '.vscode');
+      if (!existsSync(vscodeDir)) {
+        await mkdir(vscodeDir, { recursive: true });
+      }
+
+      const settingsPath = join(vscodeDir, 'settings.json');
+      let existingSettings: Record<string, unknown> = {};
+
+      // Load existing settings if present
+      if (existsSync(settingsPath)) {
+        try {
+          const content = await readFile(settingsPath, 'utf-8');
+          existingSettings = JSON.parse(content);
+        } catch {
+          // Ignore parse errors, start fresh
+        }
+      }
+
+      // Merge with agent-specific settings
+      const agentLabel = instance.config.agentType.charAt(0).toUpperCase() + instance.config.agentType.slice(1);
+      const shortSessionId = instance.sessionId?.replace('sess_', '').slice(0, 8) || 'unknown';
+
+      const settings = {
+        ...existingSettings,
+        'window.title': `[${agentLabel}] \${rootName} - \${activeEditorShort} | Session: ${shortSessionId}`,
+        'scm.defaultViewMode': 'tree',
+        'git.autofetch': true,
+        'editor.formatOnSave': true,
+        // Recommended extensions for the agent workflow
+        'recommendations': [
+          'eamodio.gitlens',
+          'streetsidesoftware.code-spell-checker',
+        ],
+      };
+
+      await writeFile(settingsPath, JSON.stringify(settings, null, 2));
+      console.log(`[AgentInstanceService] Created .vscode/settings.json at ${settingsPath}`);
+    } catch (error) {
+      console.warn(`[AgentInstanceService] Could not create VS Code settings: ${error}`);
+    }
+  }
+
+  /**
+   * Setup agent environment in worktree
+   * Called after instance creation to configure the workspace
+   */
+  async setupAgentEnvironment(instanceId: string): Promise<IpcResult<void>> {
+    const instance = this.instances.get(instanceId);
+    if (!instance) {
+      return {
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Instance not found' },
+      };
+    }
+
+    const worktreePath = instance.worktreePath || instance.config.repoPath;
+
+    await this.createAgentConfigFile(worktreePath, instance);
+    await this.createVSCodeSettings(worktreePath, instance);
+
+    return { success: true };
+  }
+
+  /**
    * Get instructions for a specific agent type
    */
   getInstructions(agentType: AgentType, config: AgentInstanceConfig): IpcResult<string> {
@@ -583,24 +729,211 @@ ${DEVOPS_KIT_DIR}/
 
   /**
    * Delete an instance
+   * Also deletes session files from disk to prevent them reappearing on restart
    */
-  deleteInstance(instanceId: string): IpcResult<void> {
-    const deleted = this.instances.delete(instanceId);
-    if (deleted) {
+  async deleteInstance(instanceId: string): Promise<IpcResult<void>> {
+    const instance = this.instances.get(instanceId);
+
+    if (instance) {
+      // Delete session files from disk (prevents AgentListenerService from reloading them)
+      await this.deleteSessionFilesFromDisk(instance);
+
+      // Clear session state
+      if (instance.sessionId) {
+        this.clearSessionState(instance.sessionId);
+      }
+
+      // Decrement the agent count for this repo in recent repos
+      if (instance.config.repoPath) {
+        this.decrementRepoAgentCount(instance.config.repoPath);
+      }
+
+      // Delete from in-memory store
+      this.instances.delete(instanceId);
       this.saveInstances();
+
       // Notify renderer to remove the session
       const windows = BrowserWindow.getAllWindows();
       for (const win of windows) {
         win.webContents.send('instance:deleted', instanceId);
+        if (instance.sessionId) {
+          win.webContents.send('session:closed', instance.sessionId);
+        }
       }
+
+      console.log(`[AgentInstanceService] Deleted instance ${instanceId} and session files`);
     }
+
     return { success: true };
   }
 
   /**
-   * Restart an instance - reinitializes repo, creates new session with same config
+   * Delete a session by sessionId (used by merge workflow and UI)
+   * Finds the instance and deletes it along with session files
+   * @param sessionId - The session ID to delete
+   * @param repoPath - Optional repo path to delete files from (needed when no instance stored)
    */
-  async restartInstance(sessionId: string): Promise<IpcResult<AgentInstance>> {
+  async deleteSessionById(sessionId: string, repoPath?: string): Promise<IpcResult<void>> {
+    // Find instance by sessionId
+    let targetInstanceId: string | undefined;
+    let targetInstance: AgentInstance | undefined;
+
+    for (const [id, instance] of this.instances) {
+      if (instance.sessionId === sessionId) {
+        targetInstanceId = id;
+        targetInstance = instance;
+        break;
+      }
+    }
+
+    if (targetInstance && targetInstanceId) {
+      return this.deleteInstance(targetInstanceId);
+    }
+
+    // Even if no instance found, try to delete session files from disk
+    // (might have been created without a stored instance or loaded from disk files)
+    console.log(`[AgentInstanceService] No instance found for session ${sessionId}, attempting to delete session files only`);
+
+    // If we have a repoPath, delete the session files from disk and decrement count
+    if (repoPath) {
+      await this.deleteSessionFilesFromDiskBySessionId(sessionId, repoPath);
+      this.decrementRepoAgentCount(repoPath);
+    }
+
+    // Clear session state
+    this.clearSessionState(sessionId);
+
+    // Notify renderer
+    const windows = BrowserWindow.getAllWindows();
+    for (const win of windows) {
+      win.webContents.send('session:closed', sessionId);
+    }
+
+    return { success: true };
+  }
+
+  /**
+   * Delete session files from disk when we only have sessionId and repoPath
+   * Used when no instance is stored (e.g., sessions loaded from disk files)
+   */
+  private async deleteSessionFilesFromDiskBySessionId(sessionId: string, repoPath: string): Promise<void> {
+    const { unlink, readdir } = await import('fs/promises');
+    const shortSessionId = sessionId.replace('sess_', '').slice(0, 8);
+
+    // Session file to delete
+    const sessionFilePath = join(repoPath, KANVAS_PATHS.sessions, `${sessionId}.json`);
+
+    // Try to find and delete the agent file (we need to find it by pattern since we don't know agentType)
+    const agentsDir = join(repoPath, KANVAS_PATHS.agents);
+
+    // Files to delete
+    const filesToDelete = [
+      sessionFilePath,
+      // Activity log
+      join(repoPath, KANVAS_PATHS.activity, `${sessionId}.log`),
+      // Commit message file
+      join(repoPath, `.devops-commit-${shortSessionId}.msg`),
+    ];
+
+    // Find agent files that match this session
+    try {
+      if (existsSync(agentsDir)) {
+        const agentFiles = await readdir(agentsDir);
+        for (const file of agentFiles) {
+          if (file.includes(shortSessionId)) {
+            filesToDelete.push(join(agentsDir, file));
+          }
+        }
+      }
+    } catch {
+      // Ignore errors reading agents directory
+    }
+
+    // Delete files
+    for (const filePath of filesToDelete) {
+      try {
+        if (existsSync(filePath)) {
+          await unlink(filePath);
+          console.log(`[AgentInstanceService] Deleted: ${filePath}`);
+        }
+      } catch (error) {
+        console.warn(`[AgentInstanceService] Could not delete ${filePath}:`, error);
+      }
+    }
+  }
+
+  /**
+   * Delete session files from disk to prevent AgentListenerService from reloading them
+   */
+  private async deleteSessionFilesFromDisk(instance: AgentInstance): Promise<void> {
+    const { unlink } = await import('fs/promises');
+    const repoPath = instance.config.repoPath;
+    const sessionId = instance.sessionId;
+
+    if (!sessionId) return;
+
+    const shortSessionId = sessionId.replace('sess_', '').slice(0, 8);
+    const agentId = `kanvas-${instance.config.agentType}-${shortSessionId}`;
+
+    // Files to delete
+    const filesToDelete = [
+      // Session file in repo's .S9N_KIT_DevOpsAgent/sessions/
+      join(repoPath, KANVAS_PATHS.sessions, `${sessionId}.json`),
+      // Agent file in repo's .S9N_KIT_DevOpsAgent/agents/
+      join(repoPath, KANVAS_PATHS.agents, `${agentId}.json`),
+      // Activity log
+      join(repoPath, KANVAS_PATHS.activity, `${sessionId}.log`),
+      // Heartbeat file
+      join(repoPath, KANVAS_PATHS.heartbeats, `${agentId}.beat`),
+      // Commit message file
+      join(repoPath, `.devops-commit-${shortSessionId}.msg`),
+      // Agent config in worktree
+      instance.worktreePath ? join(instance.worktreePath, '.agent-config') : null,
+    ].filter(Boolean) as string[];
+
+    // Also check worktree's .S9N_KIT_DevOpsAgent if different from repo
+    if (instance.worktreePath && instance.worktreePath !== repoPath) {
+      filesToDelete.push(
+        join(instance.worktreePath, KANVAS_PATHS.sessions, `${sessionId}.json`),
+        join(instance.worktreePath, KANVAS_PATHS.agents, `${agentId}.json`)
+      );
+    }
+
+    // Delete files
+    for (const filePath of filesToDelete) {
+      try {
+        if (existsSync(filePath)) {
+          await unlink(filePath);
+          console.log(`[AgentInstanceService] Deleted: ${filePath}`);
+        }
+      } catch (error) {
+        // Ignore deletion errors - file might already be deleted
+        console.warn(`[AgentInstanceService] Could not delete ${filePath}:`, error);
+      }
+    }
+  }
+
+  /**
+   * Restart an instance - commits pending changes, reinitializes repo, creates new session
+   * If there are uncommitted changes, commits them first
+   * If there are multiple commits since last restart, consolidates their messages
+   * @param sessionId - The session ID to restart
+   * @param sessionData - Optional session data to use if no instance exists
+   */
+  async restartInstance(
+    sessionId: string,
+    sessionData?: {
+      repoPath: string;
+      branchName: string;
+      baseBranch?: string;
+      worktreePath?: string;
+      agentType?: AgentType;
+      task?: string;
+    }
+  ): Promise<IpcResult<AgentInstance>> {
+    const shortSessionId = sessionId.replace('sess_', '').slice(0, 8);
+    this.terminalLogService?.logSystem(`Starting restart for session ${shortSessionId}...`, sessionId);
+
     try {
       // Find instance by sessionId
       let targetInstance: AgentInstance | undefined;
@@ -611,30 +944,105 @@ ${DEVOPS_KIT_DIR}/
         }
       }
 
+      // If no instance found but we have session data, create a temporary config
+      if (!targetInstance && sessionData) {
+        console.log(`[AgentInstanceService] No instance found for ${sessionId}, creating from session data`);
+        this.terminalLogService?.info(`No stored instance found, using session data`, sessionId, 'Restart');
+
+        // Create config from session data
+        const config: AgentInstanceConfig = {
+          repoPath: sessionData.repoPath,
+          agentType: sessionData.agentType || 'claude',
+          taskDescription: sessionData.task || 'Restarted session',
+          branchName: sessionData.branchName,
+          baseBranch: sessionData.baseBranch || 'main',
+          useWorktree: !!sessionData.worktreePath,
+          autoCommit: true,
+          commitInterval: 30000,
+          rebaseFrequency: 'never',
+          systemPrompt: '',
+          contextPreservation: '',
+        };
+
+        // Create the new instance directly (skip finding old instance)
+        this.terminalLogService?.info(`Initializing Kanvas directory...`, sessionId, 'Restart');
+        const initResult = await this.initializeKanvasDirectory(config.repoPath);
+        if (!initResult.success) {
+          this.terminalLogService?.error(`Failed to initialize directory: ${initResult.error?.message}`, sessionId, 'Restart');
+          return {
+            success: false,
+            error: initResult.error || { code: 'INIT_ERROR', message: 'Failed to initialize directory' },
+          };
+        }
+
+        // Commit any pending changes in the worktree before creating new session
+        const worktreePath = sessionData.worktreePath || config.repoPath;
+        this.terminalLogService?.info(`Checking for uncommitted changes...`, sessionId, 'Restart');
+        const commitResult = await this.commitPendingChangesOnRestart(sessionId, worktreePath);
+        if (commitResult.committed) {
+          console.log(`[AgentInstanceService] Committed pending changes: ${commitResult.message}`);
+          this.terminalLogService?.info(`Committed pending changes: ${commitResult.message}`, sessionId, 'Restart');
+        } else {
+          this.terminalLogService?.info(`No uncommitted changes found`, sessionId, 'Restart');
+        }
+
+        // Create new instance with the config
+        this.terminalLogService?.info(`Creating new session...`, sessionId, 'Restart');
+        const newInstance = await this.createInstance(config);
+
+        if (newInstance.success && newInstance.data) {
+          const windows = BrowserWindow.getAllWindows();
+          for (const win of windows) {
+            win.webContents.send('session:closed', sessionId);
+          }
+          const newShortId = newInstance.data.sessionId?.replace('sess_', '').slice(0, 8);
+          console.log(`[AgentInstanceService] Session restarted from session data: ${sessionId} -> ${newInstance.data.sessionId}`);
+          this.terminalLogService?.logSystem(`Session restarted: ${shortSessionId} -> ${newShortId}`, newInstance.data.sessionId);
+        }
+
+        return newInstance;
+      }
+
       if (!targetInstance) {
+        this.terminalLogService?.error(`Instance not found and no session data provided`, sessionId, 'Restart');
         return {
           success: false,
           error: {
             code: 'NOT_FOUND',
-            message: `Instance with session ${sessionId} not found`,
+            message: `Instance with session ${sessionId} not found. Provide session data to restart.`,
           },
         };
       }
 
       const config = targetInstance.config;
       const oldInstanceId = targetInstance.id;
+      const worktreePath = targetInstance.worktreePath || config.repoPath;
 
-      console.log(`[AgentInstanceService] Restarting session ${sessionId} in ${config.repoPath}`);
+      console.log(`[AgentInstanceService] Restarting session ${sessionId} in ${worktreePath}`);
+      this.terminalLogService?.info(`Found stored instance, restarting in ${worktreePath}`, sessionId, 'Restart');
+
+      // Check for uncommitted changes and commit them
+      this.terminalLogService?.info(`Checking for uncommitted changes...`, sessionId, 'Restart');
+      const commitResult = await this.commitPendingChangesOnRestart(sessionId, worktreePath);
+      if (commitResult.committed) {
+        console.log(`[AgentInstanceService] Committed pending changes: ${commitResult.message}`);
+        this.terminalLogService?.info(`Committed pending changes: ${commitResult.message}`, sessionId, 'Restart');
+      } else {
+        this.terminalLogService?.info(`No uncommitted changes found`, sessionId, 'Restart');
+      }
 
       // Clean up old session files from .S9N_KIT_DevOpsAgent
+      this.terminalLogService?.info(`Cleaning up old session files...`, sessionId, 'Restart');
       await this.cleanupSessionFiles(config.repoPath, sessionId);
 
       // Delete old instance
       this.instances.delete(oldInstanceId);
 
       // Re-initialize the .S9N_KIT_DevOpsAgent directory (ensures structure is correct)
+      this.terminalLogService?.info(`Re-initializing Kanvas directory...`, sessionId, 'Restart');
       const initResult = await this.initializeKanvasDirectory(config.repoPath);
       if (!initResult.success) {
+        this.terminalLogService?.error(`Failed to reinitialize: ${initResult.error?.message}`, sessionId, 'Restart');
         return {
           success: false,
           error: initResult.error || { code: 'INIT_ERROR', message: 'Failed to reinitialize directory' },
@@ -642,6 +1050,7 @@ ${DEVOPS_KIT_DIR}/
       }
 
       // Create new instance with same config (this generates new session ID)
+      this.terminalLogService?.info(`Creating new session...`, sessionId, 'Restart');
       const newInstance = await this.createInstance(config);
 
       if (newInstance.success && newInstance.data) {
@@ -651,18 +1060,84 @@ ${DEVOPS_KIT_DIR}/
           win.webContents.send('session:closed', sessionId);
         }
 
+        const newShortId = newInstance.data.sessionId?.replace('sess_', '').slice(0, 8);
         console.log(`[AgentInstanceService] Session restarted: ${sessionId} -> ${newInstance.data.sessionId}`);
+        this.terminalLogService?.logSystem(`Session restarted: ${shortSessionId} -> ${newShortId}`, newInstance.data.sessionId);
       }
 
       return newInstance;
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Failed to restart instance';
+      this.terminalLogService?.error(`Restart failed: ${errorMsg}`, sessionId, 'Restart');
       return {
         success: false,
         error: {
           code: 'RESTART_ERROR',
-          message: error instanceof Error ? error.message : 'Failed to restart instance',
+          message: errorMsg,
         },
       };
+    }
+  }
+
+  /**
+   * Check for uncommitted changes and commit them before restart
+   * Consolidates commit messages from commits since last processed commit
+   */
+  private async commitPendingChangesOnRestart(
+    sessionId: string,
+    worktreePath: string
+  ): Promise<{ committed: boolean; message?: string }> {
+    try {
+      const { execa } = await import('execa');
+
+      // Check if there are uncommitted changes
+      const statusResult = await execa('git', ['status', '--porcelain'], { cwd: worktreePath });
+      const hasChanges = statusResult.stdout.trim().length > 0;
+
+      if (!hasChanges) {
+        console.log(`[AgentInstanceService] No uncommitted changes to commit`);
+        return { committed: false };
+      }
+
+      // Get commits since last processed commit for consolidated message
+      const sessionState = this.getSessionState(sessionId);
+      const lastCommit = sessionState?.lastProcessedCommit;
+
+      let commitMessages: string[] = [];
+      if (lastCommit) {
+        try {
+          // Get all commit messages since last processed commit
+          const logResult = await execa(
+            'git',
+            ['log', `${lastCommit}..HEAD`, '--format=%s', '--reverse'],
+            { cwd: worktreePath }
+          );
+          commitMessages = logResult.stdout.trim().split('\n').filter(Boolean);
+        } catch {
+          // Ignore errors getting commit history
+        }
+      }
+
+      // Stage all changes
+      await execa('git', ['add', '-A'], { cwd: worktreePath });
+
+      // Create consolidated commit message
+      let commitMessage: string;
+      if (commitMessages.length > 0) {
+        // Consolidate recent commit messages
+        commitMessage = `[Kanvas Restart] Consolidated changes\n\nChanges since last session:\n${commitMessages.map(m => `- ${m}`).join('\n')}\n\n+ Uncommitted changes at restart`;
+      } else {
+        commitMessage = `[Kanvas Restart] Save uncommitted changes before session restart`;
+      }
+
+      // Commit
+      await execa('git', ['commit', '-m', commitMessage], { cwd: worktreePath });
+
+      console.log(`[AgentInstanceService] Committed ${commitMessages.length > 0 ? 'consolidated' : 'pending'} changes`);
+      return { committed: true, message: commitMessage.split('\n')[0] };
+    } catch (error) {
+      console.warn(`[AgentInstanceService] Could not commit pending changes: ${error}`);
+      return { committed: false };
     }
   }
 
@@ -784,6 +1259,55 @@ ${DEVOPS_KIT_DIR}/
     return { success: true };
   }
 
+  /**
+   * Decrement the agent count for a repo when a session is deleted
+   */
+  decrementRepoAgentCount(repoPath: string): void {
+    const repos = this.store.get('recentRepos', []) as RecentRepo[];
+    const existingIndex = repos.findIndex(r => r.path === repoPath);
+    if (existingIndex >= 0) {
+      const newCount = Math.max(0, repos[existingIndex].agentCount - 1);
+      repos[existingIndex] = {
+        ...repos[existingIndex],
+        agentCount: newCount,
+      };
+      this.store.set('recentRepos', repos);
+      console.log(`[AgentInstanceService] Decremented agent count for ${repoPath} to ${newCount}`);
+    }
+  }
+
+  /**
+   * Recalculate agent counts for all recent repos based on actual stored instances
+   * This fixes stale counts that got out of sync
+   */
+  recalculateRepoAgentCounts(): void {
+    const repos = this.store.get('recentRepos', []) as RecentRepo[];
+    const instances = Array.from(this.instances.values());
+
+    // Count instances per repo
+    const countByRepo = new Map<string, number>();
+    for (const instance of instances) {
+      const repoPath = instance.config.repoPath;
+      countByRepo.set(repoPath, (countByRepo.get(repoPath) || 0) + 1);
+    }
+
+    // Update counts in recent repos
+    let updated = false;
+    for (const repo of repos) {
+      const actualCount = countByRepo.get(repo.path) || 0;
+      if (repo.agentCount !== actualCount) {
+        console.log(`[AgentInstanceService] Fixing agent count for ${repo.name}: ${repo.agentCount} -> ${actualCount}`);
+        repo.agentCount = actualCount;
+        updated = true;
+      }
+    }
+
+    if (updated) {
+      this.store.set('recentRepos', repos);
+      console.log('[AgentInstanceService] Recalculated repo agent counts');
+    }
+  }
+
   // Private helpers
 
   private saveInstances(): void {
@@ -825,7 +1349,8 @@ ${DEVOPS_KIT_DIR}/
         agentType: instance.config.agentType,
         task: instance.config.taskDescription || instance.config.branchName || `${instance.config.agentType} session`,
         branchName: instance.config.branchName,
-        worktreePath: instance.config.repoPath,
+        baseBranch: instance.config.baseBranch, // The branch this session was created from (merge target)
+        worktreePath: instance.worktreePath || instance.config.repoPath,
         repoPath: instance.config.repoPath,
         status: instance.status === 'running' ? 'active' as const : 'idle' as const,
         created: instance.createdAt,
@@ -854,6 +1379,151 @@ ${DEVOPS_KIT_DIR}/
         win.webContents.send('agent:registered', agentInfo);
       }
     }
+  }
+
+  // ==========================================================================
+  // SESSION STATE TRACKING (for crash recovery)
+  // ==========================================================================
+
+  /**
+   * Get the session state (last processed commit, etc.)
+   */
+  getSessionState(sessionId: string): SessionState | null {
+    const states = this.store.get('sessionStates', {});
+    return states[sessionId] || null;
+  }
+
+  /**
+   * Update the last processed commit for a session
+   */
+  updateLastProcessedCommit(
+    sessionId: string,
+    commitHash: string,
+    contractChangesCount = 0,
+    breakingChangesCount = 0
+  ): void {
+    const states = this.store.get('sessionStates', {});
+    states[sessionId] = {
+      sessionId,
+      lastProcessedCommit: commitHash,
+      lastProcessedAt: new Date().toISOString(),
+      contractChangesCount: (states[sessionId]?.contractChangesCount || 0) + contractChangesCount,
+      breakingChangesCount: (states[sessionId]?.breakingChangesCount || 0) + breakingChangesCount,
+    };
+    this.store.set('sessionStates', states);
+    console.log(`[AgentInstanceService] Updated session ${sessionId} last commit: ${commitHash.substring(0, 7)}`);
+  }
+
+  /**
+   * Get all session states (for crash recovery check)
+   */
+  getAllSessionStates(): Record<string, SessionState> {
+    return this.store.get('sessionStates', {});
+  }
+
+  /**
+   * Clear session state (when session is deleted)
+   */
+  clearSessionState(sessionId: string): void {
+    const states = this.store.get('sessionStates', {});
+    delete states[sessionId];
+    this.store.set('sessionStates', states);
+  }
+
+  /**
+   * Get commits since last processed commit for a session
+   * Returns commits that need to be processed (for crash recovery)
+   */
+  async getUnprocessedCommits(sessionId: string): Promise<{
+    commits: Array<{ hash: string; message: string; timestamp: string }>;
+    worktreePath: string | null;
+  }> {
+    const instance = Array.from(this.instances.values()).find(i => i.sessionId === sessionId);
+    if (!instance) {
+      return { commits: [], worktreePath: null };
+    }
+
+    const worktreePath = instance.worktreePath || instance.config.repoPath;
+    const sessionState = this.getSessionState(sessionId);
+    const lastCommit = sessionState?.lastProcessedCommit;
+
+    try {
+      const { execa } = await import('execa');
+
+      // Get commits since last processed commit
+      let gitArgs: string[];
+      if (lastCommit) {
+        // Get commits after the last processed one
+        gitArgs = ['log', `${lastCommit}..HEAD`, '--format=%H|%s|%aI', '--reverse'];
+      } else {
+        // No last commit, get last 10 commits to avoid overwhelming
+        gitArgs = ['log', '-10', '--format=%H|%s|%aI', '--reverse'];
+      }
+
+      const result = await execa('git', gitArgs, { cwd: worktreePath });
+      const lines = result.stdout.trim().split('\n').filter(Boolean);
+
+      const commits = lines.map(line => {
+        const [hash, message, timestamp] = line.split('|');
+        return { hash, message, timestamp };
+      });
+
+      console.log(`[AgentInstanceService] Found ${commits.length} unprocessed commits for session ${sessionId}`);
+      return { commits, worktreePath };
+    } catch (error) {
+      console.warn(`[AgentInstanceService] Could not get unprocessed commits: ${error}`);
+      return { commits: [], worktreePath };
+    }
+  }
+
+  /**
+   * Process all unprocessed commits for all sessions on startup
+   * This is the crash recovery routine
+   */
+  async processUnprocessedCommitsOnStartup(
+    contractDetection: { analyzeCommit: (sessionId: string, commitHash: string, worktreePath: string) => Promise<{ contractChanges: number; breakingChanges: number }> }
+  ): Promise<{ sessionsProcessed: number; commitsProcessed: number }> {
+    let sessionsProcessed = 0;
+    let commitsProcessed = 0;
+
+    console.log('[AgentInstanceService] Starting crash recovery - checking for unprocessed commits...');
+
+    for (const instance of this.instances.values()) {
+      if (!instance.sessionId) continue;
+
+      const { commits, worktreePath } = await this.getUnprocessedCommits(instance.sessionId);
+      if (commits.length === 0 || !worktreePath) continue;
+
+      sessionsProcessed++;
+      console.log(`[AgentInstanceService] Processing ${commits.length} commits for session ${instance.sessionId}`);
+
+      for (const commit of commits) {
+        try {
+          // Analyze commit for contract changes
+          const analysis = await contractDetection.analyzeCommit(
+            instance.sessionId,
+            commit.hash,
+            worktreePath
+          );
+
+          // Update session state
+          this.updateLastProcessedCommit(
+            instance.sessionId,
+            commit.hash,
+            analysis.contractChanges,
+            analysis.breakingChanges
+          );
+
+          commitsProcessed++;
+        } catch (error) {
+          console.warn(`[AgentInstanceService] Failed to process commit ${commit.hash}: ${error}`);
+          // Continue with next commit
+        }
+      }
+    }
+
+    console.log(`[AgentInstanceService] Crash recovery complete: ${sessionsProcessed} sessions, ${commitsProcessed} commits processed`);
+    return { sessionsProcessed, commitsProcessed };
   }
 }
 

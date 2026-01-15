@@ -1,0 +1,105 @@
+# Commit Message Mode Configuration
+# ==================================
+# Generates conventional commit messages from staged changes
+
+mode:
+  id: commit_message
+  name: "Commit Message Generator"
+  description: "Generates conventional commit messages from code changes"
+  version: "1.0.0"
+  app: "kanvas"
+
+settings:
+  temperature: 0.4
+  max_tokens: 500
+  model: llama-3.1-8b  # Fast model for simple generation
+
+persona:
+  name: "Commit Assistant"
+  tone: "concise, precise"
+  style: "conventional commits"
+
+# Conventional commit types
+commit_types:
+  feat: "A new feature"
+  fix: "A bug fix"
+  docs: "Documentation only changes"
+  style: "Changes that don't affect code meaning"
+  refactor: "Code change that neither fixes a bug nor adds a feature"
+  perf: "Performance improvement"
+  test: "Adding or correcting tests"
+  build: "Changes to build system or dependencies"
+  ci: "Changes to CI configuration"
+  chore: "Other changes that don't modify src or test files"
+  revert: "Reverts a previous commit"
+
+prompts:
+  system:
+    base: |
+      You generate commit messages following the Conventional Commits specification.
+
+      Format: <type>(<scope>): <description>
+
+      Rules:
+      - Type must be one of: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+      - Scope is optional, represents the module/component affected
+      - Description uses imperative mood ("add" not "added")
+      - Description is lowercase, no period at end
+      - Keep under 72 characters for the first line
+      - Add body for complex changes (blank line after subject)
+
+  generate:
+    system: |
+      {base_system}
+
+      Analyze the diff and generate an appropriate commit message.
+      Focus on the "why" and "what", not the "how".
+
+    user_template: |
+      Files changed:
+      {files_changed}
+
+      Diff:
+      ```
+      {diff_content}
+      ```
+
+      Generate a conventional commit message.
+
+  generate_with_context:
+    system: |
+      {base_system}
+
+      Use the provided context to generate a more meaningful commit message.
+
+    user_template: |
+      Task/Issue: {task_description}
+      Branch: {branch_name}
+
+      Files changed:
+      {files_changed}
+
+      Diff:
+      ```
+      {diff_content}
+      ```
+
+      Generate a commit message that references the task context.
+
+  suggest_multiple:
+    system: |
+      {base_system}
+
+      Provide 3 commit message options, from most specific to most general.
+
+    user_template: |
+      Diff:
+      ```
+      {diff_content}
+      ```
+
+      Suggest 3 commit message options.
+
+flow:
+  type: "generation"
+  output_format: "text"

@@ -1,0 +1,151 @@
+# AI Models Configuration
+# This file defines available LLM models and their settings
+# Can be overridden by external config at EXTERNAL_AI_CONFIG_PATH
+
+version: "1.0.0"
+
+# Default model to use
+default_model: llama-3.3-70b
+
+# Available models on Groq
+models:
+  llama-3.3-70b:
+    id: llama-3.3-70b-versatile
+    name: "Llama 3.3 70B"
+    description: "General purpose, balanced performance"
+    provider: groq
+    context_window: 128000
+    max_tokens: 4096
+    settings:
+      temperature: 0.5
+      top_p: 1.0
+    pricing:
+      input: 0.59   # per 1M tokens
+      output: 0.79  # per 1M tokens
+    use_cases:
+      - general
+      - chat
+      - summarization
+
+  kimi-k2:
+    id: moonshotai/kimi-k2-instruct-0905
+    name: "Kimi K2"
+    description: "Best for coding/agentic tasks, 256K context"
+    provider: groq
+    context_window: 256000
+    max_tokens: 8192
+    settings:
+      temperature: 0.6
+      top_p: 0.95
+    pricing:
+      input: 1.00   # per 1M tokens
+      output: 3.00  # per 1M tokens
+    use_cases:
+      - coding
+      - agentic
+      - tool_use
+      - long_context
+
+  qwen-qwq-32b:
+    id: qwen-qwq-32b
+    name: "Qwen QwQ 32B"
+    description: "Advanced reasoning and code analysis"
+    provider: groq
+    context_window: 128000
+    max_tokens: 4096
+    settings:
+      temperature: 0.6
+      top_p: 0.95
+      reasoning_format: parsed  # Required for QwQ
+    pricing:
+      input: 0.29   # per 1M tokens
+      output: 0.59  # per 1M tokens
+    use_cases:
+      - reasoning
+      - code_analysis
+      - math
+      - problem_solving
+
+  qwen3-32b:
+    id: qwen/qwen3-32b
+    name: "Qwen 3 32B"
+    description: "Fast, good for general code tasks"
+    provider: groq
+    context_window: 128000
+    max_tokens: 4096
+    settings:
+      temperature: 0.7
+      top_p: 0.9
+    pricing:
+      input: 0.29   # per 1M tokens
+      output: 0.59  # per 1M tokens
+    use_cases:
+      - coding
+      - general
+      - fast_inference
+
+  llama-3.1-8b:
+    id: llama-3.1-8b-instant
+    name: "Llama 3.1 8B"
+    description: "Fast, lightweight for simple tasks"
+    provider: groq
+    context_window: 128000
+    max_tokens: 2048
+    settings:
+      temperature: 0.5
+      top_p: 1.0
+    pricing:
+      input: 0.05   # per 1M tokens
+      output: 0.08  # per 1M tokens
+    use_cases:
+      - simple_tasks
+      - fast_inference
+      - cost_sensitive
+
+# Task-specific model recommendations
+task_defaults:
+  # Code generation and editing
+  coding:
+    primary: kimi-k2
+    fallback: qwen3-32b
+
+  # Code review and analysis
+  code_review:
+    primary: qwen-qwq-32b
+    fallback: kimi-k2
+
+  # Contract detection and analysis
+  contract_analysis:
+    primary: qwen-qwq-32b
+    fallback: qwen3-32b
+
+  # General chat and assistance
+  chat:
+    primary: llama-3.3-70b
+    fallback: qwen3-32b
+
+  # Commit message generation
+  commit_message:
+    primary: llama-3.1-8b
+    fallback: llama-3.3-70b
+
+  # Long context tasks (large files, repos)
+  long_context:
+    primary: kimi-k2
+    fallback: llama-3.3-70b
+
+  # Agentic/tool use tasks
+  agentic:
+    primary: kimi-k2
+    fallback: qwen-qwq-32b
+
+# Provider configurations
+providers:
+  groq:
+    name: "Groq"
+    base_url: "https://api.groq.com/openai/v1"
+    env_key: "GROQ_API_KEY"
+    credential_key: "groqApiKey"
+    rate_limits:
+      requests_per_minute: 30
+      tokens_per_minute: 100000

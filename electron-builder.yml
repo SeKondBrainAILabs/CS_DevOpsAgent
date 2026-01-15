@@ -1,0 +1,45 @@
+appId: com.sekondbrain.kanvas
+productName: SeKondBrain Kanvas for KIT (DevOps)
+directories:
+  output: release
+  buildResources: resources
+files:
+  - dist/**/*
+  - package.json
+extraMetadata:
+  main: dist/electron/index.js
+mac:
+  category: public.app-category.developer-tools
+  icon: resources/icon.icns
+  target:
+    - dmg
+    - zip
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+win:
+  icon: resources/icon.ico
+  target:
+    - nsis
+    - portable
+linux:
+  icon: resources/icon.png
+  target:
+    - AppImage
+    - deb
+  category: Development
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
+  differentialPackage: true
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications

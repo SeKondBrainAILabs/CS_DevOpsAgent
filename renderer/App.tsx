@@ -20,6 +20,7 @@ import { useAgentStore, selectAgentList, selectSessionById } from './store/agent
 import { useUIStore } from './store/uiStore';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useAgentSubscription } from './hooks/useAgentSubscription';
+import type { SessionReport } from '../shared/agent-protocol';
 
 export default function App(): React.ReactElement {
   const agents = useAgentStore(selectAgentList);
@@ -91,9 +92,20 @@ export default function App(): React.ReactElement {
   };
 
   // Handle session restart - reinitializes repo, creates new session with same config
-  const handleRestartSession = async (sessionId: string): Promise<void> => {
+  const handleRestartSession = async (sessionId: string, session?: SessionReport): Promise<void> => {
     try {
-      const result = await window.api.instance?.restart?.(sessionId);
+      // Pass session data so restart can work even without stored AgentInstance
+      // (e.g., for sessions created outside the Kanvas wizard via CLI)
+      const sessionData = session ? {
+        repoPath: session.repoPath,
+        branchName: session.branchName,
+        baseBranch: session.baseBranch,
+        worktreePath: session.worktreePath,
+        agentType: session.agentType,
+        task: session.task,
+      } : undefined;
+
+      const result = await window.api.instance?.restart?.(sessionId, sessionData);
       if (result?.success && result.data) {
         // Remove old session from store
         removeReportedSession(sessionId);

@@ -1,81 +1,85 @@
 {
-  "name": "s9n-devops-agent",
-  "version": "2.0.18-dev.13",
-  "description": "CS_DevOpsAgent - Intelligent Git Automation System with multi-agent support and session management",
+  "name": "sekondbrain-kanvas",
+  "version": "1.0.0",
+  "description": "Kanvas - AI Agent Dashboard for DevOps",
+  "main": "dist/electron/index.js",
   "type": "module",
-  "main": "src/cs-devops-agent-worker.js",
-  "bin": {
-    "s9n-devops-agent": "bin/cs-devops-agent"
-  },
-  "files": [
-    "bin/",
-    "src/",
-    "scripts/",
-    "docs/",
-    "House_Rules_Contracts/",
-    "start-devops-session.sh",
-    "cleanup-sessions.sh",
-    "houserules.md",
-    "houserules_structured.md",
-    "LICENSE",
-    "README.md"
-  ],
   "scripts": {
-    "start": "./start-devops-session.sh",
-    "dev": "./start-devops-session.sh",
-    "devops": "./start-devops-session.sh",
-    "devops:list": "node src/session-coordinator.js list",
-    "devops:start": "node src/session-coordinator.js start",
-    "devops:close": "node src/close-session.js",
-    "devops:cleanup": "./cleanup-sessions.sh",
-    "chat": "node src/agent-chat.js",
-    "setup": "node src/setup-cs-devops-agent.js",
-    "house-rules:status": "node src/house-rules-manager.js status",
-    "house-rules:update": "node src/house-rules-manager.js update",
-    "house-rules:repair": "./scripts/repair-house-rules.sh",
-    "test": "NODE_OPTIONS=--experimental-vm-modules jest test_cases/",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
-    "test:worktree": "jest test_cases/worktree/",
-    "test:e2e": "./test_scripts/test-e2e-multi-session.sh",
-    "test:contracts": "jest tests/integration/contract-workflow.test.js",
-    "test:push-behind": "jest test_scripts/push_behind_spec.js",
-    "test:debug": "./debug-failing-tests.sh"
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "postinstall": "electron-builder install-app-deps",
+    "cli": "./start-devops-session.sh",
+    "cli:list": "node src/session-coordinator.js list",
+    "cli:start": "node src/session-coordinator.js start",
+    "cli:close": "node src/close-session.js",
+    "cli:cleanup": "./cleanup-sessions.sh",
+    "test": "jest",
+    "test:kanvas": "jest --config jest.kanvas.config.cjs",
+    "test:e2e": "playwright test",
+    "lint": "eslint . --ext .ts,.tsx"
   },
-  "keywords": [
-    "git",
-    "automation",
-    "commit",
-    "workflow",
-    "vscode",
-    "branching",
-    "development-tools"
-  ],
-  "author": "Sachin Dev Duggal",
-  "license": "MIT",
   "dependencies": {
+    "better-sqlite3": "^11.7.0",
     "chokidar": "^3.5.3",
-    "execa": "^7.1.1",
+    "glob": "^11.0.0",
     "groq-sdk": "^0.37.0",
-    "openai": "^4.20.0"
+    "js-yaml": "^4.1.0",
+    "openai": "^4.20.0",
+    "tree-sitter": "^0.22.4",
+    "tree-sitter-javascript": "^0.23.1",
+    "tree-sitter-typescript": "^0.23.2",
+    "zustand": "^5.0.2"
   },
   "devDependencies": {
-    "@jest/globals": "^29.7.0",
-    "eslint": "^8.56.0",
-    "jest": "^29.7.0"
+    "@playwright/test": "^1.49.1",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "electron-rebuild": "^3.2.9",
+    "electron-vite": "^2.3.0",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
+    "postcss": "^8.4.49",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^3.4.17",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  },
+  "build": {
+    "appId": "com.sekondbrain.kanvas",
+    "productName": "Kanvas",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": ["nsis", "zip"]
+    },
+    "linux": {
+      "target": ["AppImage", "deb"]
+    }
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=18.0.0"
   },
-  "publishConfig": {
-    "access": "public"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/SecondBrainAICo/CS_DevOpsAgent.git"
-  },
-  "bugs": {
-    "url": "https://github.com/SecondBrainAICo/CS_DevOpsAgent/issues"
-  },
-  "homepage": "https://github.com/SecondBrainAICo/CS_DevOpsAgent#readme"
+  "author": "SeKondBrain AI Labs",
+  "license": "MIT"
 }

@@ -102,6 +102,7 @@ export interface SessionReport {
   agentType: AgentType;
   task: string;
   branchName: string;
+  baseBranch: string; // The branch this session was created from (merge target)
   worktreePath: string;
   repoPath: string;
   status: SessionStatus;

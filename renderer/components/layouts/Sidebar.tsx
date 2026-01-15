@@ -8,6 +8,8 @@
 import React, { useState, useEffect } from 'react';
 import { AgentList } from '../features/AgentList';
 import { KanvasLogo } from '../ui/KanvasLogo';
+import { FileCoordinationButton } from '../features/FileCoordinationPanel';
+import { MergeWorkflowModal } from '../features/MergeWorkflowModal';
 import { useAgentStore, selectSessionsByAgent } from '../../store/agentStore';
 import { useUIStore } from '../../store/uiStore';
 import type { SessionReport } from '../../../shared/agent-protocol';
@@ -32,7 +34,13 @@ export function Sidebar(): React.ReactElement {
   // Handle session deletion
   const handleDeleteSession = async (sessionId: string): Promise<void> => {
     try {
-      const result = await window.api.instance?.delete?.(sessionId);
+      // Get the session to find its repoPath (needed to delete files from disk)
+      const session = reportedSessions.get(sessionId);
+      const repoPath = session?.repoPath;
+
+      // Use deleteSession which takes sessionId (not instanceId)
+      // This also deletes session files from disk to prevent reappearing on restart
+      const result = await window.api.instance?.deleteSession?.(sessionId, repoPath);
       if (result?.success) {
         // Remove from store
         removeReportedSession(sessionId);
@@ -113,13 +121,16 @@ export function Sidebar(): React.ReactElement {
           </svg>
           Create Agent Instance
         </button>
-        <button
-          onClick={() => setShowNewSessionWizard(true)}
-          className="w-full py-2 px-4 rounded-xl border border-border text-text-primary text-sm
-                     hover:bg-surface-secondary transition-colors"
-        >
-          Initialize Directory
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowNewSessionWizard(true)}
+            className="flex-1 py-2 px-3 rounded-xl border border-border text-text-primary text-sm
+                       hover:bg-surface-secondary transition-colors"
+          >
+            Initialize Directory
+          </button>
+          <FileCoordinationButton currentSessionId={selectedSessionId || undefined} />
+        </div>
         <button
           onClick={() => setShowSettingsModal(true)}
           className="w-full py-2 px-4 rounded-xl border border-border text-text-primary text-sm
@@ -299,20 +310,45 @@ function SessionCard({
   onDelete: () => void;
 }): React.ReactElement {
   const [showConfirm, setShowConfirm] = useState(false);
+  const [showMergeModal, setShowMergeModal] = useState(false);
   const [, forceUpdate] = useState(0);
+  const [configValid, setConfigValid] = useState<boolean | null>(null);
   const recentActivity = useAgentStore((state) => state.recentActivity);
 
-  // Force re-render every 10 seconds to update activity status
+  // Check if worktree/repo path is valid
   useEffect(() => {
-    const interval = setInterval(() => forceUpdate(n => n + 1), 10000);
+    const checkConfig = async () => {
+      const pathToCheck = session.worktreePath || session.repoPath;
+      if (!pathToCheck) {
+        setConfigValid(false);
+        return;
+      }
+      // Check if path exists via git status
+      if (window.api?.git?.getStatus) {
+        try {
+          const result = await window.api.git.getStatus(session.sessionId);
+          setConfigValid(result.success);
+        } catch {
+          setConfigValid(false);
+        }
+      } else {
+        setConfigValid(true); // Assume valid if we can't check
+      }
+    };
+    checkConfig();
+  }, [session.sessionId, session.worktreePath, session.repoPath]);
+
+  // Force re-render every 60 seconds to update activity status (reduced from 10s for performance)
+  useEffect(() => {
+    const interval = setInterval(() => forceUpdate(n => n + 1), 60000);
     return () => clearInterval(interval);
   }, []);
 
   // Calculate activity-based status
   const getActivityStatus = (): { color: string; label: string; title: string } => {
-    // Check for error/damaged config
-    if (session.status === 'error') {
-      return { color: 'bg-red-500', label: 'Error', title: 'Session has errors' };
+    // Check for error/damaged config (red indicator)
+    if (session.status === 'error' || configValid === false) {
+      return { color: 'bg-red-500', label: 'Error', title: 'Session config issue - worktree or branch may be missing' };
     }
 
     // Get last activity for this session
@@ -324,6 +360,7 @@ function SessionCard({
       const now = Date.now();
       const secondsSinceActivity = (now - lastActivityTime) / 1000;
 
+      // Green indicator - active within 30 seconds
       if (secondsSinceActivity < 30) {
         return {
           color: 'bg-green-500 animate-pulse',
@@ -346,7 +383,7 @@ function SessionCard({
       }
     }
 
-    // Dormant - no recent activity
+    // Orange indicator - dormant (no recent activity)
     return { color: 'bg-orange-400', label: 'Dormant', title: 'Dormant - no recent activity' };
   };
 
@@ -400,28 +437,60 @@ function SessionCard({
             )}
           </div>
         </div>
-        {/* Delete button - shows on hover or when selected */}
-        <button
-          onClick={handleDelete}
-          className={`
-            flex-shrink-0 p-1 rounded transition-all
-            ${showConfirm
-              ? 'bg-red-500 text-white'
-              : 'text-text-secondary hover:text-red-500 hover:bg-red-500/10 opacity-0 group-hover:opacity-100'
-            }
-            ${isSelected ? 'opacity-100' : ''}
-          `}
-          title={showConfirm ? 'Click again to confirm' : 'Delete session'}
-        >
-          {showConfirm ? (
-            <span className="text-xs px-1">Delete?</span>
-          ) : (
+        {/* Action buttons - show on hover or when selected */}
+        <div className={`flex items-center gap-1 flex-shrink-0 ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity`}>
+          {/* Merge button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowMergeModal(true);
+            }}
+            className="p-1 rounded text-text-secondary hover:text-kanvas-blue hover:bg-kanvas-blue/10 transition-colors"
+            title={`Merge to ${session.baseBranch || 'main'}`}
+          >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
             </svg>
-          )}
-        </button>
+          </button>
+          {/* Delete button */}
+          <button
+            onClick={handleDelete}
+            className={`
+              p-1 rounded transition-all
+              ${showConfirm
+                ? 'bg-red-500 text-white'
+                : 'text-text-secondary hover:text-red-500 hover:bg-red-500/10'
+              }
+            `}
+            title={showConfirm ? 'Click again to confirm' : 'Delete session'}
+          >
+            {showConfirm ? (
+              <span className="text-xs px-1">Delete?</span>
+            ) : (
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            )}
+          </button>
+        </div>
       </div>
+
+      {/* Merge Modal */}
+      <MergeWorkflowModal
+        isOpen={showMergeModal}
+        onClose={() => setShowMergeModal(false)}
+        repoPath={session.repoPath || session.worktreePath || ''}
+        sourceBranch={session.branchName}
+        targetBranch={session.baseBranch || 'main'}
+        worktreePath={session.worktreePath}
+        sessionId={session.sessionId}
+        onMergeComplete={() => {
+          setShowMergeModal(false);
+        }}
+        onDeleteSession={() => {
+          onDelete();
+        }}
+      />
     </div>
   );
 }
