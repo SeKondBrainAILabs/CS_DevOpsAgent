@@ -107,30 +107,59 @@ echo -e "${GREEN}✓${NC} Up to date"
 # Step 5: Initialize submodules (REQUIRED)
 # =============================================================================
 echo -e "${BLUE}[5/8]${NC} Initializing git submodules..."
+
+# Setup credential helper if not configured
+if ! git config --global credential.helper &>/dev/null; then
+    echo -e "${YELLOW}  Setting up Git credential helper...${NC}"
+    if [[ "$OS" == "macos" ]]; then
+        git config --global credential.helper osxkeychain
+    elif [[ "$OS" == "linux" ]]; then
+        git config --global credential.helper store
+    fi
+fi
+
 if [ -f ".gitmodules" ]; then
-    git submodule update --init --recursive 2>&1 || {
-        echo ""
-        echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${RED}║  SUBMODULE CLONE FAILED                                         ║${NC}"
-        echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
-        echo ""
-        echo -e "The ai-backend submodule is required but couldn't be cloned."
-        echo ""
-        echo -e "${BOLD}If you see 'Authentication failed':${NC}"
-        echo "  1. You need access to: https://github.com/SeKondBrainAILabs/Core_Ai_Backend"
-        echo "  2. Ask your team lead for repository access"
-        echo ""
-        echo -e "${BOLD}If you have access, try:${NC}"
-        echo "  git config --global credential.helper store"
-        echo "  git submodule update --init --recursive"
-        echo ""
-        echo -e "${BOLD}Or use SSH (if you have SSH keys set up):${NC}"
-        echo "  git config submodule.ai-backend.url git@github.com:SeKondBrainAILabs/Core_Ai_Backend.git"
-        echo "  git submodule update --init --recursive"
-        echo ""
-        exit 1
-    }
-    echo -e "${GREEN}✓${NC} Submodules initialized"
+    # First try: normal submodule init
+    if git submodule update --init --recursive 2>&1; then
+        echo -e "${GREEN}✓${NC} Submodules initialized"
+    else
+        echo -e "${YELLOW}  Submodule clone failed, trying with credential prompt...${NC}"
+
+        # Second try: Force credential prompt
+        GIT_TERMINAL_PROMPT=1 git submodule update --init --recursive 2>&1 || {
+            echo ""
+            echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${RED}║  SUBMODULE AUTHENTICATION FAILED                               ║${NC}"
+            echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
+            echo ""
+            echo -e "${BOLD}Quick fix - Run these commands:${NC}"
+            echo ""
+            echo -e "  ${BLUE}# Option 1: Use GitHub CLI (recommended)${NC}"
+            echo "  brew install gh        # or: sudo apt install gh"
+            echo "  gh auth login"
+            echo "  ./setup.sh"
+            echo ""
+            echo -e "  ${BLUE}# Option 2: Use Personal Access Token${NC}"
+            echo "  # 1. Go to: https://github.com/settings/tokens"
+            echo "  # 2. Generate new token (classic) with 'repo' scope"
+            echo "  # 3. Run:"
+            echo "  git config --global credential.helper store"
+            echo "  git clone https://github.com/SeKondBrainAILabs/Core_Ai_Backend.git /tmp/test-auth"
+            echo "  # 4. Enter username: your-github-username"
+            echo "  # 5. Enter password: paste-your-token-here"
+            echo "  rm -rf /tmp/test-auth"
+            echo "  ./setup.sh"
+            echo ""
+            echo -e "  ${BLUE}# Option 3: Use SSH${NC}"
+            echo "  ssh-keygen -t ed25519 -C 'your@email.com'"
+            echo "  cat ~/.ssh/id_ed25519.pub  # Add this to GitHub SSH keys"
+            echo "  git config --global url.'git@github.com:'.insteadOf 'https://github.com/'"
+            echo "  ./setup.sh"
+            echo ""
+            exit 1
+        }
+        echo -e "${GREEN}✓${NC} Submodules initialized"
+    fi
 else
     echo -e "${GREEN}✓${NC} No submodules required"
 fi
