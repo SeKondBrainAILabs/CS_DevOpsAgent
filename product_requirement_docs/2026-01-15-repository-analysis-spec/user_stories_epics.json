@@ -1,0 +1,610 @@
+{
+  "epics": [
+    {
+      "epicId": "EPIC-001",
+      "title": "Repository Scanning and Feature Detection",
+      "description": "Build the foundational capability to scan a Git repository, identify its structure, and intelligently detect logical features within the codebase.",
+      "priority": "Critical",
+      "estimatedComplexity": "High",
+      "acceptanceCriteria": [
+        "The system can clone and access any Git repository",
+        "The system identifies all files and directories in the repository",
+        "The system categorizes directories into features, shared libraries, and infrastructure",
+        "The feature detection achieves >90% accuracy on test repositories"
+      ],
+      "userStories": [
+        {
+          "storyId": "US-001",
+          "title": "Clone Git Repository",
+          "asA": "DevOps Agent",
+          "iWant": "to clone a Git repository from a provided URL",
+          "soThat": "I can access and analyze its contents",
+          "acceptanceCriteria": [
+            "Given a valid Git URL, the system successfully clones the repository",
+            "The system handles authentication for private repositories",
+            "The system reports an error for invalid URLs or inaccessible repositories"
+          ],
+          "technicalNotes": "Use gitpython library. Support SSH and HTTPS protocols. Store cloned repos in a temporary directory."
+        },
+        {
+          "storyId": "US-002",
+          "title": "Scan Repository File Structure",
+          "asA": "DevOps Agent",
+          "iWant": "to traverse the entire file system of a cloned repository",
+          "soThat": "I can create a comprehensive list of all files and directories",
+          "acceptanceCriteria": [
+            "The system lists all files with their full paths",
+            "The system respects .gitignore rules",
+            "The system identifies file types based on extensions"
+          ],
+          "technicalNotes": "Use os.walk. Integrate with gitignore parser. Create a FileNode data structure."
+        },
+        {
+          "storyId": "US-003",
+          "title": "Detect Programming Languages",
+          "asA": "DevOps Agent",
+          "iWant": "to identify the primary programming languages used in the repository",
+          "soThat": "I can select the appropriate analyzers and parsers",
+          "acceptanceCriteria": [
+            "The system identifies languages based on file extensions and content",
+            "The system reports the percentage of code in each language",
+            "The system supports at least Python, JavaScript/TypeScript, and Go"
+          ],
+          "technicalNotes": "Use linguist or a similar library. Prioritize languages by line count."
+        },
+        {
+          "storyId": "US-004",
+          "title": "Identify Logical Features",
+          "asA": "DevOps Agent",
+          "iWant": "to group related code files into logical features",
+          "soThat": "I can analyze and document the system at a feature level",
+          "acceptanceCriteria": [
+            "The system uses directory structure as a primary heuristic",
+            "The system uses an LLM to classify ambiguous directories",
+            "The system produces a list of features with their file paths"
+          ],
+          "technicalNotes": "Combine rule-based heuristics with Qwen-2.5-32b for classification. Use prompt: 'Given this directory structure and file names, is this a feature, shared library, or infrastructure?'"
+        }
+      ]
+    },
+    {
+      "epicId": "EPIC-002",
+      "title": "Code Structure Analysis",
+      "description": "Develop the capability to parse source code using Abstract Syntax Trees and extract detailed information about classes, functions, and their relationships.",
+      "priority": "Critical",
+      "estimatedComplexity": "High",
+      "acceptanceCriteria": [
+        "The system parses Python, JavaScript/TypeScript, and Go code into ASTs",
+        "The system extracts all classes, functions, and their signatures",
+        "The system identifies call relationships between functions",
+        "The extracted information is stored in a structured format"
+      ],
+      "userStories": [
+        {
+          "storyId": "US-005",
+          "title": "Parse Python Code with AST",
+          "asA": "Code Structure Analyzer",
+          "iWant": "to parse Python files into Abstract Syntax Trees",
+          "soThat": "I can extract detailed code structure information",
+          "acceptanceCriteria": [
+            "The system uses Python's built-in ast module",
+            "The system handles syntax errors gracefully",
+            "The system extracts class definitions, method signatures, and docstrings"
+          ],
+          "technicalNotes": "Use ast.parse(). Create visitor classes for ClassDef, FunctionDef, and Call nodes."
+        },
+        {
+          "storyId": "US-006",
+          "title": "Parse JavaScript/TypeScript Code",
+          "asA": "Code Structure Analyzer",
+          "iWant": "to parse JavaScript and TypeScript files",
+          "soThat": "I can analyze frontend and Node.js codebases",
+          "acceptanceCriteria": [
+            "The system uses tree-sitter for parsing",
+            "The system extracts function declarations, arrow functions, and class definitions",
+            "The system handles TypeScript type annotations"
+          ],
+          "technicalNotes": "Use tree-sitter-javascript and tree-sitter-typescript. Query for function and class nodes."
+        },
+        {
+          "storyId": "US-007",
+          "title": "Identify Function Call Relationships",
+          "asA": "Code Structure Analyzer",
+          "iWant": "to trace which functions call which other functions",
+          "soThat": "I can build a call graph for the codebase",
+          "acceptanceCriteria": [
+            "The system identifies direct function calls",
+            "The system handles method calls on objects",
+            "The system produces a call graph in JSON format"
+          ],
+          "technicalNotes": "Use AST visitor to track Call nodes. Resolve function names to their definitions. Store as adjacency list."
+        }
+      ]
+    },
+    {
+      "epicId": "EPIC-003",
+      "title": "API Contract Extraction",
+      "description": "Extract API endpoints from the codebase and generate OpenAPI and AsyncAPI specifications.",
+      "priority": "Critical",
+      "estimatedComplexity": "Medium",
+      "acceptanceCriteria": [
+        "The system identifies REST API endpoints in Flask, FastAPI, Express, and Gin frameworks",
+        "The system extracts HTTP methods, paths, request parameters, and response schemas",
+        "The system generates valid OpenAPI 3.0 specifications",
+        "The generated specs are stored in api_contract.yaml files"
+      ],
+      "userStories": [
+        {
+          "storyId": "US-008",
+          "title": "Extract Flask API Endpoints",
+          "asA": "API Extractor",
+          "iWant": "to identify all Flask routes in a Python codebase",
+          "soThat": "I can document the REST API",
+          "acceptanceCriteria": [
+            "The system identifies @app.route decorators",
+            "The system extracts the HTTP method and path",
+            "The system identifies the handler function"
+          ],
+          "technicalNotes": "Use AST to find FunctionDef nodes with route decorators. Parse decorator arguments for path and methods."
+        },
+        {
+          "storyId": "US-009",
+          "title": "Infer Request/Response Schemas",
+          "asA": "API Extractor",
+          "iWant": "to infer the structure of API requests and responses",
+          "soThat": "I can generate complete OpenAPI schemas",
+          "acceptanceCriteria": [
+            "The system uses type hints and Pydantic models to infer schemas",
+            "The system uses an LLM to infer schemas when type information is missing",
+            "The system generates JSON Schema objects"
+          ],
+          "technicalNotes": "Parse Pydantic models. Use Kimi K2 with prompt: 'Given this function signature and body, infer the request and response JSON schemas.'"
+        },
+        {
+          "storyId": "US-010",
+          "title": "Generate OpenAPI Specification",
+          "asA": "API Extractor",
+          "iWant": "to compile all extracted endpoint information into an OpenAPI spec",
+          "soThat": "the API is fully documented in a standard format",
+          "acceptanceCriteria": [
+            "The generated YAML is valid OpenAPI 3.0",
+            "The spec includes all paths, methods, parameters, and schemas",
+            "The spec is saved to contracts/features/{feature_name}/api_contract.yaml"
+          ],
+          "technicalNotes": "Use a Jinja2 template for OpenAPI structure. Validate with openapi-spec-validator."
+        }
+      ]
+    },
+    {
+      "epicId": "EPIC-004",
+      "title": "Database Schema Analysis",
+      "description": "Extract database schemas from ORM models, SQL files, and migration scripts, and generate schema documentation.",
+      "priority": "High",
+      "estimatedComplexity": "Medium",
+      "acceptanceCriteria": [
+        "The system identifies ORM models in SQLAlchemy, Django ORM, and TypeORM",
+        "The system extracts table names, column definitions, and relationships",
+        "The system generates SQL DDL statements",
+        "The generated schemas are stored in schema_contract.sql files"
+      ],
+      "userStories": [
+        {
+          "storyId": "US-011",
+          "title": "Extract SQLAlchemy Models",
+          "asA": "Schema Analyzer",
+          "iWant": "to parse SQLAlchemy model definitions",
+          "soThat": "I can document the database schema",
+          "acceptanceCriteria": [
+            "The system identifies classes that inherit from Base",
+            "The system extracts Column definitions with types and constraints",
+            "The system identifies relationships (ForeignKey, relationship())"
+          ],
+          "technicalNotes": "Use AST to find ClassDef nodes inheriting from Base. Parse Column and relationship attributes."
+        },
+        {
+          "storyId": "US-012",
+          "title": "Generate SQL DDL from ORM Models",
+          "asA": "Schema Analyzer",
+          "iWant": "to convert ORM model definitions into SQL CREATE TABLE statements",
+          "soThat": "the schema is documented in a database-agnostic format",
+          "acceptanceCriteria": [
+            "The system generates valid SQL DDL",
+            "The system includes primary keys, foreign keys, and indexes",
+            "The generated SQL is saved to schema_contract.sql"
+          ],
+          "technicalNotes": "Use Llama-3.3-70b with prompt: 'Convert this SQLAlchemy model to SQL DDL.' Validate SQL syntax."
+        },
+        {
+          "storyId": "US-013",
+          "title": "Analyze Migration Files",
+          "asA": "Schema Analyzer",
+          "iWant": "to track schema evolution through migration files",
+          "soThat": "I understand how the schema has changed over time",
+          "acceptanceCriteria": [
+            "The system identifies Alembic or Flyway migration files",
+            "The system extracts the changes made in each migration",
+            "The system produces a schema evolution timeline"
+          ],
+          "technicalNotes": "Parse migration files. Use LLM to summarize changes. Store in a migrations.json file."
+        }
+      ]
+    },
+    {
+      "epicId": "EPIC-005",
+      "title": "Event Flow Tracking",
+      "description": "Identify event producers and consumers in event-driven architectures and document the flow of events.",
+      "priority": "High",
+      "estimatedComplexity": "Medium",
+      "acceptanceCriteria": [
+        "The system identifies event producers (publish, send, emit)",
+        "The system identifies event consumers (subscribe, listen, on)",
+        "The system extracts event names and topics",
+        "The system generates an events_contract.json for each feature"
+      ],
+      "userStories": [
+        {
+          "storyId": "US-014",
+          "title": "Identify Event Producers",
+          "asA": "Event Tracker",
+          "iWant": "to find all locations in the code where events are published",
+          "soThat": "I can document what events each feature produces",
+          "acceptanceCriteria": [
+            "The system identifies calls to publish, send, emit, and similar methods",
+            "The system extracts the event name or topic",
+            "The system infers the event payload structure"
+          ],
+          "technicalNotes": "Use AST to find Call nodes for known event libraries (e.g., pika, kafka-python, EventEmitter). Use Qwen-2.5-32b to infer payload."
+        },
+        {
+          "storyId": "US-015",
+          "title": "Identify Event Consumers",
+          "asA": "Event Tracker",
+          "iWant": "to find all event listeners and handlers",
+          "soThat": "I can document what events each feature consumes",
+          "acceptanceCriteria": [
+            "The system identifies subscribe, listen, on, and decorator-based handlers",
+            "The system extracts the event name or topic",
+            "The system identifies the handler function"
+          ],
+          "technicalNotes": "Look for decorators like @consumer or method calls like channel.consume(). Link to handler functions."
+        },
+        {
+          "storyId": "US-016",
+          "title": "Generate Event Contract",
+          "asA": "Event Tracker",
+          "iWant": "to compile all event information into a structured contract",
+          "soThat": "the event-driven architecture is clearly documented",
+          "acceptanceCriteria": [
+            "The contract lists all produced events with their schemas",
+            "The contract lists all consumed events with their handlers",
+            "The contract is saved to events_contract.json"
+          ],
+          "technicalNotes": "Use JSON schema for event payloads. Consider AsyncAPI format for more complex scenarios."
+        }
+      ]
+    },
+    {
+      "epicId": "EPIC-006",
+      "title": "Infrastructure and Third-Party Analysis",
+      "description": "Parse Infrastructure as Code files and identify third-party service integrations.",
+      "priority": "Medium",
+      "estimatedComplexity": "Medium",
+      "acceptanceCriteria": [
+        "The system parses Terraform and Kubernetes YAML files",
+        "The system identifies cloud resources (databases, queues, storage)",
+        "The system identifies third-party API integrations",
+        "The system generates an infra_contract.json"
+      ],
+      "userStories": [
+        {
+          "storyId": "US-017",
+          "title": "Parse Terraform Files",
+          "asA": "Infrastructure Parser",
+          "iWant": "to extract resource definitions from Terraform HCL files",
+          "soThat": "I can document the infrastructure requirements",
+          "acceptanceCriteria": [
+            "The system parses .tf files",
+            "The system extracts resource types and names",
+            "The system identifies providers (AWS, GCP, Azure)"
+          ],
+          "technicalNotes": "Use python-hcl2 library. Focus on resource and provider blocks."
+        },
+        {
+          "storyId": "US-018",
+          "title": "Parse Kubernetes Manifests",
+          "asA": "Infrastructure Parser",
+          "iWant": "to extract service, deployment, and ingress definitions from Kubernetes YAML",
+          "soThat": "I can understand the deployment architecture",
+          "acceptanceCriteria": [
+            "The system parses YAML files",
+            "The system extracts kind, metadata, and spec",
+            "The system identifies container images and ports"
+          ],
+          "technicalNotes": "Use PyYAML. Focus on Deployment, Service, and Ingress kinds."
+        },
+        {
+          "storyId": "US-019",
+          "title": "Identify Third-Party Integrations",
+          "asA": "Infrastructure Parser",
+          "iWant": "to find all external API calls and service integrations",
+          "soThat": "I can document external dependencies",
+          "acceptanceCriteria": [
+            "The system identifies HTTP client usage (requests, axios, fetch)",
+            "The system extracts base URLs and API endpoints",
+            "The system identifies known third-party services (Stripe, SendGrid, etc.)"
+          ],
+          "technicalNotes": "Use AST to find HTTP client calls. Use Llama-3.3-70b to classify services based on URLs."
+        }
+      ]
+    },
+    {
+      "epicId": "EPIC-007",
+      "title": "Dependency Mapping and Relationship Analysis",
+      "description": "Build a comprehensive dependency graph showing relationships between features, modules, and external libraries.",
+      "priority": "High",
+      "estimatedComplexity": "Medium",
+      "acceptanceCriteria": [
+        "The system builds a directed graph of feature dependencies",
+        "The system identifies circular dependencies",
+        "The system generates a relationships.json file",
+        "The graph is visualizable"
+      ],
+      "userStories": [
+        {
+          "storyId": "US-020",
+          "title": "Build Dependency Graph",
+          "asA": "Dependency Mapper",
+          "iWant": "to create a graph of all inter-feature dependencies",
+          "soThat": "I can understand the system's architecture",
+          "acceptanceCriteria": [
+            "The graph includes nodes for each feature",
+            "The graph includes edges for import/call relationships",
+            "The graph is stored as an adjacency list in JSON"
+          ],
+          "technicalNotes": "Use networkx library. Nodes are features, edges are dependencies. Export to JSON."
+        },
+        {
+          "storyId": "US-021",
+          "title": "Detect Circular Dependencies",
+          "asA": "Dependency Mapper",
+          "iWant": "to identify any circular dependencies in the codebase",
+          "soThat": "I can flag potential architectural issues",
+          "acceptanceCriteria": [
+            "The system uses cycle detection algorithms",
+            "The system reports all detected cycles",
+            "The report includes the features involved in each cycle"
+          ],
+          "technicalNotes": "Use networkx.simple_cycles(). Log warnings for each cycle found."
+        },
+        {
+          "storyId": "US-022",
+          "title": "Identify External Dependencies",
+          "asA": "Dependency Mapper",
+          "iWant": "to list all third-party libraries used by each feature",
+          "soThat": "I can track external dependencies",
+          "acceptanceCriteria": [
+            "The system parses requirements.txt, package.json, go.mod",
+            "The system associates each library with the features that use it",
+            "The system identifies the version of each library"
+          ],
+          "technicalNotes": "Parse dependency files. Use import analysis to map libraries to features."
+        }
+      ]
+    },
+    {
+      "epicId": "EPIC-008",
+      "title": "Contract Generation and Merging",
+      "description": "Generate feature-level contracts and merge them into a unified repository-level contract.",
+      "priority": "Critical",
+      "estimatedComplexity": "High",
+      "acceptanceCriteria": [
+        "The system generates a feature_contract.json for each feature",
+        "The system merges all feature contracts into repo_contract.json",
+        "The merge process resolves conflicts intelligently",
+        "All contracts are valid JSON and follow the defined schemas"
+      ],
+      "userStories": [
+        {
+          "storyId": "US-023",
+          "title": "Generate Feature Contract",
+          "asA": "Contract Generator",
+          "iWant": "to compile all analysis results for a feature into a single contract file",
+          "soThat": "the feature is comprehensively documented",
+          "acceptanceCriteria": [
+            "The contract includes feature name, description, and path",
+            "The contract references all sub-contracts (API, schema, events, infra)",
+            "The contract lists all dependencies",
+            "The contract is saved to contracts/features/{feature_name}/feature_contract.json"
+          ],
+          "technicalNotes": "Use Jinja2 template. Aggregate outputs from all analyzers. Validate against JSON schema."
+        },
+        {
+          "storyId": "US-024",
+          "title": "Merge Feature Contracts",
+          "asA": "Contract Merger",
+          "iWant": "to combine all feature contracts into a single repository contract",
+          "soThat": "there is a unified view of the entire codebase",
+          "acceptanceCriteria": [
+            "The merged contract includes all features",
+            "The merged contract includes a global dependency graph",
+            "Conflicts are resolved based on predefined rules",
+            "The merged contract is saved to contracts/repo_contract.json"
+          ],
+          "technicalNotes": "Use Kimi K2 with prompt: 'Merge these feature contracts, resolving any conflicts.' Validate merged output."
+        },
+        {
+          "storyId": "US-025",
+          "title": "Validate Contract Schemas",
+          "asA": "Contract Generator",
+          "iWant": "to ensure all generated contracts conform to their schemas",
+          "soThat": "downstream tools can reliably parse them",
+          "acceptanceCriteria": [
+            "All JSON contracts are validated against JSON Schema",
+            "All YAML contracts are validated against their specs (OpenAPI, AsyncAPI)",
+            "Validation errors are logged and reported"
+          ],
+          "technicalNotes": "Use jsonschema library. Use openapi-spec-validator for OpenAPI. Fail the generation if validation fails."
+        }
+      ]
+    },
+    {
+      "epicId": "EPIC-009",
+      "title": "Change Detection and Incremental Updates",
+      "description": "Implement Git integration to detect code changes and trigger incremental contract updates.",
+      "priority": "Critical",
+      "estimatedComplexity": "High",
+      "acceptanceCriteria": [
+        "The system integrates as a pre-commit Git hook",
+        "The system detects changed files in a commit",
+        "The system only re-analyzes affected features",
+        "Updated contracts are automatically committed"
+      ],
+      "userStories": [
+        {
+          "storyId": "US-026",
+          "title": "Integrate as Pre-Commit Hook",
+          "asA": "DevOps Agent",
+          "iWant": "to be triggered automatically on every Git commit",
+          "soThat": "contracts are always up-to-date",
+          "acceptanceCriteria": [
+            "The system provides a .pre-commit-config.yaml template",
+            "The hook is installed via pre-commit install",
+            "The hook runs before the commit is finalized"
+          ],
+          "technicalNotes": "Provide a pre-commit hook configuration. The hook entry point is devops-agent-run --incremental."
+        },
+        {
+          "storyId": "US-027",
+          "title": "Detect Changed Files",
+          "asA": "Change Detector",
+          "iWant": "to identify which files have been modified in the current commit",
+          "soThat": "I can determine which features need re-analysis",
+          "acceptanceCriteria": [
+            "The system runs git diff --name-only --cached",
+            "The system gets a list of staged files",
+            "The system maps each file to its feature"
+          ],
+          "technicalNotes": "Use gitpython to run git commands. Maintain a file-to-feature mapping."
+        },
+        {
+          "storyId": "US-028",
+          "title": "Perform Incremental Analysis",
+          "asA": "DevOps Agent",
+          "iWant": "to re-analyze only the features affected by the changes",
+          "soThat": "the update process is fast and efficient",
+          "acceptanceCriteria": [
+            "Only affected features are added to the analysis queue",
+            "Downstream dependent features are also re-analyzed",
+            "The analysis completes in under 60 seconds for typical commits"
+          ],
+          "technicalNotes": "Use the dependency graph to find impacted features. Run the analysis pipeline only on the queue."
+        },
+        {
+          "storyId": "US-029",
+          "title": "Auto-Commit Updated Contracts",
+          "asA": "DevOps Agent",
+          "iWant": "to automatically add updated contract files to the commit",
+          "soThat": "the contracts are versioned alongside the code",
+          "acceptanceCriteria": [
+            "Updated contract files are staged with git add",
+            "The commit proceeds with the updated contracts included",
+            "A log message indicates which contracts were updated"
+          ],
+          "technicalNotes": "Use gitpython to stage files. Ensure the hook exits with code 0 to allow the commit."
+        }
+      ]
+    },
+    {
+      "epicId": "EPIC-010",
+      "title": "LLM Orchestration and Prompt Management",
+      "description": "Build a robust system for managing LLM interactions, including model selection, prompt templating, and error handling.",
+      "priority": "Critical",
+      "estimatedComplexity": "High",
+      "acceptanceCriteria": [
+        "The system supports multiple Groq models (Qwen, Kimi, Llama)",
+        "Prompts are loaded from configurable templates",
+        "The system handles API errors with retries and fallbacks",
+        "All LLM interactions are logged for debugging"
+      ],
+      "userStories": [
+        {
+          "storyId": "US-030",
+          "title": "Implement Model Selection Strategy",
+          "asA": "LLM Orchestrator",
+          "iWant": "to select the appropriate model for each analysis task",
+          "soThat": "I optimize for speed, cost, and accuracy",
+          "acceptanceCriteria": [
+            "The system uses a configuration file to map tasks to models",
+            "The system supports primary and fallback models",
+            "The system logs which model was used for each request"
+          ],
+          "technicalNotes": "Use a YAML config file with task -> model mappings. Implement a ModelSelector class."
+        },
+        {
+          "storyId": "US-031",
+          "title": "Load and Populate Prompt Templates",
+          "asA": "Prompt Manager",
+          "iWant": "to load prompt templates from files and inject context",
+          "soThat": "prompts are maintainable and reusable",
+          "acceptanceCriteria": [
+            "Prompts are stored as Jinja2 templates",
+            "The system injects variables like feature_name, code_content, etc.",
+            "The system validates that all required variables are provided"
+          ],
+          "technicalNotes": "Use Jinja2. Store templates in a prompts/ directory. Raise an error if a variable is missing."
+        },
+        {
+          "storyId": "US-032",
+          "title": "Handle API Errors with Retries",
+          "asA": "LLM Orchestrator",
+          "iWant": "to retry failed API calls with exponential backoff",
+          "soThat": "transient errors do not cause the entire analysis to fail",
+          "acceptanceCriteria": [
+            "The system retries up to 3 times on rate limit or timeout errors",
+            "The system uses exponential backoff (1s, 2s, 4s)",
+            "The system logs each retry attempt"
+          ],
+          "technicalNotes": "Use tenacity library for retries. Catch specific exceptions (RateLimitError, Timeout)."
+        },
+        {
+          "storyId": "US-033",
+          "title": "Implement Model Fallback",
+          "asA": "LLM Orchestrator",
+          "iWant": "to switch to a fallback model if the primary model fails",
+          "soThat": "the system is resilient to model-specific issues",
+          "acceptanceCriteria": [
+            "If the primary model fails after retries, the fallback is used",
+            "The system logs the fallback event",
+            "The system reports if both primary and fallback fail"
+          ],
+          "technicalNotes": "Maintain a fallback_model field in the config. Attempt fallback after primary exhausts retries."
+        },
+        {
+          "storyId": "US-034",
+          "title": "Log All LLM Interactions",
+          "asA": "LLM Orchestrator",
+          "iWant": "to log every prompt sent and response received",
+          "soThat": "I can debug issues and improve prompts",
+          "acceptanceCriteria": [
+            "All prompts are logged at DEBUG level",
+            "All responses are logged at DEBUG level",
+            "Logs include timestamps, model used, and token counts"
+          ],
+          "technicalNotes": "Use Python logging. Create a dedicated logger for LLM interactions. Optionally write to a separate log file."
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "projectName": "DevOps Agent",
+    "version": "1.0",
+    "createdDate": "2026-01-15",
+    "totalEpics": 10,
+    "totalUserStories": 34,
+    "priorityDistribution": {
+      "critical": 6,
+      "high": 3,
+      "medium": 1
+    }
+  }
+}
