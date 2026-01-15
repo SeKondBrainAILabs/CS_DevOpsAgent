@@ -30,6 +30,9 @@ import {
   ASTParserService,
   RepositoryAnalysisService,
   APIExtractorService,
+  SchemaExtractorService,
+  EventTrackerService,
+  DependencyGraphService,
 } from './analysis';
 
 export interface Services {
@@ -52,10 +55,14 @@ export interface Services {
   quickAction: QuickActionService;
   merge: MergeService;
   heartbeat: HeartbeatService;
-  // Analysis services
+  // Analysis services (Phase 1)
   astParser: ASTParserService;
   repositoryAnalysis: RepositoryAnalysisService;
   apiExtractor: APIExtractorService;
+  // Analysis services (Phase 2)
+  schemaExtractor: SchemaExtractorService;
+  eventTracker: EventTrackerService;
+  dependencyGraph: DependencyGraphService;
 }
 
 let services: Services | null = null;
@@ -180,10 +187,14 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     quickAction,
     merge,
     heartbeat,
-    // Analysis services
+    // Analysis services (Phase 1)
     astParser: analysisServices.astParser,
     repositoryAnalysis: analysisServices.repositoryAnalysis,
     apiExtractor: analysisServices.apiExtractor,
+    // Analysis services (Phase 2)
+    schemaExtractor: analysisServices.schemaExtractor,
+    eventTracker: analysisServices.eventTracker,
+    dependencyGraph: analysisServices.dependencyGraph,
   };
 
   // Log initial startup message to terminal
@@ -247,5 +258,12 @@ export { QuickActionService } from './QuickActionService';
 export { MergeService } from './MergeService';
 export { HeartbeatService } from './HeartbeatService';
 export { databaseService } from './DatabaseService';
-// Analysis services
-export { ASTParserService, RepositoryAnalysisService, APIExtractorService } from './analysis';
+// Analysis services (Phase 1 + Phase 2)
+export {
+  ASTParserService,
+  RepositoryAnalysisService,
+  APIExtractorService,
+  SchemaExtractorService,
+  EventTrackerService,
+  DependencyGraphService,
+} from './analysis';

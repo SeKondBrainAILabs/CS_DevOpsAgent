@@ -6,6 +6,10 @@
 
 import { BaseService } from '../BaseService';
 import { ASTParserService } from './ASTParserService';
+import { APIExtractorService } from './APIExtractorService';
+import { SchemaExtractorService } from './SchemaExtractorService';
+import { EventTrackerService } from './EventTrackerService';
+import { DependencyGraphService } from './DependencyGraphService';
 import * as fs from 'fs';
 import * as path from 'path';
 import { sync as globSync } from 'glob';
@@ -21,9 +25,6 @@ import type {
   SupportedLanguage,
   LanguageStats,
   DependencyGraph,
-  DependencyNode,
-  DependencyEdge,
-  ExternalDependency,
   ParsedAST,
 } from '../../../shared/analysis-types';
 import type { DiscoveredFeature } from '../../../shared/types';
@@ -76,12 +77,27 @@ const SOURCE_PATTERNS: Record<SupportedLanguage, string[]> = {
 
 export class RepositoryAnalysisService extends BaseService {
   private astParser: ASTParserService;
+  private apiExtractor: APIExtractorService;
+  private schemaExtractor: SchemaExtractorService;
+  private eventTracker: EventTrackerService;
+  private dependencyGraphService: DependencyGraphService;
   private currentProgress: AnalysisProgress | null = null;
   private abortController: AbortController | null = null;
 
-  constructor(astParser: ASTParserService) {
+  constructor(
+    astParser: ASTParserService,
+    apiExtractor?: APIExtractorService,
+    schemaExtractor?: SchemaExtractorService,
+    eventTracker?: EventTrackerService,
+    dependencyGraphService?: DependencyGraphService
+  ) {
     super();
     this.astParser = astParser;
+    // Create instances if not provided (for backward compatibility)
+    this.apiExtractor = apiExtractor || new APIExtractorService();
+    this.schemaExtractor = schemaExtractor || new SchemaExtractorService();
+    this.eventTracker = eventTracker || new EventTrackerService();
+    this.dependencyGraphService = dependencyGraphService || new DependencyGraphService();
   }
 
   async initialize(): Promise<void> {
@@ -229,7 +245,7 @@ export class RepositoryAnalysisService extends BaseService {
         const files = globSync(path.join(dirPath, pattern), {
           ignore: IGNORE_PATTERNS,
         });
-        allSourceFiles.push(...files.map(f => path.relative(repoPath, f)));
+        allSourceFiles.push(...files.map((f: string) => path.relative(repoPath, f)));
       }
     }
 
@@ -360,13 +376,13 @@ export class RepositoryAnalysisService extends BaseService {
         }
 
         // Build feature analysis from parsed files
-        const featureAnalysis = this.buildFeatureAnalysis(feature, allParsedFiles, repoPath);
+        const featureAnalysis = await this.buildFeatureAnalysis(feature, allParsedFiles, repoPath);
         featureAnalyses.push(featureAnalysis);
       }
 
       // Step 3: Build dependency graph
       this.updateProgress('building-graph', totalFiles, processedFiles);
-      const dependencyGraph = this.buildDependencyGraph(featureAnalyses, allParsedFiles);
+      const dependencyGraph = this.buildDependencyGraph(featureAnalyses, allParsedFiles, repoPath);
 
       // Step 4: Complete
       this.updateProgress('complete', totalFiles, processedFiles);
@@ -412,11 +428,11 @@ export class RepositoryAnalysisService extends BaseService {
   /**
    * Build feature analysis from parsed files
    */
-  private buildFeatureAnalysis(
+  private async buildFeatureAnalysis(
     feature: DiscoveredFeature,
     parsedFiles: Map<string, ParsedAST>,
     repoPath: string
-  ): FeatureAnalysis {
+  ): Promise<FeatureAnalysis> {
     const allExports: ParsedAST['exports'] = [];
     const internalDeps = new Set<string>();
     const externalDeps = new Set<string>();
@@ -472,16 +488,37 @@ export class RepositoryAnalysisService extends BaseService {
       }
     }
 
+    // Extract APIs from API files
+    const apiFiles = feature.files.api.map(f => ({
+      path: path.join(repoPath, f),
+      ast: parsedFiles.get(path.join(repoPath, f)),
+    }));
+    const apis = await this.apiExtractor.extractFromFiles(apiFiles);
+
+    // Extract schemas from schema files
+    const schemaFilesWithAST = feature.files.schema.map(f => ({
+      path: path.join(repoPath, f),
+      ast: parsedFiles.get(path.join(repoPath, f)),
+    }));
+    const schemas = await this.schemaExtractor.extractFromFiles(schemaFilesWithAST);
+
+    // Track events from all feature files
+    const allFeatureFilesWithAST = featureFiles.map(f => ({
+      path: path.join(repoPath, f),
+      ast: parsedFiles.get(path.join(repoPath, f)),
+    }));
+    const events = await this.eventTracker.extractFromFiles(allFeatureFilesWithAST);
+
     return {
       name: feature.name,
       basePath: feature.basePath,
       language: primaryLanguage,
       frameworks: Array.from(frameworks),
       exports: allExports,
-      apis: [], // Will be populated by APIExtractorService
-      schemas: [], // Will be populated by SchemaExtractorService
-      events: [], // Will be populated by EventTrackerService
-      dependencies: Array.from(new Set([...internalDeps, ...externalDeps])),
+      apis,
+      schemas,
+      events,
+      dependencies: Array.from(new Set([...Array.from(internalDeps), ...Array.from(externalDeps)])),
       internalDependencies: Array.from(internalDeps),
       externalDependencies: Array.from(externalDeps),
       fileCount: featureFiles.length,
@@ -492,132 +529,30 @@ export class RepositoryAnalysisService extends BaseService {
 
   /**
    * Build dependency graph from analyzed features
+   * Uses DependencyGraphService for comprehensive graph building
    */
   private buildDependencyGraph(
     features: FeatureAnalysis[],
-    parsedFiles: Map<string, ParsedAST>
+    parsedFiles: Map<string, ParsedAST>,
+    repoPath: string
   ): DependencyGraph {
-    const nodes: DependencyNode[] = [];
-    const edges: DependencyEdge[] = [];
-    const externalDeps = new Map<string, ExternalDependency>();
+    // Use DependencyGraphService for file-level graph from AST data
+    const fileGraph = this.dependencyGraphService.buildFromASTs(parsedFiles, repoPath);
 
-    // Create nodes for each feature
-    for (const feature of features) {
-      nodes.push({
-        id: feature.name,
-        name: feature.name,
-        type: 'feature',
-        path: feature.basePath,
-        exports: feature.exports.map(e => e.name),
-      });
+    // Build feature-level graph from analyzed features
+    const featureGraph = this.dependencyGraphService.buildFeatureGraph(features);
 
-      // Track external dependencies
-      for (const dep of feature.externalDependencies) {
-        const existing = externalDeps.get(dep);
-        if (existing) {
-          existing.usedBy.push(feature.name);
-          existing.importCount++;
-        } else {
-          externalDeps.set(dep, {
-            name: dep,
-            usedBy: [feature.name],
-            importCount: 1,
-          });
-        }
-      }
-    }
+    // Log stats for debugging
+    const stats = this.dependencyGraphService.getStats(featureGraph);
+    console.log('[RepositoryAnalysisService] Dependency graph stats:', {
+      nodes: stats.totalNodes,
+      edges: stats.totalEdges,
+      circularDeps: stats.circularCount,
+      externalPackages: stats.externalPackages,
+    });
 
-    // Create edges from imports
-    for (const [filePath, ast] of parsedFiles) {
-      const sourceFeature = features.find(f =>
-        filePath.includes(f.basePath)
-      );
-      if (!sourceFeature) continue;
-
-      for (const imp of ast.imports) {
-        // Find target feature
-        const targetFeature = features.find(f =>
-          imp.source.includes(f.basePath) || imp.source.includes(f.name)
-        );
-
-        if (targetFeature && targetFeature.name !== sourceFeature.name) {
-          // Check if edge already exists
-          const existingEdge = edges.find(e =>
-            e.source === sourceFeature.name && e.target === targetFeature.name
-          );
-
-          if (existingEdge) {
-            existingEdge.symbols.push(imp.name);
-          } else {
-            edges.push({
-              source: sourceFeature.name,
-              target: targetFeature.name,
-              type: 'import',
-              symbols: [imp.name],
-            });
-          }
-        }
-      }
-    }
-
-    // Detect circular dependencies
-    const circularDependencies = this.detectCircularDependencies(edges);
-
-    return {
-      nodes,
-      edges,
-      circularDependencies,
-      externalDependencies: Array.from(externalDeps.values())
-        .sort((a, b) => b.importCount - a.importCount),
-    };
-  }
-
-  /**
-   * Detect circular dependencies in the graph
-   */
-  private detectCircularDependencies(edges: DependencyEdge[]): string[][] {
-    const graph = new Map<string, string[]>();
-
-    // Build adjacency list
-    for (const edge of edges) {
-      const targets = graph.get(edge.source) || [];
-      targets.push(edge.target);
-      graph.set(edge.source, targets);
-    }
-
-    const cycles: string[][] = [];
-    const visited = new Set<string>();
-    const recursionStack = new Set<string>();
-
-    const dfs = (node: string, path: string[]): void => {
-      if (recursionStack.has(node)) {
-        // Found a cycle
-        const cycleStart = path.indexOf(node);
-        if (cycleStart !== -1) {
-          cycles.push(path.slice(cycleStart));
-        }
-        return;
-      }
-
-      if (visited.has(node)) return;
-
-      visited.add(node);
-      recursionStack.add(node);
-      path.push(node);
-
-      const neighbors = graph.get(node) || [];
-      for (const neighbor of neighbors) {
-        dfs(neighbor, [...path]);
-      }
-
-      recursionStack.delete(node);
-    };
-
-    for (const node of graph.keys()) {
-      dfs(node, []);
-    }
-
-    return cycles;
+    // Return the feature-level graph as the primary dependency graph
+    return featureGraph;
   }
 
   /**

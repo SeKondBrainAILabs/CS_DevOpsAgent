@@ -246,6 +246,19 @@ export const IPC = {
   ANALYSIS_INCREMENTAL: 'analysis:incremental',
   ANALYSIS_GET_CACHE_STATS: 'analysis:get-cache-stats',
   ANALYSIS_CLEAR_CACHE: 'analysis:clear-cache',
+  // Phase 2: Schema extraction
+  ANALYSIS_EXTRACT_SCHEMAS: 'analysis:extract-schemas',
+  ANALYSIS_EXTRACT_SCHEMA_FILE: 'analysis:extract-schema-file',
+  // Phase 2: Event tracking
+  ANALYSIS_EXTRACT_EVENTS: 'analysis:extract-events',
+  ANALYSIS_EXTRACT_EVENTS_FILE: 'analysis:extract-events-file',
+  ANALYSIS_GET_EVENT_FLOW: 'analysis:get-event-flow',
+  // Phase 2: Dependency graph
+  ANALYSIS_BUILD_FILE_GRAPH: 'analysis:build-file-graph',
+  ANALYSIS_BUILD_FEATURE_GRAPH: 'analysis:build-feature-graph',
+  ANALYSIS_GET_GRAPH_STATS: 'analysis:get-graph-stats',
+  ANALYSIS_EXPORT_GRAPH_DOT: 'analysis:export-graph-dot',
+  ANALYSIS_EXPORT_GRAPH_JSON: 'analysis:export-graph-json',
   // Events
   ANALYSIS_PROGRESS: 'analysis:progress',
   ANALYSIS_COMPLETE: 'analysis:complete',
@@ -355,6 +368,19 @@ export const REQUEST_CHANNELS = [
   IPC.ANALYSIS_INCREMENTAL,
   IPC.ANALYSIS_GET_CACHE_STATS,
   IPC.ANALYSIS_CLEAR_CACHE,
+  // Phase 2: Schema extraction
+  IPC.ANALYSIS_EXTRACT_SCHEMAS,
+  IPC.ANALYSIS_EXTRACT_SCHEMA_FILE,
+  // Phase 2: Event tracking
+  IPC.ANALYSIS_EXTRACT_EVENTS,
+  IPC.ANALYSIS_EXTRACT_EVENTS_FILE,
+  IPC.ANALYSIS_GET_EVENT_FLOW,
+  // Phase 2: Dependency graph
+  IPC.ANALYSIS_BUILD_FILE_GRAPH,
+  IPC.ANALYSIS_BUILD_FEATURE_GRAPH,
+  IPC.ANALYSIS_GET_GRAPH_STATS,
+  IPC.ANALYSIS_EXPORT_GRAPH_DOT,
+  IPC.ANALYSIS_EXPORT_GRAPH_JSON,
 ] as const;
 
 export const EVENT_CHANNELS = [

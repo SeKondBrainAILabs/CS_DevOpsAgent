@@ -612,6 +612,173 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   });
 
   // ==========================================================================
+  // PHASE 2: SCHEMA EXTRACTION HANDLERS
+  // ==========================================================================
+  ipcMain.handle(IPC.ANALYSIS_EXTRACT_SCHEMA_FILE, async (_, filePath: string) => {
+    try {
+      const schemas = await services.schemaExtractor.extractFromFile(filePath);
+      return { success: true, data: schemas };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'SCHEMA_EXTRACTION_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to extract schemas',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.ANALYSIS_EXTRACT_SCHEMAS, async (_, files: Array<{ path: string }>) => {
+    try {
+      const schemas = await services.schemaExtractor.extractFromFiles(files);
+      return { success: true, data: schemas };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'SCHEMA_EXTRACTION_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to extract schemas',
+        },
+      };
+    }
+  });
+
+  // ==========================================================================
+  // PHASE 2: EVENT TRACKING HANDLERS
+  // ==========================================================================
+  ipcMain.handle(IPC.ANALYSIS_EXTRACT_EVENTS_FILE, async (_, filePath: string) => {
+    try {
+      const events = await services.eventTracker.extractFromFile(filePath);
+      return { success: true, data: events };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'EVENT_EXTRACTION_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to extract events',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.ANALYSIS_EXTRACT_EVENTS, async (_, files: Array<{ path: string }>) => {
+    try {
+      const events = await services.eventTracker.extractFromFiles(files);
+      return { success: true, data: events };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'EVENT_EXTRACTION_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to extract events',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.ANALYSIS_GET_EVENT_FLOW, async (_, events: unknown[]) => {
+    try {
+      const flow = services.eventTracker.buildEventFlowGraph(events as any);
+      return { success: true, data: flow };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'EVENT_FLOW_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to build event flow',
+        },
+      };
+    }
+  });
+
+  // ==========================================================================
+  // PHASE 2: DEPENDENCY GRAPH HANDLERS
+  // ==========================================================================
+  ipcMain.handle(IPC.ANALYSIS_BUILD_FILE_GRAPH, async (_, repoPath: string) => {
+    try {
+      // First analyze the repository to get parsed files
+      const result = await services.repositoryAnalysis.analyzeRepository(repoPath);
+      if (!result.success || !result.analysis) {
+        return {
+          success: false,
+          error: { code: 'ANALYSIS_FAILED', message: 'Failed to analyze repository' },
+        };
+      }
+      // The graph is already built as part of the analysis
+      return { success: true, data: result.analysis.dependencyGraph };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'GRAPH_BUILD_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to build dependency graph',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.ANALYSIS_BUILD_FEATURE_GRAPH, async (_, features: unknown[]) => {
+    try {
+      const graph = services.dependencyGraph.buildFeatureGraph(features as any);
+      return { success: true, data: graph };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'GRAPH_BUILD_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to build feature graph',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.ANALYSIS_GET_GRAPH_STATS, async (_, graph: unknown) => {
+    try {
+      const stats = services.dependencyGraph.getStats(graph as any);
+      return { success: true, data: stats };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'STATS_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to get graph stats',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.ANALYSIS_EXPORT_GRAPH_DOT, async (_, graph: unknown, options?: { title?: string; highlightCircular?: boolean }) => {
+    try {
+      const dot = services.dependencyGraph.toDOT(graph as any, options);
+      return { success: true, data: dot };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'EXPORT_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to export graph to DOT',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.ANALYSIS_EXPORT_GRAPH_JSON, async (_, graph: unknown) => {
+    try {
+      const json = services.dependencyGraph.toJSON(graph as any);
+      return { success: true, data: json };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'EXPORT_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to export graph to JSON',
+        },
+      };
+    }
+  });
+
+  // ==========================================================================
   // REBASE WATCHER HANDLERS
   // Auto-rebase on remote changes (on-demand mode)
   // ==========================================================================

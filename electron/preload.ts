@@ -1054,6 +1054,152 @@ const api = {
     clearCache: (): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.ANALYSIS_CLEAR_CACHE),
 
+    // Phase 2: Schema Extraction
+    extractSchemaFile: (filePath: string): Promise<IpcResult<Array<{
+      name: string;
+      source: string;
+      sourceType: string;
+      file: string;
+      line: number;
+      columns: Array<{
+        name: string;
+        type: string;
+        nullable: boolean;
+        primaryKey: boolean;
+        unique: boolean;
+        defaultValue?: string;
+        references?: { table: string; column: string };
+      }>;
+      relations: Array<{
+        type: string;
+        target: string;
+        foreignKey?: string;
+        references?: string;
+      }>;
+      indexes: Array<{
+        columns: string[];
+        unique: boolean;
+        name?: string;
+      }>;
+    }>>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_EXTRACT_SCHEMA_FILE, filePath),
+
+    extractSchemas: (files: Array<{ path: string }>): Promise<IpcResult<Array<{
+      name: string;
+      source: string;
+      sourceType: string;
+      file: string;
+      line: number;
+      columns: Array<{
+        name: string;
+        type: string;
+        nullable: boolean;
+        primaryKey: boolean;
+        unique: boolean;
+      }>;
+      relations: Array<{
+        type: string;
+        target: string;
+        foreignKey?: string;
+      }>;
+      indexes: Array<{
+        columns: string[];
+        unique: boolean;
+      }>;
+    }>>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_EXTRACT_SCHEMAS, files),
+
+    // Phase 2: Event Tracking
+    extractEventsFile: (filePath: string): Promise<IpcResult<Array<{
+      name: string;
+      file: string;
+      line: number;
+      type: 'producer' | 'consumer';
+      pattern: string;
+      handler?: string;
+      payloadHint?: string;
+    }>>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_EXTRACT_EVENTS_FILE, filePath),
+
+    extractEvents: (files: Array<{ path: string }>): Promise<IpcResult<Array<{
+      name: string;
+      file: string;
+      line: number;
+      type: 'producer' | 'consumer';
+      pattern: string;
+      handler?: string;
+      payloadHint?: string;
+    }>>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_EXTRACT_EVENTS, files),
+
+    getEventFlow: (events: Array<{
+      name: string;
+      type: 'producer' | 'consumer';
+      file: string;
+    }>): Promise<IpcResult<{
+      events: Map<string, {
+        name: string;
+        producers: Array<{ file: string; line: number }>;
+        consumers: Array<{ file: string; line: number; handler?: string }>;
+      }>;
+      orphanedProducers: string[];
+      orphanedConsumers: string[];
+      eventChains: Array<string[]>;
+    }>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_GET_EVENT_FLOW, events),
+
+    // Phase 2: Dependency Graph
+    buildFileGraph: (repoPath: string): Promise<IpcResult<{
+      nodes: Array<{ id: string; name: string; type: string; path?: string; exports: string[] }>;
+      edges: Array<{ source: string; target: string; type: string; symbols: string[] }>;
+      circularDependencies: string[][];
+      externalDependencies: Array<{ name: string; usedBy: string[]; importCount: number }>;
+    }>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_BUILD_FILE_GRAPH, repoPath),
+
+    buildFeatureGraph: (features: Array<{
+      name: string;
+      basePath: string;
+      exports: Array<{ name: string }>;
+      internalDependencies: string[];
+      externalDependencies: string[];
+    }>): Promise<IpcResult<{
+      nodes: Array<{ id: string; name: string; type: string; path?: string; exports: string[] }>;
+      edges: Array<{ source: string; target: string; type: string; symbols: string[] }>;
+      circularDependencies: string[][];
+      externalDependencies: Array<{ name: string; usedBy: string[]; importCount: number }>;
+    }>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_BUILD_FEATURE_GRAPH, features),
+
+    getGraphStats: (graph: {
+      nodes: Array<{ id: string }>;
+      edges: Array<{ source: string; target: string }>;
+      circularDependencies: string[][];
+      externalDependencies: Array<{ name: string; usedBy: string[]; importCount: number }>;
+    }): Promise<IpcResult<{
+      totalNodes: number;
+      totalEdges: number;
+      avgDependencies: number;
+      maxDependencies: { node: string; count: number };
+      circularCount: number;
+      externalPackages: number;
+      mostUsedExternal: { name: string; usedBy: string[]; importCount: number } | null;
+    }>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_GET_GRAPH_STATS, graph),
+
+    exportGraphDot: (graph: {
+      nodes: Array<{ id: string; name: string }>;
+      edges: Array<{ source: string; target: string }>;
+      circularDependencies: string[][];
+    }, options?: { title?: string; highlightCircular?: boolean }): Promise<IpcResult<string>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_EXPORT_GRAPH_DOT, graph, options),
+
+    exportGraphJson: (graph: {
+      nodes: Array<{ id: string; name: string; type: string }>;
+      edges: Array<{ source: string; target: string; type: string }>;
+    }): Promise<IpcResult<string>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_EXPORT_GRAPH_JSON, graph),
+
     // Events
     onProgress: (callback: (progress: {
       phase: string;
