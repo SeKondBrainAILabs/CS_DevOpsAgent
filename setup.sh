@@ -104,18 +104,35 @@ git pull origin dev_sdd_claude_rebuildUX 2>/dev/null || true
 echo -e "${GREEN}✓${NC} Up to date"
 
 # =============================================================================
-# Step 5: Initialize submodules
+# Step 5: Initialize submodules (REQUIRED)
 # =============================================================================
 echo -e "${BLUE}[5/8]${NC} Initializing git submodules..."
 if [ -f ".gitmodules" ]; then
-    git submodule update --init --recursive 2>/dev/null || {
-        echo -e "${YELLOW}⚠ Submodule init failed, trying to fix...${NC}"
-        git submodule sync --recursive 2>/dev/null || true
-        git submodule update --init --recursive --force 2>/dev/null || true
+    git submodule update --init --recursive 2>&1 || {
+        echo ""
+        echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${RED}║  SUBMODULE CLONE FAILED                                         ║${NC}"
+        echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "The ai-backend submodule is required but couldn't be cloned."
+        echo ""
+        echo -e "${BOLD}If you see 'Authentication failed':${NC}"
+        echo "  1. You need access to: https://github.com/SeKondBrainAILabs/Core_Ai_Backend"
+        echo "  2. Ask your team lead for repository access"
+        echo ""
+        echo -e "${BOLD}If you have access, try:${NC}"
+        echo "  git config --global credential.helper store"
+        echo "  git submodule update --init --recursive"
+        echo ""
+        echo -e "${BOLD}Or use SSH (if you have SSH keys set up):${NC}"
+        echo "  git config submodule.ai-backend.url git@github.com:SeKondBrainAILabs/Core_Ai_Backend.git"
+        echo "  git submodule update --init --recursive"
+        echo ""
+        exit 1
     }
     echo -e "${GREEN}✓${NC} Submodules initialized"
 else
-    echo -e "${GREEN}✓${NC} No submodules"
+    echo -e "${GREEN}✓${NC} No submodules required"
 fi
 
 # =============================================================================
