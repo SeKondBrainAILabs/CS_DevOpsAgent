@@ -46,6 +46,19 @@ if ! command -v npm &> /dev/null; then
 fi
 echo -e "${GREEN}✓${NC} npm $(npm -v) detected"
 
+# Check Python and setuptools (needed for native modules)
+echo -e "${BLUE}[2.5/6]${NC} Checking Python setuptools..."
+if command -v python3 &> /dev/null; then
+    # Check if setuptools is installed (required for Python 3.12+)
+    if ! python3 -c "import setuptools" 2>/dev/null; then
+        echo -e "${YELLOW}Installing Python setuptools (required for native modules)...${NC}"
+        pip3 install setuptools --quiet 2>/dev/null || pip install setuptools --quiet 2>/dev/null || true
+    fi
+    echo -e "${GREEN}✓${NC} Python setuptools available"
+else
+    echo -e "${YELLOW}Warning: Python3 not found - native module compilation may fail${NC}"
+fi
+
 # Check if we're on the right branch
 echo -e "${BLUE}[3/6]${NC} Checking git branch..."
 CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
