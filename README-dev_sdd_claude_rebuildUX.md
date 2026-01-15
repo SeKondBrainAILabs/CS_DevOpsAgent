@@ -19,7 +19,13 @@ This document summarizes all the features and improvements implemented in the `d
 11. [Per-Repo Installation: `.S9N_KIT_DevOpsAgent`](#11-per-repo-installation-s9n_kit_devopsagent)
 12. [Session Management](#12-session-management)
 13. [UI Improvements](#13-ui-improvements)
-14. [Removed Features](#14-removed-features)
+14. [Performance Optimizations](#14-performance-optimizations)
+15. [Database Persistence (SQLite)](#15-database-persistence-sqlite)
+16. [Restart Functionality](#16-restart-functionality)
+17. [Agent Environment Setup (EPIC-007)](#17-agent-environment-setup-epic-007)
+18. [Dynamic Port Allocation](#18-dynamic-port-allocation)
+19. [Dynamic Merge Target](#19-dynamic-merge-target)
+20. [Removed Features](#20-removed-features)
 
 ---
 
@@ -745,7 +751,224 @@ export interface Contract {
 
 ---
 
-## 14. Removed Features
+## 14. Performance Optimizations
+
+### Problem
+App was sluggish with excessive polling and IPC communication.
+
+### Changes
+
+| Optimization | Before | After | Impact |
+|-------------|--------|-------|--------|
+| Sidebar force re-render | 10s | 60s | 6x fewer forced renders |
+| File lock polling (panel) | 5s | 30s | 6x fewer API calls |
+| File lock count polling | 10s | 60s | 6x fewer API calls |
+| Chokidar poll interval | 100ms | 500ms | 5x fewer file system checks |
+| Chokidar stability threshold | 500ms | 1000ms | More stable file detection |
+| Activity IPC emissions | Immediate | Batched 500ms | Significantly fewer IPC calls |
+| Activity buffer size | 100 items | 50 items | 50% less memory |
+
+### Throttled Activity Logging
+
+File change events are now batched in `ActivityService.ts`:
+
+```typescript
+// File events are batched every 500ms before emitting to renderer
+private throttledEmitToRenderer(entry: ActivityLogEntry): void {
+  this.pendingEmits.push(entry);
+  if (!this.emitTimer) {
+    this.emitTimer = setTimeout(() => {
+      for (const pending of this.pendingEmits) {
+        this.emitToRenderer(IPC.LOG_ENTRY, pending);
+      }
+      this.pendingEmits = [];
+      this.emitTimer = null;
+    }, 500);
+  }
+}
+```
+
+---
+
+## 15. Database Persistence (SQLite)
+
+### Purpose
+Persist activity logs, settings, and session history across app restarts.
+
+### Implementation
+
+**File**: `electron/services/DatabaseService.ts`
+
+Uses `better-sqlite3` with WAL mode for performance.
+
+### Tables
+
+| Table | Purpose |
+|-------|---------|
+| `activity_logs` | Activity entries with commit hash linking |
+| `terminal_logs` | Terminal/console output |
+| `settings` | Key-value settings store |
+| `session_history` | Session lifecycle events |
+| `commits` | Commit tracking per session |
+
+### Activity-to-Commit Linking
+
+When a commit completes, all uncommitted activities are linked:
+
+```typescript
+// WatcherService.ts - after successful commit
+const linkedCount = this.activityService.linkToCommit(sessionId, commitHash);
+databaseService.recordCommit(commitHash, sessionId, message, timestamp, { filesChanged });
+```
+
+### Database Location
+```
+{userData}/data/kanvas.db
+```
+
+---
+
+## 16. Restart Functionality
+
+### Enhanced Restart with Commit Consolidation
+
+When you hit "Restart" on a session:
+
+1. **Commits pending changes** - Any uncommitted work is committed before restart
+2. **Consolidates commit messages** - If multiple commits since last push, combines their messages:
+   ```
+   [Kanvas Restart] Consolidated changes
+
+   - fix: auth validation
+   - feat: add login form
+   - style: update button colors
+   ```
+3. **Works for CLI-created sessions** - Sessions created outside Kanvas wizard now restart properly
+
+### Visual Feedback
+
+- Loading spinner and "Restarting..." text while processing
+- Button disabled during restart
+- Error message displayed if restart fails
+- Tooltip shows "Restart session (commits pending changes)"
+
+### Code Changes
+
+**AgentInstanceService.ts**:
+```typescript
+async restartInstance(sessionId: string, sessionData?: {
+  repoPath: string;
+  branchName: string;
+  baseBranch?: string;
+  worktreePath?: string;
+  agentType?: AgentType;
+  task?: string;
+}): Promise<IpcResult<AgentInstance>>
+```
+
+---
+
+## 17. Agent Environment Setup (EPIC-007)
+
+### .agent-config File
+
+Created in worktree root on session creation:
+
+```json
+{
+  "version": "1.0.0",
+  "sessionId": "sess_1234567890_abc123",
+  "instanceId": "inst_1234567890_xyz789",
+  "agentType": "claude",
+  "branchName": "feature/auth",
+  "baseBranch": "main",
+  "taskDescription": "Implement login flow",
+  "createdAt": "2026-01-14T10:00:00Z",
+  "worktreePath": "/path/to/repo/local_deploy/feature-auth",
+  "repoPath": "/path/to/repo",
+  "environment": {
+    "KANVAS_SESSION_ID": "sess_1234567890_abc123",
+    "KANVAS_AGENT_TYPE": "claude",
+    "KANVAS_WORKTREE_PATH": "/path/to/repo/local_deploy/feature-auth",
+    "KANVAS_BRANCH_NAME": "feature/auth"
+  }
+}
+```
+
+### VS Code Settings
+
+Created at `.vscode/settings.json` in worktree:
+
+```json
+{
+  "window.title": "[Claude] repoName - ${activeEditorShort} | Session: abc12345",
+  "scm.defaultViewMode": "tree",
+  "git.autofetch": true,
+  "editor.formatOnSave": true,
+  "recommendations": ["eamodio.gitlens", "streetsidesoftware.code-spell-checker"]
+}
+```
+
+### Gitignore Update
+
+`.agent-config` is automatically added to `.gitignore`.
+
+---
+
+## 18. Dynamic Port Allocation
+
+### Problem
+Port conflicts when running multiple Kanvas instances or when port 5173 is used by other services.
+
+### Solution
+
+Uses `detect-port` to find available port on startup.
+
+**electron.vite.config.ts**:
+```typescript
+import detectPort from 'detect-port';
+
+const PREFERRED_PORT = 5173;
+
+export default defineConfig(async () => {
+  const availablePort = await detectPort(PREFERRED_PORT);
+  if (availablePort !== PREFERRED_PORT) {
+    console.log(`[Kanvas] Port ${PREFERRED_PORT} is busy, using port ${availablePort}`);
+  }
+  return {
+    server: {
+      port: availablePort,
+      strictPort: false,
+    },
+    // ... rest of config
+  };
+});
+```
+
+---
+
+## 19. Dynamic Merge Target
+
+### Problem
+"Merge to main" button was hardcoded to merge to `main` branch.
+
+### Solution
+
+- Sessions now track `baseBranch` (the branch they were created from)
+- Merge dialog shows actual target branch
+- Branch selector dropdown in merge workflow modal
+
+**Session Interface Update**:
+```typescript
+interface Session {
+  // ... existing fields
+  baseBranch: string; // The branch this session was created from (merge target)
+}
+```
+
+---
+
+## 20. Removed Features
 
 ### Daily Branches
 
