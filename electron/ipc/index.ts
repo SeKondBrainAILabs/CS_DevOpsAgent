@@ -309,20 +309,36 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   ipcMain.handle(IPC.INSTANCE_DELETE, async (_, instanceId: string) => {
     // Stop watcher before deleting
     await services.watcher.stop(instanceId).catch(() => {});
-    return services.agentInstance.deleteInstance(instanceId);
+    return await services.agentInstance.deleteInstance(instanceId);
   });
 
-  ipcMain.handle(IPC.INSTANCE_RESTART, async (_, sessionId: string) => {
+  ipcMain.handle(IPC.INSTANCE_DELETE_SESSION, async (_, sessionId: string, repoPath?: string) => {
+    // Stop watcher before deleting
+    await services.watcher.stop(sessionId).catch(() => {});
+    return await services.agentInstance.deleteSessionById(sessionId, repoPath);
+  });
+
+  ipcMain.handle(IPC.INSTANCE_RESTART, async (_, sessionId: string, sessionData?: {
+    repoPath: string;
+    branchName: string;
+    baseBranch?: string;
+    worktreePath?: string;
+    agentType?: string;
+    task?: string;
+  }) => {
     // Stop old watcher
     await services.watcher.stop(sessionId).catch(() => {});
 
-    const result = await services.agentInstance.restartInstance(sessionId);
+    const result = await services.agentInstance.restartInstance(sessionId, sessionData);
 
-    // Start watcher for new session
-    if (result.success && result.data?.sessionId && result.data?.config?.repoPath) {
-      services.watcher.startWithPath(result.data.sessionId, result.data.config.repoPath).catch((err) => {
-        console.warn('[IPC] Failed to start watcher for restarted session:', err);
-      });
+    // Start watcher for new session (use worktree path if available)
+    if (result.success && result.data?.sessionId) {
+      const watchPath = result.data.worktreePath || result.data.config?.repoPath;
+      if (watchPath) {
+        services.watcher.startWithPath(result.data.sessionId, watchPath).catch((err) => {
+          console.warn('[IPC] Failed to start watcher for restarted session:', err);
+        });
+      }
     }
 
     return result;
@@ -443,6 +459,18 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.git.getMergedBranches(repoPath, baseBranch);
   });
 
+  ipcMain.handle(IPC.GIT_GET_CHANGED_FILES, async (_, repoPath: string, baseBranch?: string) => {
+    return services.git.getChangedFiles(repoPath, baseBranch);
+  });
+
+  ipcMain.handle(IPC.GIT_GET_FILES_WITH_STATUS, async (_, repoPath: string, baseBranch?: string) => {
+    return services.git.getFilesWithStatus(repoPath, baseBranch);
+  });
+
+  ipcMain.handle(IPC.GIT_GET_DIFF_SUMMARY, async (_, repoPath: string) => {
+    return services.git.getDiffSummaryForCommit(repoPath);
+  });
+
   // ==========================================================================
   // CONTRACT DETECTION HANDLERS
   // ==========================================================================
@@ -463,6 +491,124 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
       success: true,
       data: services.contractDetection.getContractFilePatterns(),
     };
+  });
+
+  // ==========================================================================
+  // CONTRACT REGISTRY HANDLERS
+  // ==========================================================================
+  ipcMain.handle(IPC.REGISTRY_INIT, async (_, repoPath: string) => {
+    return services.contractRegistry.initializeRegistry(repoPath);
+  });
+
+  ipcMain.handle(IPC.REGISTRY_GET_REPO, async (_, repoPath: string) => {
+    return services.contractRegistry.getRepoSummary(repoPath);
+  });
+
+  ipcMain.handle(IPC.REGISTRY_GET_FEATURE, async (_, repoPath: string, feature: string) => {
+    return services.contractRegistry.getFeatureContracts(repoPath, feature);
+  });
+
+  ipcMain.handle(IPC.REGISTRY_UPDATE_FEATURE, async (_, repoPath: string, feature: string, contracts: unknown) => {
+    return services.contractRegistry.updateFeatureContracts(repoPath, feature, contracts as any);
+  });
+
+  ipcMain.handle(IPC.REGISTRY_LIST_FEATURES, async (_, repoPath: string) => {
+    return services.contractRegistry.listFeatures(repoPath);
+  });
+
+  ipcMain.handle(IPC.REGISTRY_RECORD_BREAKING, async (_, repoPath: string, feature: string, change: unknown) => {
+    return services.contractRegistry.recordBreakingChange(repoPath, feature, change as any);
+  });
+
+  ipcMain.handle(IPC.REGISTRY_GET_ORG_CONFIG, async (_, repoPath: string) => {
+    return services.contractRegistry.getFeatureOrganizationConfig(repoPath);
+  });
+
+  ipcMain.handle(IPC.REGISTRY_SET_ORG_CONFIG, async (_, repoPath: string, config: unknown) => {
+    return services.contractRegistry.setFeatureOrganizationConfig(repoPath, config as any);
+  });
+
+  ipcMain.handle(IPC.REGISTRY_NEEDS_SETUP, async (_, repoPath: string) => {
+    return services.contractRegistry.needsFirstRunSetup(repoPath);
+  });
+
+  // ==========================================================================
+  // CONTRACT GENERATION HANDLERS
+  // Scan codebase and generate contract documentation
+  // ==========================================================================
+  ipcMain.handle(IPC.CONTRACT_DISCOVER_FEATURES, async (_, repoPath: string) => {
+    return services.contractGeneration.discoverFeatures(repoPath);
+  });
+
+  ipcMain.handle(IPC.CONTRACT_GENERATE_FEATURE, async (_, repoPath: string, feature: unknown) => {
+    return services.contractGeneration.generateFeatureContract(repoPath, feature as any);
+  });
+
+  ipcMain.handle(IPC.CONTRACT_GENERATE_ALL, async (_, repoPath: string, options?: unknown) => {
+    return services.contractGeneration.generateAllContracts(repoPath, options as any);
+  });
+
+  ipcMain.handle(IPC.CONTRACT_CANCEL_GENERATION, async () => {
+    services.contractGeneration.cancelGeneration();
+    return { success: true };
+  });
+
+  // ==========================================================================
+  // REPOSITORY ANALYSIS HANDLERS
+  // AST parsing, code analysis, and intelligent contract generation
+  // ==========================================================================
+  ipcMain.handle(IPC.ANALYSIS_SCAN_REPO, async (_, repoPath: string) => {
+    try {
+      const result = await services.repositoryAnalysis.scanRepository(repoPath);
+      return { success: true, data: result };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'SCAN_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to scan repository',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.ANALYSIS_PARSE_FILE, async (_, filePath: string, options?: { useCache?: boolean }) => {
+    try {
+      const ast = await services.astParser.parseFile(filePath, options);
+      return { success: true, data: ast };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'PARSE_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to parse file',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.ANALYSIS_ANALYZE_REPO, async (_, repoPath: string, options?: unknown) => {
+    try {
+      const result = await services.repositoryAnalysis.analyzeRepository(repoPath, options as any);
+      return { success: true, data: result };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'ANALYSIS_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to analyze repository',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.ANALYSIS_GET_CACHE_STATS, async () => {
+    return { success: true, data: services.astParser.getCacheStats() };
+  });
+
+  ipcMain.handle(IPC.ANALYSIS_CLEAR_CACHE, async () => {
+    services.astParser.clearCache();
+    return { success: true };
   });
 
   // ==========================================================================
@@ -510,6 +656,63 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   });
 
   // ==========================================================================
+  // SHELL/QUICK ACTION HANDLERS
+  // ==========================================================================
+  ipcMain.handle(IPC.SHELL_OPEN_TERMINAL, async (_, dirPath: string) => {
+    return services.quickAction.openTerminal(dirPath);
+  });
+
+  ipcMain.handle(IPC.SHELL_OPEN_VSCODE, async (_, dirPath: string) => {
+    return services.quickAction.openVSCode(dirPath);
+  });
+
+  ipcMain.handle(IPC.SHELL_OPEN_FINDER, async (_, dirPath: string) => {
+    return services.quickAction.openFinder(dirPath);
+  });
+
+  ipcMain.handle(IPC.SHELL_COPY_PATH, async (_, pathToCopy: string) => {
+    return services.quickAction.copyPath(pathToCopy);
+  });
+
+  // ==========================================================================
+  // TERMINAL LOG HANDLERS
+  // ==========================================================================
+  ipcMain.handle(IPC.TERMINAL_GET_LOGS, async (_, sessionId?: string, limit?: number) => {
+    return services.terminalLog.getLogs(sessionId, limit);
+  });
+
+  ipcMain.handle(IPC.TERMINAL_CLEAR, async (_, sessionId?: string) => {
+    return services.terminalLog.clearLogs(sessionId);
+  });
+
+  // ==========================================================================
+  // LOCK CHANGE / FORCE RELEASE HANDLERS
+  // ==========================================================================
+  ipcMain.handle(IPC.LOCK_FORCE_RELEASE, async (_, sessionId: string) => {
+    return services.lock.releaseFiles(sessionId);
+  });
+
+  // ==========================================================================
+  // MERGE WORKFLOW HANDLERS
+  // ==========================================================================
+  ipcMain.handle(IPC.MERGE_PREVIEW, async (_, repoPath: string, sourceBranch: string, targetBranch: string) => {
+    return services.merge.previewMerge(repoPath, sourceBranch, targetBranch);
+  });
+
+  ipcMain.handle(IPC.MERGE_EXECUTE, async (_, repoPath: string, sourceBranch: string, targetBranch: string, options?: {
+    deleteWorktree?: boolean;
+    deleteLocalBranch?: boolean;
+    deleteRemoteBranch?: boolean;
+    worktreePath?: string;
+  }) => {
+    return services.merge.executeMerge(repoPath, sourceBranch, targetBranch, options);
+  });
+
+  ipcMain.handle(IPC.MERGE_ABORT, async (_, repoPath: string) => {
+    return services.merge.abortMerge(repoPath);
+  });
+
+  // ==========================================================================
   // APP HANDLERS
   // ==========================================================================
   ipcMain.handle(IPC.APP_GET_VERSION, () => {
@@ -535,11 +738,52 @@ async function startWatchersForExistingSessions(services: Services): Promise<voi
       // Use worktree path if available, otherwise fallback to repo path
       const watchPath = instance.worktreePath || instance.config?.repoPath;
       if (watchPath) {
+        // Start file watcher
         services.watcher.startWithPath(instance.sessionId, watchPath).catch((err) => {
-          console.warn(`[IPC] Failed to start watcher for session ${instance.sessionId}:`, err);
+          console.warn(`[IPC] Failed to start file watcher for session ${instance.sessionId}:`, err);
         });
+
+        // Start rebase watcher if configured for on-demand rebase
+        const rebaseFrequency = instance.config?.rebaseFrequency || 'never';
+        if (rebaseFrequency === 'on-demand' && instance.config?.baseBranch) {
+          services.rebaseWatcher.startWatching({
+            sessionId: instance.sessionId,
+            repoPath: watchPath,
+            baseBranch: instance.config.baseBranch,
+            currentBranch: instance.config.branchName,
+            rebaseFrequency: 'on-demand',
+            pollIntervalMs: 60000, // Check every 60 seconds
+          }).catch((err) => {
+            console.warn(`[IPC] Failed to start rebase watcher for session ${instance.sessionId}:`, err);
+          });
+        }
       }
     }
+
+    // Run crash recovery - process any unprocessed commits from while app was closed
+    setTimeout(async () => {
+      try {
+        const recovery = await services.agentInstance.processUnprocessedCommitsOnStartup({
+          analyzeCommit: async (sessionId: string, commitHash: string, worktreePath: string) => {
+            const result = await services.contractDetection.analyzeCommit(worktreePath, commitHash);
+            if (result.success && result.data) {
+              return {
+                contractChanges: result.data.changes?.length || 0,
+                breakingChanges: result.data.breakingChanges?.length || 0,
+              };
+            }
+            return { contractChanges: 0, breakingChanges: 0 };
+          },
+        });
+
+        if (recovery.commitsProcessed > 0) {
+          console.log(`[IPC] Crash recovery: processed ${recovery.commitsProcessed} commits from ${recovery.sessionsProcessed} sessions`);
+          services.terminalLog.logSystem(`Crash recovery: processed ${recovery.commitsProcessed} commits from ${recovery.sessionsProcessed} sessions`);
+        }
+      } catch (error) {
+        console.warn('[IPC] Crash recovery failed:', error);
+      }
+    }, 2000); // Delay to let watchers start first
   }
 }
 

@@ -125,6 +125,7 @@ export const IPC = {
   INSTANCE_LIST: 'instance:list',
   INSTANCE_GET: 'instance:get',
   INSTANCE_DELETE: 'instance:delete',
+  INSTANCE_DELETE_SESSION: 'instance:delete-session', // Delete by sessionId
   INSTANCE_RESTART: 'instance:restart',
   INSTANCE_CLEAR_ALL: 'instance:clear-all',
   RECENT_REPOS_LIST: 'recent-repos:list',
@@ -145,6 +146,7 @@ export const IPC = {
   RECOVERY_DELETE_ORPHANED: 'recovery:delete-orphaned',
   // Events
   INSTANCE_RECOVERED: 'instance:recovered',
+  ORPHANED_SESSIONS_FOUND: 'recovery:orphaned-found',
 
   // ==========================================================================
   // REPO CLEANUP CHANNELS
@@ -167,6 +169,9 @@ export const IPC = {
   GIT_PRUNE_WORKTREES: 'git:prune-worktrees',
   GIT_DELETE_BRANCH: 'git:delete-branch',
   GIT_MERGED_BRANCHES: 'git:merged-branches',
+  GIT_GET_CHANGED_FILES: 'git:get-changed-files',
+  GIT_GET_FILES_WITH_STATUS: 'git:get-files-with-status',
+  GIT_GET_DIFF_SUMMARY: 'git:get-diff-summary',
 
   // ==========================================================================
   // REBASE WATCHER CHANNELS
@@ -195,6 +200,86 @@ export const IPC = {
   CONTRACT_GET_PATTERNS: 'contract:get-patterns',
   // Events
   CONTRACT_CHANGES_DETECTED: 'contract:changes-detected',
+
+  // ==========================================================================
+  // CONTRACT REGISTRY CHANNELS
+  // JSON-based contract tracking at repo and feature levels
+  // ==========================================================================
+  REGISTRY_INIT: 'registry:init',
+  REGISTRY_GET_REPO: 'registry:get-repo',
+  REGISTRY_GET_FEATURE: 'registry:get-feature',
+  REGISTRY_UPDATE_FEATURE: 'registry:update-feature',
+  REGISTRY_LIST_FEATURES: 'registry:list-features',
+  REGISTRY_RECORD_BREAKING: 'registry:record-breaking',
+  // Feature organization config
+  REGISTRY_GET_ORG_CONFIG: 'registry:get-org-config',
+  REGISTRY_SET_ORG_CONFIG: 'registry:set-org-config',
+  REGISTRY_NEEDS_SETUP: 'registry:needs-setup',
+  // Events
+  CONTRACT_REGISTRY_UPDATED: 'contract:registry-updated',
+  BREAKING_CHANGE_DETECTED: 'contract:breaking-change',
+
+  // ==========================================================================
+  // CONTRACT GENERATION CHANNELS
+  // Scan codebase and generate contract documentation
+  // ==========================================================================
+  CONTRACT_DISCOVER_FEATURES: 'contract:discover-features',
+  CONTRACT_GENERATE_FEATURE: 'contract:generate-feature',
+  CONTRACT_GENERATE_ALL: 'contract:generate-all',
+  CONTRACT_CANCEL_GENERATION: 'contract:cancel-generation',
+  // Events
+  CONTRACT_GENERATION_PROGRESS: 'contract:generation-progress',
+  CONTRACT_GENERATION_COMPLETE: 'contract:generation-complete',
+  CONTRACT_GENERATION_ERROR: 'contract:generation-error',
+
+  // ==========================================================================
+  // REPOSITORY ANALYSIS CHANNELS
+  // AST parsing, code analysis, and intelligent contract generation
+  // ==========================================================================
+  ANALYSIS_SCAN_REPO: 'analysis:scan-repo',
+  ANALYSIS_PARSE_FILE: 'analysis:parse-file',
+  ANALYSIS_PARSE_FEATURE: 'analysis:parse-feature',
+  ANALYSIS_ANALYZE_FEATURE: 'analysis:analyze-feature',
+  ANALYSIS_ANALYZE_REPO: 'analysis:analyze-repo',
+  ANALYSIS_BUILD_GRAPH: 'analysis:build-graph',
+  ANALYSIS_GENERATE_CONTRACTS: 'analysis:generate-contracts',
+  ANALYSIS_INCREMENTAL: 'analysis:incremental',
+  ANALYSIS_GET_CACHE_STATS: 'analysis:get-cache-stats',
+  ANALYSIS_CLEAR_CACHE: 'analysis:clear-cache',
+  // Events
+  ANALYSIS_PROGRESS: 'analysis:progress',
+  ANALYSIS_COMPLETE: 'analysis:complete',
+  ANALYSIS_ERROR: 'analysis:error',
+
+  // ==========================================================================
+  // SHELL/QUICK ACTION CHANNELS
+  // ==========================================================================
+  SHELL_OPEN_TERMINAL: 'shell:open-terminal',
+  SHELL_OPEN_VSCODE: 'shell:open-vscode',
+  SHELL_OPEN_FINDER: 'shell:open-finder',
+  SHELL_COPY_PATH: 'shell:copy-path',
+
+  // ==========================================================================
+  // TERMINAL LOG CHANNELS
+  // System-level logging for terminal view
+  // ==========================================================================
+  TERMINAL_LOG: 'terminal:log',
+  TERMINAL_CLEAR: 'terminal:clear',
+  TERMINAL_GET_LOGS: 'terminal:get-logs',
+
+  // ==========================================================================
+  // LOCK CHANGE EVENTS
+  // Real-time file lock updates
+  // ==========================================================================
+  LOCK_CHANGED: 'lock:changed',
+  LOCK_FORCE_RELEASE: 'lock:force-release',
+
+  // ==========================================================================
+  // MERGE WORKFLOW CHANNELS
+  // ==========================================================================
+  MERGE_PREVIEW: 'merge:preview',
+  MERGE_EXECUTE: 'merge:execute',
+  MERGE_ABORT: 'merge:abort',
 
   // ==========================================================================
   // APP CHANNELS
@@ -259,6 +344,17 @@ export const REQUEST_CHANNELS = [
   IPC.RECENT_REPOS_ADD,
   IPC.RECENT_REPOS_REMOVE,
   IPC.APP_GET_VERSION,
+  // Analysis channels
+  IPC.ANALYSIS_SCAN_REPO,
+  IPC.ANALYSIS_PARSE_FILE,
+  IPC.ANALYSIS_PARSE_FEATURE,
+  IPC.ANALYSIS_ANALYZE_FEATURE,
+  IPC.ANALYSIS_ANALYZE_REPO,
+  IPC.ANALYSIS_BUILD_GRAPH,
+  IPC.ANALYSIS_GENERATE_CONTRACTS,
+  IPC.ANALYSIS_INCREMENTAL,
+  IPC.ANALYSIS_GET_CACHE_STATS,
+  IPC.ANALYSIS_CLEAR_CACHE,
 ] as const;
 
 export const EVENT_CHANNELS = [
@@ -281,4 +377,8 @@ export const EVENT_CHANNELS = [
   IPC.SESSION_REPORTED,
   IPC.ACTIVITY_REPORTED,
   IPC.INSTANCE_STATUS_CHANGED,
+  // Analysis events
+  IPC.ANALYSIS_PROGRESS,
+  IPC.ANALYSIS_COMPLETE,
+  IPC.ANALYSIS_ERROR,
 ] as const;

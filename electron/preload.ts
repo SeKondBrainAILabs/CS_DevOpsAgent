@@ -98,6 +98,52 @@ const api = {
     branches: (sessionId: string): Promise<IpcResult<BranchInfo[]>> =>
       ipcRenderer.invoke(IPC.GIT_BRANCHES, sessionId),
 
+    getChangedFiles: (repoPath: string, baseBranch?: string): Promise<IpcResult<Array<{
+      path: string;
+      status: string;
+      additions: number;
+      deletions: number;
+    }>>> =>
+      ipcRenderer.invoke(IPC.GIT_GET_CHANGED_FILES, repoPath, baseBranch),
+
+    getFilesWithStatus: (repoPath: string, baseBranch?: string): Promise<IpcResult<Array<{
+      path: string;
+      status: string;
+      additions: number;
+      deletions: number;
+      gitState: 'staged' | 'unstaged' | 'committed' | 'untracked';
+      commitHash?: string;
+      commitShortHash?: string;
+      commitMessage?: string;
+    }>>> =>
+      ipcRenderer.invoke(IPC.GIT_GET_FILES_WITH_STATUS, repoPath, baseBranch),
+
+    getDiffSummary: (repoPath: string): Promise<IpcResult<{
+      totalFiles: number;
+      totalAdditions: number;
+      totalDeletions: number;
+      filesByType: Record<string, number>;
+      summary: string;
+      files: Array<{
+        path: string;
+        status: string;
+        additions: number;
+        deletions: number;
+        diff: string;
+      }>;
+    }>> =>
+      ipcRenderer.invoke(IPC.GIT_GET_DIFF_SUMMARY, repoPath),
+
+    fetch: (repoPath: string, remote?: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.GIT_FETCH, repoPath, remote),
+
+    performRebase: (repoPath: string, baseBranch: string): Promise<IpcResult<{
+      success: boolean;
+      message: string;
+      hadStashedChanges?: boolean;
+    }>> =>
+      ipcRenderer.invoke(IPC.GIT_PERFORM_REBASE, repoPath, baseBranch),
+
     onStatusChanged: (callback: (data: { sessionId: string; status: GitStatus }) => void): (() => void) => {
       const handler = (_event: IpcRendererEvent, data: { sessionId: string; status: GitStatus }) => callback(data);
       ipcRenderer.on(IPC.GIT_STATUS_CHANGED, handler);
@@ -364,8 +410,18 @@ const api = {
     delete: (instanceId: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.INSTANCE_DELETE, instanceId),
 
-    restart: (sessionId: string): Promise<IpcResult<AgentInstance>> =>
-      ipcRenderer.invoke(IPC.INSTANCE_RESTART, sessionId),
+    deleteSession: (sessionId: string, repoPath?: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.INSTANCE_DELETE_SESSION, sessionId, repoPath),
+
+    restart: (sessionId: string, sessionData?: {
+      repoPath: string;
+      branchName: string;
+      baseBranch?: string;
+      worktreePath?: string;
+      agentType?: string;
+      task?: string;
+    }): Promise<IpcResult<AgentInstance>> =>
+      ipcRenderer.invoke(IPC.INSTANCE_RESTART, sessionId, sessionData),
 
     clearAll: (): Promise<IpcResult<{ count: number }>> =>
       ipcRenderer.invoke(IPC.INSTANCE_CLEAR_ALL),
@@ -458,6 +514,22 @@ const api = {
       const handler = (_event: IpcRendererEvent, instance: AgentInstance) => callback(instance);
       ipcRenderer.on(IPC.INSTANCE_RECOVERED, handler);
       return () => ipcRenderer.removeListener(IPC.INSTANCE_RECOVERED, handler);
+    },
+
+    onOrphanedSessionsFound: (callback: (sessions: Array<{
+      sessionId: string;
+      repoPath: string;
+      sessionData: { task?: string; branchName?: string; agentType?: string };
+      lastModified: Date;
+    }>) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, sessions: Array<{
+        sessionId: string;
+        repoPath: string;
+        sessionData: { task?: string; branchName?: string; agentType?: string };
+        lastModified: Date;
+      }>) => callback(sessions);
+      ipcRenderer.on(IPC.ORPHANED_SESSIONS_FOUND, handler);
+      return () => ipcRenderer.removeListener(IPC.ORPHANED_SESSIONS_FOUND, handler);
     },
   },
 
@@ -601,6 +673,442 @@ const api = {
   },
 
   // ==========================================================================
+  // CONTRACT REGISTRY API
+  // JSON-based contract tracking at repo and feature levels
+  // ==========================================================================
+  contractRegistry: {
+    initialize: (repoPath: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.REGISTRY_INIT, repoPath),
+
+    getRepoSummary: (repoPath: string): Promise<IpcResult<{
+      version: string;
+      lastUpdated: string;
+      summary: {
+        totalFeatures: number;
+        totalTests: number;
+        totalApiContracts: number;
+        coverageScore: number;
+        breakingChangesLast7Days: number;
+        breakingChangesLast30Days: number;
+      };
+      features: Record<string, { ref: string; testCount: number; coverageScore: number }>;
+      recentBreakingChanges: Array<{
+        id: string;
+        file: string;
+        type: string;
+        description: string;
+        timestamp: string;
+        commitHash: string;
+      }>;
+    }>> =>
+      ipcRenderer.invoke(IPC.REGISTRY_GET_REPO, repoPath),
+
+    getFeatureContracts: (repoPath: string, feature: string): Promise<IpcResult<{
+      feature: string;
+      version: string;
+      lastUpdated: string;
+      contracts: {
+        api: Array<{ file: string; type: string; endpoints?: string[]; lastModified: string }>;
+        e2e: Array<{ file: string; type: string; testCount: number; testNames: string[]; lastModified: string }>;
+        unit: Array<{ file: string; type: string; testCount: number; testNames: string[]; lastModified: string }>;
+        integration: Array<{ file: string; type: string; testCount: number; testNames: string[]; lastModified: string }>;
+        fixtures: Array<{ file: string; type: string; usedBy: string[]; lastModified: string }>;
+      };
+      dependencies: string[];
+      coverageScore: number;
+      breakingChanges: Array<{
+        id: string;
+        file: string;
+        type: string;
+        description: string;
+        timestamp: string;
+        commitHash: string;
+      }>;
+    } | null>> =>
+      ipcRenderer.invoke(IPC.REGISTRY_GET_FEATURE, repoPath, feature),
+
+    updateFeature: (repoPath: string, feature: string, contracts: {
+      api?: Array<{ file: string; type: string; endpoints?: string[]; lastModified: string }>;
+      e2e?: Array<{ file: string; type: string; testCount: number; testNames: string[]; lastModified: string }>;
+      unit?: Array<{ file: string; type: string; testCount: number; testNames: string[]; lastModified: string }>;
+    }): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.REGISTRY_UPDATE_FEATURE, repoPath, feature, contracts),
+
+    listFeatures: (repoPath: string): Promise<IpcResult<string[]>> =>
+      ipcRenderer.invoke(IPC.REGISTRY_LIST_FEATURES, repoPath),
+
+    recordBreakingChange: (repoPath: string, feature: string, change: {
+      file: string;
+      type: string;
+      description: string;
+      timestamp: string;
+      commitHash: string;
+    }): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.REGISTRY_RECORD_BREAKING, repoPath, feature, change),
+
+    // Feature organization config
+    getOrganizationConfig: (repoPath: string): Promise<IpcResult<{
+      enabled: boolean;
+      structure: 'feature-folders' | 'flat' | 'custom';
+      setupCompleted: boolean;
+      setupCompletedAt?: string;
+    }>> =>
+      ipcRenderer.invoke(IPC.REGISTRY_GET_ORG_CONFIG, repoPath),
+
+    setOrganizationConfig: (repoPath: string, config: {
+      enabled: boolean;
+      structure: 'feature-folders' | 'flat' | 'custom';
+      setupCompleted: boolean;
+      setupCompletedAt?: string;
+    }): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.REGISTRY_SET_ORG_CONFIG, repoPath, config),
+
+    needsFirstRunSetup: (repoPath: string): Promise<IpcResult<boolean>> =>
+      ipcRenderer.invoke(IPC.REGISTRY_NEEDS_SETUP, repoPath),
+
+    // Events
+    onRegistryUpdated: (callback: (data: { repoPath: string; feature?: string }) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, data: { repoPath: string; feature?: string }) => callback(data);
+      ipcRenderer.on(IPC.CONTRACT_REGISTRY_UPDATED, handler);
+      return () => ipcRenderer.removeListener(IPC.CONTRACT_REGISTRY_UPDATED, handler);
+    },
+
+    onBreakingChangeDetected: (callback: (data: {
+      repoPath: string;
+      feature: string;
+      change: { file: string; type: string; description: string };
+    }) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, data: {
+        repoPath: string;
+        feature: string;
+        change: { file: string; type: string; description: string };
+      }) => callback(data);
+      ipcRenderer.on(IPC.BREAKING_CHANGE_DETECTED, handler);
+      return () => ipcRenderer.removeListener(IPC.BREAKING_CHANGE_DETECTED, handler);
+    },
+  },
+
+  // ==========================================================================
+  // CONTRACT GENERATION API
+  // Scan codebase and generate contract documentation
+  // ==========================================================================
+  contractGeneration: {
+    discoverFeatures: (repoPath: string): Promise<IpcResult<Array<{
+      name: string;
+      basePath: string;
+      files: {
+        api: string[];
+        schema: string[];
+        tests: { e2e: string[]; unit: string[]; integration: string[] };
+        fixtures: string[];
+        config: string[];
+        other: string[];
+      };
+      contractPatternMatches: number;
+    }>>> =>
+      ipcRenderer.invoke(IPC.CONTRACT_DISCOVER_FEATURES, repoPath),
+
+    generateFeature: (repoPath: string, feature: {
+      name: string;
+      basePath: string;
+      files: {
+        api: string[];
+        schema: string[];
+        tests: { e2e: string[]; unit: string[]; integration: string[] };
+        fixtures: string[];
+        config: string[];
+        other: string[];
+      };
+      contractPatternMatches: number;
+    }, options?: {
+      includeCodeSamples?: boolean;
+      maxFilesPerFeature?: number;
+    }): Promise<IpcResult<{
+      feature: string;
+      success: boolean;
+      markdownPath?: string;
+      jsonPath?: string;
+      error?: string;
+    }>> =>
+      ipcRenderer.invoke(IPC.CONTRACT_GENERATE_FEATURE, repoPath, feature, options),
+
+    generateAll: (repoPath: string, options?: {
+      includeCodeSamples?: boolean;
+      maxFilesPerFeature?: number;
+      skipExisting?: boolean;
+      features?: string[];
+    }): Promise<IpcResult<{
+      totalFeatures: number;
+      generated: number;
+      skipped: number;
+      failed: number;
+      results: Array<{
+        feature: string;
+        success: boolean;
+        markdownPath?: string;
+        jsonPath?: string;
+        error?: string;
+      }>;
+      duration: number;
+    }>> =>
+      ipcRenderer.invoke(IPC.CONTRACT_GENERATE_ALL, repoPath, options),
+
+    cancel: (): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.CONTRACT_CANCEL_GENERATION),
+
+    onProgress: (callback: (progress: {
+      total: number;
+      completed: number;
+      currentFeature: string;
+      currentStep: 'discovering' | 'analyzing' | 'generating' | 'saving';
+      errors: string[];
+    }) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, progress: {
+        total: number;
+        completed: number;
+        currentFeature: string;
+        currentStep: 'discovering' | 'analyzing' | 'generating' | 'saving';
+        errors: string[];
+      }) => callback(progress);
+      ipcRenderer.on(IPC.CONTRACT_GENERATION_PROGRESS, handler);
+      return () => ipcRenderer.removeListener(IPC.CONTRACT_GENERATION_PROGRESS, handler);
+    },
+
+    onComplete: (callback: (result: {
+      totalFeatures: number;
+      generated: number;
+      skipped: number;
+      failed: number;
+      results: Array<{
+        feature: string;
+        success: boolean;
+        markdownPath?: string;
+        jsonPath?: string;
+        error?: string;
+      }>;
+      duration: number;
+    }) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, result: {
+        totalFeatures: number;
+        generated: number;
+        skipped: number;
+        failed: number;
+        results: Array<{
+          feature: string;
+          success: boolean;
+          markdownPath?: string;
+          jsonPath?: string;
+          error?: string;
+        }>;
+        duration: number;
+      }) => callback(result);
+      ipcRenderer.on(IPC.CONTRACT_GENERATION_COMPLETE, handler);
+      return () => ipcRenderer.removeListener(IPC.CONTRACT_GENERATION_COMPLETE, handler);
+    },
+  },
+
+  // ==========================================================================
+  // REPOSITORY ANALYSIS API
+  // AST parsing, code analysis, and intelligent contract generation
+  // ==========================================================================
+  analysis: {
+    scanRepo: (repoPath: string): Promise<IpcResult<{
+      features: Array<{
+        name: string;
+        basePath: string;
+        files: {
+          api: string[];
+          schema: string[];
+          tests: { e2e: string[]; unit: string[]; integration: string[] };
+          fixtures: string[];
+          config: string[];
+          other: string[];
+        };
+        contractPatternMatches: number;
+      }>;
+      languages: Array<{
+        language: string;
+        files: number;
+        lines: number;
+        percentage: number;
+      }>;
+      totalFiles: number;
+    }>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_SCAN_REPO, repoPath),
+
+    parseFile: (filePath: string, options?: { useCache?: boolean }): Promise<IpcResult<{
+      language: string;
+      filePath: string;
+      contentHash: string;
+      exports: Array<{
+        name: string;
+        type: string;
+        line: number;
+        column: number;
+        signature?: string;
+        isDefault: boolean;
+      }>;
+      imports: Array<{
+        name: string;
+        alias?: string;
+        source: string;
+        isDefault: boolean;
+        isNamespace: boolean;
+        line: number;
+      }>;
+      functions: Array<{
+        name: string;
+        line: number;
+        column: number;
+        endLine: number;
+        params: Array<{ name: string; type?: string; optional: boolean }>;
+        returnType?: string;
+        isAsync: boolean;
+        isExported: boolean;
+        isArrow: boolean;
+      }>;
+      classes: Array<{
+        name: string;
+        line: number;
+        column: number;
+        endLine: number;
+        extends?: string;
+        implements?: string[];
+        methods: Array<{ name: string; line: number; visibility: string; isStatic: boolean; isAsync: boolean }>;
+        properties: Array<{ name: string; line: number; type?: string; visibility: string; isStatic: boolean }>;
+        isExported: boolean;
+        isAbstract: boolean;
+      }>;
+      types: Array<{
+        name: string;
+        kind: string;
+        line: number;
+        column: number;
+        isExported: boolean;
+      }>;
+      parseTime: number;
+    }>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_PARSE_FILE, filePath, options),
+
+    analyzeRepo: (repoPath: string, options?: {
+      useCache?: boolean;
+      forceRefresh?: boolean;
+      useLLM?: boolean;
+      generateContracts?: boolean;
+      features?: string[];
+    }): Promise<IpcResult<{
+      success: boolean;
+      analysis?: {
+        repoPath: string;
+        repoName: string;
+        analyzedAt: string;
+        features: Array<{
+          name: string;
+          basePath: string;
+          language: string;
+          frameworks: string[];
+          exports: Array<{ name: string; type: string; line: number }>;
+          dependencies: string[];
+          internalDependencies: string[];
+          externalDependencies: string[];
+          fileCount: number;
+          lineCount: number;
+          lastAnalyzed: string;
+        }>;
+        dependencyGraph: {
+          nodes: Array<{ id: string; name: string; type: string; path?: string; exports: string[] }>;
+          edges: Array<{ source: string; target: string; type: string; symbols: string[] }>;
+          circularDependencies: string[][];
+          externalDependencies: Array<{ name: string; usedBy: string[]; importCount: number }>;
+        };
+        languages: Array<{ language: string; files: number; lines: number; percentage: number }>;
+        totalFiles: number;
+        totalLines: number;
+        analysisDuration: number;
+      };
+      progress: {
+        phase: string;
+        totalFiles: number;
+        processedFiles: number;
+        currentFile?: string;
+        currentFeature?: string;
+        errors: Array<{ file: string; line?: number; message: string; severity: string; recoverable: boolean }>;
+        startedAt: string;
+      };
+      errors: Array<{ file: string; message: string; severity: string; recoverable: boolean }>;
+      duration: number;
+    }>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_ANALYZE_REPO, repoPath, options),
+
+    getCacheStats: (): Promise<IpcResult<{
+      totalEntries: number;
+      totalSize: number;
+      hitCount: number;
+      missCount: number;
+      hitRate: number;
+      oldestEntry: string;
+      newestEntry: string;
+    }>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_GET_CACHE_STATS),
+
+    clearCache: (): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.ANALYSIS_CLEAR_CACHE),
+
+    // Events
+    onProgress: (callback: (progress: {
+      phase: string;
+      totalFiles: number;
+      processedFiles: number;
+      currentFile?: string;
+      currentFeature?: string;
+      errors: Array<{ file: string; message: string; severity: string }>;
+      startedAt: string;
+    }) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, progress: {
+        phase: string;
+        totalFiles: number;
+        processedFiles: number;
+        currentFile?: string;
+        currentFeature?: string;
+        errors: Array<{ file: string; message: string; severity: string }>;
+        startedAt: string;
+      }) => callback(progress);
+      ipcRenderer.on(IPC.ANALYSIS_PROGRESS, handler);
+      return () => ipcRenderer.removeListener(IPC.ANALYSIS_PROGRESS, handler);
+    },
+
+    onComplete: (callback: (result: {
+      success: boolean;
+      duration: number;
+      analysis?: { repoName: string; totalFiles: number; totalLines: number };
+    }) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, result: {
+        success: boolean;
+        duration: number;
+        analysis?: { repoName: string; totalFiles: number; totalLines: number };
+      }) => callback(result);
+      ipcRenderer.on(IPC.ANALYSIS_COMPLETE, handler);
+      return () => ipcRenderer.removeListener(IPC.ANALYSIS_COMPLETE, handler);
+    },
+
+    onError: (callback: (error: {
+      file: string;
+      message: string;
+      severity: string;
+      recoverable: boolean;
+    }) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, error: {
+        file: string;
+        message: string;
+        severity: string;
+        recoverable: boolean;
+      }) => callback(error);
+      ipcRenderer.on(IPC.ANALYSIS_ERROR, handler);
+      return () => ipcRenderer.removeListener(IPC.ANALYSIS_ERROR, handler);
+    },
+  },
+
+  // ==========================================================================
   // REBASE WATCHER API
   // Auto-rebase on remote changes (on-demand mode)
   // ==========================================================================
@@ -714,6 +1222,149 @@ const api = {
       return () => ipcRenderer.removeListener(IPC.REBASE_AUTO_COMPLETED, handler);
     },
   },
+
+  // ==========================================================================
+  // SHELL/QUICK ACTION API
+  // ==========================================================================
+  shell: {
+    openTerminal: (dirPath: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.SHELL_OPEN_TERMINAL, dirPath),
+
+    openVSCode: (dirPath: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.SHELL_OPEN_VSCODE, dirPath),
+
+    openFinder: (dirPath: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.SHELL_OPEN_FINDER, dirPath),
+
+    copyPath: (pathToCopy: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.SHELL_COPY_PATH, pathToCopy),
+  },
+
+  // ==========================================================================
+  // TERMINAL LOG API
+  // ==========================================================================
+  terminal: {
+    getLogs: (sessionId?: string, limit?: number): Promise<IpcResult<Array<{
+      id: string;
+      timestamp: string;
+      level: string;
+      message: string;
+      sessionId?: string;
+      source?: string;
+      command?: string;
+      output?: string;
+      exitCode?: number;
+      duration?: number;
+    }>>> =>
+      ipcRenderer.invoke(IPC.TERMINAL_GET_LOGS, sessionId, limit),
+
+    clearLogs: (sessionId?: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.TERMINAL_CLEAR, sessionId),
+
+    onLog: (callback: (entry: {
+      id: string;
+      timestamp: string;
+      level: string;
+      message: string;
+      sessionId?: string;
+      source?: string;
+      command?: string;
+      output?: string;
+      exitCode?: number;
+      duration?: number;
+    }) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, entry: {
+        id: string;
+        timestamp: string;
+        level: string;
+        message: string;
+        sessionId?: string;
+        source?: string;
+        command?: string;
+        output?: string;
+        exitCode?: number;
+        duration?: number;
+      }) => callback(entry);
+      ipcRenderer.on(IPC.TERMINAL_LOG, handler);
+      return () => ipcRenderer.removeListener(IPC.TERMINAL_LOG, handler);
+    },
+  },
+
+  // ==========================================================================
+  // MERGE WORKFLOW API
+  // ==========================================================================
+  merge: {
+    preview: (repoPath: string, sourceBranch: string, targetBranch: string): Promise<IpcResult<{
+      sourceBranch: string;
+      targetBranch: string;
+      canMerge: boolean;
+      hasConflicts: boolean;
+      conflictingFiles: string[];
+      filesChanged: Array<{
+        path: string;
+        additions: number;
+        deletions: number;
+        status: string;
+      }>;
+      commitCount: number;
+      aheadBy: number;
+      behindBy: number;
+    }>> =>
+      ipcRenderer.invoke(IPC.MERGE_PREVIEW, repoPath, sourceBranch, targetBranch),
+
+    execute: (
+      repoPath: string,
+      sourceBranch: string,
+      targetBranch: string,
+      options?: {
+        deleteWorktree?: boolean;
+        deleteLocalBranch?: boolean;
+        deleteRemoteBranch?: boolean;
+        worktreePath?: string;
+      }
+    ): Promise<IpcResult<{
+      success: boolean;
+      message: string;
+      mergeCommitHash?: string;
+      filesChanged?: number;
+      conflictingFiles?: string[];
+    }>> =>
+      ipcRenderer.invoke(IPC.MERGE_EXECUTE, repoPath, sourceBranch, targetBranch, options),
+
+    abort: (repoPath: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.MERGE_ABORT, repoPath),
+  },
+
+  // ==========================================================================
+  // LOCK EXTENDED API
+  // ==========================================================================
+  lockExtended: {
+    forceRelease: (sessionId: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.LOCK_FORCE_RELEASE, sessionId),
+
+    onLockChanged: (callback: (locks: Array<{
+      sessionId: string;
+      agentType: string;
+      files: string[];
+      operation: string;
+      declaredAt: string;
+      estimatedDuration: number;
+      reason?: string;
+    }>) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, locks: Array<{
+        sessionId: string;
+        agentType: string;
+        files: string[];
+        operation: string;
+        declaredAt: string;
+        estimatedDuration: number;
+        reason?: string;
+      }>) => callback(locks);
+      ipcRenderer.on(IPC.LOCK_CHANGED, handler);
+      return () => ipcRenderer.removeListener(IPC.LOCK_CHANGED, handler);
+    },
+  },
+
 };
 
 // Expose to renderer

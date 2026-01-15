@@ -16,7 +16,21 @@ import { AgentInstanceService } from './AgentInstanceService';
 import { SessionRecoveryService } from './SessionRecoveryService';
 import { RepoCleanupService } from './RepoCleanupService';
 import { ContractDetectionService } from './ContractDetectionService';
+import { ContractRegistryService } from './ContractRegistryService';
+import { ContractGenerationService } from './ContractGenerationService';
 import { RebaseWatcherService } from './RebaseWatcherService';
+import { TerminalLogService } from './TerminalLogService';
+import { QuickActionService } from './QuickActionService';
+import { MergeService } from './MergeService';
+import { HeartbeatService } from './HeartbeatService';
+import { databaseService } from './DatabaseService';
+import {
+  initializeAnalysisServices,
+  disposeAnalysisServices,
+  ASTParserService,
+  RepositoryAnalysisService,
+  APIExtractorService,
+} from './analysis';
 
 export interface Services {
   session: SessionService;
@@ -31,7 +45,17 @@ export interface Services {
   sessionRecovery: SessionRecoveryService;
   repoCleanup: RepoCleanupService;
   contractDetection: ContractDetectionService;
+  contractRegistry: ContractRegistryService;
+  contractGeneration: ContractGenerationService;
   rebaseWatcher: RebaseWatcherService;
+  terminalLog: TerminalLogService;
+  quickAction: QuickActionService;
+  merge: MergeService;
+  heartbeat: HeartbeatService;
+  // Analysis services
+  astParser: ASTParserService;
+  repositoryAnalysis: RepositoryAnalysisService;
+  apiExtractor: APIExtractorService;
 }
 
 let services: Services | null = null;
@@ -40,7 +64,11 @@ let services: Services | null = null;
  * Initialize all services with the main window reference
  */
 export async function initializeServices(mainWindow: BrowserWindow): Promise<Services> {
-  // Initialize config service first (other services may depend on it)
+  // Initialize database service first (stores activities, settings, logs)
+  await databaseService.initialize();
+  console.log('[Services] Database initialized');
+
+  // Initialize config service (other services may depend on it)
   const config = new ConfigService();
   await config.initialize();
 
@@ -54,6 +82,10 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
 
   const lock = new LockService();
   lock.setMainWindow(mainWindow);
+
+  // Initialize Terminal Log service early (other services may use it)
+  const terminalLog = new TerminalLogService();
+  terminalLog.setMainWindow(mainWindow);
 
   const watcher = new WatcherService(git, activity);
   watcher.setMainWindow(mainWindow);
@@ -82,13 +114,51 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   const repoCleanup = new RepoCleanupService();
 
   // Initialize Contract Detection service
-  // For detecting contract changes in commits (API specs, schemas, interfaces)
+  // For detecting contract changes in commits (API specs, schemas, interfaces, tests)
   const contractDetection = new ContractDetectionService();
+  contractDetection.setMainWindow(mainWindow);
+
+  // Initialize Contract Registry service
+  // For JSON-based contract tracking at repo and feature levels
+  const contractRegistry = new ContractRegistryService();
+  contractRegistry.setMainWindow(mainWindow);
+
+  // Initialize Contract Generation service
+  // For scanning codebases and generating contract documentation using AI
+  const contractGeneration = new ContractGenerationService(ai, contractRegistry);
+  contractGeneration.setMainWindow(mainWindow);
 
   // Initialize Rebase Watcher service
   // For auto-rebasing when remote changes are detected (on-demand mode)
   const rebaseWatcher = new RebaseWatcherService(git);
   rebaseWatcher.setMainWindow(mainWindow);
+
+  // Connect terminalLog to watcher for terminal view logging
+  watcher.setTerminalLogService(terminalLog);
+
+  // Connect terminalLog to agentInstance for restart logging
+  agentInstance.setTerminalLogService(terminalLog);
+
+  // Connect agentInstance to watcher for commit tracking (crash recovery)
+  watcher.setAgentInstanceService(agentInstance);
+
+  // Initialize Quick Action service
+  // For opening terminal, VS Code, Finder, clipboard
+  const quickAction = new QuickActionService();
+
+  // Initialize Merge service
+  // For merge preview and execution workflow
+  const merge = new MergeService();
+
+  // Initialize Heartbeat service
+  // For monitoring agent connection status
+  const heartbeat = new HeartbeatService();
+  heartbeat.setMainWindow(mainWindow);
+
+  // Initialize Analysis services
+  // For AST parsing, repository analysis, and API extraction
+  const analysisServices = await initializeAnalysisServices();
+  analysisServices.repositoryAnalysis.setMainWindow(mainWindow);
 
   services = {
     session,
@@ -103,8 +173,22 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     sessionRecovery,
     repoCleanup,
     contractDetection,
+    contractRegistry,
+    contractGeneration,
     rebaseWatcher,
+    terminalLog,
+    quickAction,
+    merge,
+    heartbeat,
+    // Analysis services
+    astParser: analysisServices.astParser,
+    repositoryAnalysis: analysisServices.repositoryAnalysis,
+    apiExtractor: analysisServices.apiExtractor,
   };
+
+  // Log initial startup message to terminal
+  terminalLog.logSystem('Kanvas services initialized');
+  terminalLog.info('Ready to monitor agent sessions', undefined, 'Kanvas');
 
   return services;
 }
@@ -130,6 +214,15 @@ export async function disposeServices(): Promise<void> {
   // Cleanup rebase watcher
   await services.rebaseWatcher.dispose();
 
+  // Cleanup heartbeat service
+  await services.heartbeat.dispose();
+
+  // Cleanup analysis services
+  await disposeAnalysisServices();
+
+  // Close database connection (last, so other services can flush)
+  await databaseService.dispose();
+
   services = null;
 }
 
@@ -146,4 +239,13 @@ export { AgentInstanceService } from './AgentInstanceService';
 export { SessionRecoveryService } from './SessionRecoveryService';
 export { RepoCleanupService } from './RepoCleanupService';
 export { ContractDetectionService } from './ContractDetectionService';
+export { ContractRegistryService } from './ContractRegistryService';
+export { ContractGenerationService } from './ContractGenerationService';
 export { RebaseWatcherService } from './RebaseWatcherService';
+export { TerminalLogService } from './TerminalLogService';
+export { QuickActionService } from './QuickActionService';
+export { MergeService } from './MergeService';
+export { HeartbeatService } from './HeartbeatService';
+export { databaseService } from './DatabaseService';
+// Analysis services
+export { ASTParserService, RepositoryAnalysisService, APIExtractorService } from './analysis';
