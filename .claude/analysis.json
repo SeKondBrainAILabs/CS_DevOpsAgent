@@ -1,0 +1,239 @@
+{
+  "metadata": {
+    "project": "CS_DevOpsAgent / s9n-devops-agent",
+    "analyzed_at": "2026-01-10",
+    "version": "2.0.18-dev.13"
+  },
+  "entry_point": {
+    "file": "bin/cs-devops-agent",
+    "type": "shell_router",
+    "routes": [
+      {"command": "chat", "target": "src/agent-chat.js"},
+      {"command": "work", "target": "src/cs-devops-agent-worker.js"},
+      {"command": "session", "target": "src/session-coordinator.js"},
+      {"command": "close", "target": "src/close-session.js"},
+      {"command": "setup", "target": "src/setup-cs-devops-agent.js"},
+      {"command": "tutorial", "target": "src/tutorial-mode.js"},
+      {"command": "help", "target": "src/help-system.js"}
+    ]
+  },
+  "modules": {
+    "session_management": [
+      {
+        "file": "src/session-coordinator.js",
+        "type": "ES Module",
+        "purpose": "Session CRUD operations",
+        "exports": ["createSession", "listSessions", "selectSession", "claimExistingSession"],
+        "dependencies": ["worktree-manager.js", "credentials-manager.js", "instruction-formatter.js"],
+        "cli_deps": ["readline"],
+        "migration_notes": "Remove readline prompts, add IPC events"
+      },
+      {
+        "file": "src/close-session.js",
+        "type": "ES Module",
+        "purpose": "Session closure with merge",
+        "exports": ["closeSession"],
+        "dependencies": ["worktree-manager.js", "branch-config-manager.js"],
+        "cli_deps": ["readline"],
+        "migration_notes": "Remove readline, add merge options via IPC"
+      },
+      {
+        "file": "src/enhanced-close-session.js",
+        "type": "ES Module",
+        "purpose": "Enhanced closure with dual merge",
+        "exports": ["enhancedCloseSession"],
+        "dependencies": ["worktree-manager.js", "branch-config-manager.js"],
+        "cli_deps": ["readline"],
+        "migration_notes": "Consolidate with close-session.js"
+      }
+    ],
+    "git_operations": [
+      {
+        "file": "src/worktree-manager.js",
+        "type": "ES Module",
+        "purpose": "Git worktree operations",
+        "exports": [
+          "createWorktree",
+          "removeWorktree",
+          "listWorktrees",
+          "getWorktreePath",
+          "cleanupOrphanedWorktrees"
+        ],
+        "dependencies": [],
+        "cli_deps": ["execSync from child_process"],
+        "migration_notes": "Use execa for async operations, add status tracking"
+      },
+      {
+        "file": "src/weekly-consolidator.js",
+        "type": "ES Module",
+        "purpose": "Branch rollup automation",
+        "exports": ["consolidateWeeklyBranches"],
+        "dependencies": ["worktree-manager.js"],
+        "migration_notes": "Add scheduling, IPC progress events"
+      }
+    ],
+    "file_watching": [
+      {
+        "file": "src/cs-devops-agent-worker.js",
+        "type": "ES Module",
+        "purpose": "File watcher + auto-commit engine",
+        "exports": ["startWorker", "stopWorker"],
+        "dependencies": ["worktree-manager.js", "file-coordinator.cjs"],
+        "external_deps": ["chokidar"],
+        "key_patterns": {
+          "watch_target": "worktree directory",
+          "commit_trigger": ".devops-commit-{session-id}.msg file",
+          "events": ["file:add", "file:change", "file:unlink"]
+        },
+        "migration_notes": "Core logic stays, emit IPC events instead of console"
+      },
+      {
+        "file": "src/file-monitor-enhanced.cjs",
+        "type": "CommonJS",
+        "purpose": "Real-time conflict detection",
+        "exports": ["startFileMonitor", "checkForConflicts"],
+        "dependencies": ["file-coordinator.cjs"],
+        "external_deps": ["chokidar"],
+        "migration_notes": "Emit IPC conflict events"
+      }
+    ],
+    "multi_agent_coordination": [
+      {
+        "file": "src/file-coordinator.cjs",
+        "type": "CommonJS",
+        "purpose": "Multi-agent file lock system",
+        "exports": [
+          "declareFileIntention",
+          "releaseFileDeclaration",
+          "checkForConflicts",
+          "listActiveDeclarations"
+        ],
+        "data_storage": ".file-coordination/active-edits/{session-id}.json",
+        "lock_format": {
+          "sessionId": "string",
+          "agentType": "string",
+          "files": ["array of file paths"],
+          "operation": "edit|read|delete",
+          "declaredAt": "ISO timestamp",
+          "estimatedDuration": "number (minutes)"
+        },
+        "migration_notes": "Convert to TypeScript class, keep file format compatible"
+      }
+    ],
+    "ai_integration": [
+      {
+        "file": "src/agent-chat.js",
+        "type": "ES Module",
+        "purpose": "Kora Smart Assistant (Groq LLM)",
+        "exports": ["startChat", "sendMessage"],
+        "dependencies": ["credentials-manager.js"],
+        "external_deps": ["groq-sdk", "openai"],
+        "migration_notes": "Replace CLI chat with streaming to React component"
+      }
+    ],
+    "configuration": [
+      {
+        "file": "src/credentials-manager.js",
+        "type": "ES Module",
+        "purpose": "API key storage",
+        "exports": ["getCredentials", "setCredential", "listCredentials"],
+        "data_storage": "local_deploy/credentials.json",
+        "migration_notes": "Use electron-store, add encryption"
+      },
+      {
+        "file": "src/branch-config-manager.js",
+        "type": "ES Module",
+        "purpose": "Project settings",
+        "exports": ["getSettings", "setSettings", "updateSetting"],
+        "data_storage": "local_deploy/project-settings.json",
+        "default_settings": {
+          "branchManagement": {
+            "enableDualMerge": true,
+            "defaultMergeTarget": "main",
+            "enableWeeklyConsolidation": true,
+            "orphanSessionThresholdDays": 7
+          },
+          "cleanup": {
+            "retainWeeklyBranches": 4
+          },
+          "versionPrefix": "v",
+          "versionStartMinor": 1,
+          "versionIncrement": 1
+        },
+        "migration_notes": "Use electron-store"
+      }
+    ],
+    "utilities": [
+      {
+        "file": "src/instruction-formatter.js",
+        "type": "ES Module",
+        "purpose": "Generate AI agent instructions",
+        "exports": ["formatInstructions", "getSessionInstructions"],
+        "migration_notes": "Add copy-to-clipboard integration"
+      },
+      {
+        "file": "src/display-utils.cjs",
+        "type": "CommonJS",
+        "purpose": "Console output formatting",
+        "exports": ["displayHeader", "displayList", "displayStatus"],
+        "migration_notes": "Replace entirely with React components"
+      },
+      {
+        "file": "src/ui-utils.js",
+        "type": "ES Module",
+        "purpose": "CLI prompts and spinners",
+        "exports": ["prompt", "spinner", "confirm"],
+        "cli_deps": ["readline", "ora"],
+        "migration_notes": "Replace entirely with React components"
+      },
+      {
+        "file": "src/tutorial-mode.js",
+        "type": "ES Module",
+        "purpose": "Interactive tutorial",
+        "exports": ["startTutorial"],
+        "cli_deps": ["readline"],
+        "migration_notes": "Replace with onboarding wizard component"
+      },
+      {
+        "file": "src/help-system.js",
+        "type": "ES Module",
+        "purpose": "CLI help text",
+        "exports": ["showHelp", "showCommandHelp"],
+        "migration_notes": "Convert to UI panels / tooltips"
+      }
+    ]
+  },
+  "data_locations": {
+    "session_locks": "local_deploy/session-locks/*.lock",
+    "worktrees": "local_deploy/worktrees/{session-id}/",
+    "project_settings": "local_deploy/project-settings.json",
+    "credentials": "local_deploy/credentials.json",
+    "file_coordination": ".file-coordination/active-edits/*.json",
+    "commit_message": ".devops-commit-{session-id}.msg"
+  },
+  "dependencies": {
+    "electron_compatible": {
+      "chokidar": "^3.5.3",
+      "execa": "^7.1.1",
+      "groq-sdk": "^0.37.0",
+      "openai": "^4.20.0"
+    },
+    "to_replace": {
+      "readline": "Electron dialog / React forms",
+      "ora": "React loading component",
+      "chalk": "Tailwind CSS classes"
+    },
+    "to_add": {
+      "electron-store": "Settings persistence",
+      "electron-log": "Cross-process logging",
+      "zustand": "React state management"
+    }
+  },
+  "agent_types": ["claude", "cursor", "copilot", "cline", "aider", "warp", "custom"],
+  "branch_hierarchy": {
+    "pattern": "session/* → daily/* → weekly/* → main",
+    "session_branch": "session/{task-slug}-{short-id}",
+    "daily_branch": "daily/YYYY-MM-DD",
+    "weekly_branch": "weekly/YYYY-WW"
+  }
+}
