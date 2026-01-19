@@ -4,8 +4,8 @@
  * Follows SeKondBrain design aesthetics
  */
 
-import React from 'react';
-import { useAgentStore, selectAgentList } from '../../store/agentStore';
+import React, { useMemo } from 'react';
+import { useAgentStore } from '../../store/agentStore';
 import type { AgentInfo } from '../../../shared/agent-protocol';
 
 interface RegisteredAgent extends AgentInfo {
@@ -19,9 +19,10 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ agent }: StatusBarProps): React.ReactElement {
-  const agents = useAgentStore(selectAgentList);
+  const agentsMap = useAgentStore((state) => state.agents);
   const reportedSessions = useAgentStore((state) => state.reportedSessions);
 
+  const agents = useMemo(() => Array.from(agentsMap.values()), [agentsMap]);
   const aliveAgents = agents.filter((a) => a.isAlive).length;
   const totalSessions = reportedSessions.size;
 

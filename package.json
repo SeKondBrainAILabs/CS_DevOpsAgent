@@ -22,6 +22,8 @@
   "dependencies": {
     "better-sqlite3": "^11.7.0",
     "chokidar": "^3.5.3",
+    "detect-port": "^2.1.0",
+    "electron-store": "^11.0.2",
     "glob": "^11.0.0",
     "groq-sdk": "^0.37.0",
     "js-yaml": "^4.1.0",
@@ -69,14 +71,23 @@
       "package.json"
     ],
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.developer-tools"
     },
     "win": {
-      "target": ["nsis", "zip"]
+      "target": [
+        "nsis",
+        "zip"
+      ]
     },
     "linux": {
-      "target": ["AppImage", "deb"]
+      "target": [
+        "AppImage",
+        "deb"
+      ]
     }
   },
   "engines": {

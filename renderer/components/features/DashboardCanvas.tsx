@@ -26,9 +26,10 @@ export function DashboardCanvas({ agent }: DashboardCanvasProps): React.ReactEle
   const recentActivity = useAgentStore((state) => state.recentActivity);
 
   // Get sessions for this agent or all sessions
+  const allSessions = Array.from(reportedSessions.values());
   const sessions = agent
-    ? useAgentStore((state) => selectSessionsByAgent(state, agent.agentId))
-    : Array.from(reportedSessions.values());
+    ? allSessions.filter((session) => session.agentId === agent.agentId)
+    : allSessions;
 
   if (!agent) {
     return <WelcomeScreen />;

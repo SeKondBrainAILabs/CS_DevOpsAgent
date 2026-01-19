@@ -23,7 +23,8 @@ import { useAgentSubscription } from './hooks/useAgentSubscription';
 import type { SessionReport } from '../shared/agent-protocol';
 
 export default function App(): React.ReactElement {
-  const agents = useAgentStore(selectAgentList);
+  const agentsMap = useAgentStore((state) => state.agents);
+  const agents = React.useMemo(() => Array.from(agentsMap.values()), [agentsMap]);
   const selectedAgentId = useAgentStore((state) => state.selectedAgentId);
   const setSelectedAgent = useAgentStore((state) => state.setSelectedAgent);
   const selectedSessionId = useAgentStore((state) => state.selectedSessionId);

@@ -25,9 +25,10 @@ export function Sidebar(): React.ReactElement {
   const setSelectedSession = useAgentStore((state) => state.setSelectedSession);
 
   // Get sessions for selected agent or all sessions
+  const allSessions = Array.from(reportedSessions.values());
   const sessions = selectedAgentId
-    ? useAgentStore((state) => selectSessionsByAgent(state, selectedAgentId))
-    : Array.from(reportedSessions.values());
+    ? allSessions.filter((session) => session.agentId === selectedAgentId)
+    : allSessions;
 
   const removeReportedSession = useAgentStore((state) => state.removeReportedSession);
 
