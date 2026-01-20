@@ -34,10 +34,31 @@ export function InstructionsModal({ instance, onClose }: InstructionsModalProps)
     }
   };
 
-  const handleOpenTerminal = () => {
-    // Open terminal at repo path (platform-specific)
-    // This would need to be implemented via IPC
-    console.log('Open terminal at:', instance.config.repoPath);
+  const handleOpenTerminal = async () => {
+    const path = instance.worktreePath || instance.config.repoPath;
+    try {
+      await window.api?.shell?.openTerminal(path);
+    } catch (err) {
+      console.error('Failed to open terminal:', err);
+    }
+  };
+
+  const handleOpenVSCode = async () => {
+    const path = instance.worktreePath || instance.config.repoPath;
+    try {
+      await window.api?.shell?.openVSCode(path);
+    } catch (err) {
+      console.error('Failed to open VS Code:', err);
+    }
+  };
+
+  const handleOpenFinder = async () => {
+    const path = instance.worktreePath || instance.config.repoPath;
+    try {
+      await window.api?.shell?.openFinder(path);
+    } catch (err) {
+      console.error('Failed to open Finder:', err);
+    }
   };
 
   return (
@@ -149,11 +170,34 @@ export function InstructionsModal({ instance, onClose }: InstructionsModalProps)
               type="button"
               onClick={handleOpenTerminal}
               className="btn-secondary"
+              title="Open terminal at project path"
             >
               <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
               Terminal
+            </button>
+            <button
+              type="button"
+              onClick={handleOpenVSCode}
+              className="btn-secondary"
+              title="Open project in VS Code"
+            >
+              <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+              </svg>
+              VS Code
+            </button>
+            <button
+              type="button"
+              onClick={handleOpenFinder}
+              className="btn-secondary"
+              title="Open in Finder"
+            >
+              <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+              Finder
             </button>
           </div>
 

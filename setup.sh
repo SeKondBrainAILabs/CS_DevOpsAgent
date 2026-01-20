@@ -212,16 +212,31 @@ echo -e "${GREEN}${BOLD}╔═════════════════�
 echo -e "${GREEN}${BOLD}║                    SETUP COMPLETE!                              ║${NC}"
 echo -e "${GREEN}${BOLD}╚════════════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "To start the app, run:"
+echo -e "Options:"
 echo ""
-echo -e "    ${BOLD}npm run dev${NC}"
-echo ""
-echo -e "The Electron app will open automatically."
+echo -e "    ${BOLD}1. npm run dev${NC}           - Start development mode (hot reload)"
+echo -e "    ${BOLD}2. ./scripts/install-app.sh${NC} - Build & install to Applications"
 echo ""
 
-# Ask to run
-read -p "Start the app now? (y/n) " -n 1 -r
+# Ask what to do
+echo -e "What would you like to do?"
+echo -e "  ${BOLD}[d]${NC} Start development mode"
+echo -e "  ${BOLD}[i]${NC} Build & install to Applications folder"
+echo -e "  ${BOLD}[n]${NC} Nothing (exit)"
+echo ""
+read -p "Choice (d/i/n): " -n 1 -r
 echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    npm run dev
-fi
+echo ""
+
+case "$REPLY" in
+    d|D)
+        npm run dev
+        ;;
+    i|I)
+        ./scripts/install-app.sh
+        ;;
+    n|N|*)
+        echo -e "Run ${BOLD}npm run dev${NC} to start development mode."
+        echo -e "Run ${BOLD}./scripts/install-app.sh${NC} to build and install."
+        ;;
+esac
