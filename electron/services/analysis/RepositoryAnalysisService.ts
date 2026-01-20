@@ -12,7 +12,8 @@ import { EventTrackerService } from './EventTrackerService';
 import { DependencyGraphService } from './DependencyGraphService';
 import * as fs from 'fs';
 import * as path from 'path';
-import { sync as globSync } from 'glob';
+import glob from 'glob';
+const { sync: globSync } = glob;
 import { IPC } from '../../../shared/ipc-channels';
 import type {
   RepositoryAnalysis,
