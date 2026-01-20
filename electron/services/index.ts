@@ -146,6 +146,9 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // Connect terminalLog to watcher for terminal view logging
   watcher.setTerminalLogService(terminalLog);
 
+  // Connect lockService to watcher for auto-locking files on change
+  watcher.setLockService(lock);
+
   // Connect terminalLog to agentInstance for restart logging
   agentInstance.setTerminalLogService(terminalLog);
 

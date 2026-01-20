@@ -86,6 +86,7 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   // ==========================================================================
   // LOCK HANDLERS
   // ==========================================================================
+  // Legacy lock API (session-based)
   ipcMain.handle(IPC.LOCK_DECLARE, async (_, sessionId: string, files: string[], operation: string) => {
     return services.lock.declareFiles(sessionId, files, operation as 'edit' | 'read' | 'delete');
   });
@@ -94,12 +95,20 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.lock.releaseFiles(sessionId);
   });
 
-  ipcMain.handle(IPC.LOCK_CHECK, async (_, files: string[]) => {
-    return services.lock.checkConflicts(files);
+  // New auto-lock API (repo/file-based)
+  ipcMain.handle(IPC.LOCK_CHECK, async (_, repoPath: string, files: string[], excludeSessionId?: string) => {
+    return services.lock.checkConflicts(repoPath, files, excludeSessionId);
   });
 
-  ipcMain.handle(IPC.LOCK_LIST, async () => {
+  ipcMain.handle(IPC.LOCK_LIST, async (_, repoPath?: string) => {
+    if (repoPath) {
+      return services.lock.getRepoLocks(repoPath);
+    }
     return services.lock.listDeclarations();
+  });
+
+  ipcMain.handle(IPC.LOCK_FORCE_RELEASE, async (_, repoPath: string, filePath: string) => {
+    return services.lock.forceReleaseLock(repoPath, filePath);
   });
 
   // ==========================================================================
@@ -928,13 +937,6 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
 
   ipcMain.handle(IPC.TERMINAL_CLEAR, async (_, sessionId?: string) => {
     return services.terminalLog.clearLogs(sessionId);
-  });
-
-  // ==========================================================================
-  // LOCK CHANGE / FORCE RELEASE HANDLERS
-  // ==========================================================================
-  ipcMain.handle(IPC.LOCK_FORCE_RELEASE, async (_, sessionId: string) => {
-    return services.lock.releaseFiles(sessionId);
   });
 
   // ==========================================================================

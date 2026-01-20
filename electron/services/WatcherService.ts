@@ -16,9 +16,11 @@ import type { GitService } from './GitService';
 import type { ActivityService } from './ActivityService';
 import type { TerminalLogService } from './TerminalLogService';
 import type { AgentInstanceService } from './AgentInstanceService';
+import type { LockService } from './LockService';
 import type { ASTParserService } from './analysis/ASTParserService';
 import type { RepositoryAnalysisService } from './analysis/RepositoryAnalysisService';
 import { databaseService } from './DatabaseService';
+import type { AgentType } from '../../shared/types';
 import chokidar, { FSWatcher } from 'chokidar';
 import { promises as fs } from 'fs';
 import { existsSync } from 'fs';
@@ -30,6 +32,9 @@ interface WatcherInstance {
   watcher: FSWatcher;
   commitMsgFile: string;
   claudeCommitMsgFile: string; // Fallback: .claude-commit-msg
+  repoPath: string;           // Main repo path (for locking)
+  agentType: AgentType;       // Agent type (for locking)
+  branchName?: string;        // Branch name (for locking)
 }
 
 export class WatcherService extends BaseService {
@@ -38,6 +43,7 @@ export class WatcherService extends BaseService {
   private activityService: ActivityService;
   private terminalLogService: TerminalLogService | null = null;
   private agentInstanceService: AgentInstanceService | null = null;
+  private lockService: LockService | null = null;
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
 
   // Phase 4: Analysis services for incremental analysis
@@ -45,6 +51,9 @@ export class WatcherService extends BaseService {
   private repositoryAnalysis: RepositoryAnalysisService | null = null;
   private incrementalAnalysisEnabled = false;
   private analysisDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
+
+  // Auto-lock: Enable/disable file locking on change
+  private autoLockEnabled = true;
 
   constructor(git: GitService, activity: ActivityService) {
     super();
@@ -86,6 +95,22 @@ export class WatcherService extends BaseService {
     this.terminalLogService = terminalLog;
   }
 
+  /**
+   * Set the lock service for auto-locking files on change
+   */
+  setLockService(lockService: LockService): void {
+    this.lockService = lockService;
+    console.log('[WatcherService] LockService configured for auto-locking');
+  }
+
+  /**
+   * Enable/disable auto-locking of files when they change
+   */
+  setAutoLockEnabled(enabled: boolean): void {
+    this.autoLockEnabled = enabled;
+    console.log(`[WatcherService] Auto-locking ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
   async start(sessionId: string): Promise<IpcResult<void>> {
     return this.wrap(async () => {
       if (this.watchers.has(sessionId)) {
@@ -105,8 +130,17 @@ export class WatcherService extends BaseService {
 
   /**
    * Start watching a specific path (called by AgentInstanceService)
+   * @param sessionId - Session ID
+   * @param worktreePath - Path to the worktree to watch
+   * @param agentType - Type of agent (for auto-locking)
+   * @param branchName - Branch name (for auto-locking)
    */
-  async startWithPath(sessionId: string, worktreePath: string): Promise<IpcResult<void>> {
+  async startWithPath(
+    sessionId: string,
+    worktreePath: string,
+    agentType: AgentType = 'custom',
+    branchName?: string
+  ): Promise<IpcResult<void>> {
     return this.wrap(async () => {
       if (this.watchers.has(sessionId)) {
         return; // Already watching
@@ -158,6 +192,9 @@ export class WatcherService extends BaseService {
         watcher,
         commitMsgFile,
         claudeCommitMsgFile,
+        repoPath,
+        agentType,
+        branchName,
       };
 
       // Handle file events
@@ -176,7 +213,7 @@ export class WatcherService extends BaseService {
     }, 'WATCHER_START_FAILED');
   }
 
-  async stop(sessionId: string): Promise<IpcResult<void>> {
+  async stop(sessionId: string, releaseLocks = true): Promise<IpcResult<void>> {
     return this.wrap(async () => {
       const instance = this.watchers.get(sessionId);
       if (!instance) return;
@@ -189,6 +226,14 @@ export class WatcherService extends BaseService {
       if (timer) {
         clearTimeout(timer);
         this.debounceTimers.delete(sessionId);
+      }
+
+      // Release all locks for this session
+      if (releaseLocks && this.lockService) {
+        const result = await this.lockService.releaseSessionLocks(instance.repoPath, sessionId);
+        if (result.success && result.data && result.data > 0) {
+          console.log(`[WatcherService] Released ${result.data} locks for session ${sessionId}`);
+        }
       }
 
       this.activityService.log(sessionId, 'info', 'File watcher stopped');
@@ -227,6 +272,19 @@ export class WatcherService extends BaseService {
     );
 
     this.terminalLogService?.log('info', `File ${type}: ${relativePath}`, { sessionId, source: 'Watcher' });
+
+    // Auto-lock the file when it's modified (add or change)
+    if (this.autoLockEnabled && this.lockService && (type === 'add' || type === 'change')) {
+      this.lockService.autoLockFile(
+        instance.repoPath,
+        relativePath,
+        sessionId,
+        instance.agentType,
+        instance.branchName
+      ).catch(err => {
+        console.warn(`[WatcherService] Failed to auto-lock ${relativePath}:`, err);
+      });
+    }
 
     // Check if this is a commit message file (either session-specific or .claude-commit-msg)
     const isCommitMsgFile = filePath === instance.commitMsgFile || filePath === instance.claudeCommitMsgFile;

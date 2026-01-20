@@ -14,6 +14,8 @@ import type {
   BranchInfo,
   FileLock,
   FileConflict,
+  RepoLockSummary,
+  LockChangeEvent,
   FileChangeEvent,
   CommitTriggerEvent,
   CommitCompleteEvent,
@@ -187,22 +189,42 @@ const api = {
   // LOCK API
   // ==========================================================================
   lock: {
+    // Legacy session-based API
     declare: (sessionId: string, files: string[], operation: 'edit' | 'read' | 'delete'): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.LOCK_DECLARE, sessionId, files, operation),
 
     release: (sessionId: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.LOCK_RELEASE, sessionId),
 
-    check: (files: string[]): Promise<IpcResult<FileConflict[]>> =>
-      ipcRenderer.invoke(IPC.LOCK_CHECK, files),
+    // New auto-lock API (repo/file-based)
+    checkConflicts: (repoPath: string, files: string[], excludeSessionId?: string): Promise<IpcResult<FileConflict[]>> =>
+      ipcRenderer.invoke(IPC.LOCK_CHECK, repoPath, files, excludeSessionId),
 
+    getRepoLocks: (repoPath: string): Promise<IpcResult<RepoLockSummary>> =>
+      ipcRenderer.invoke(IPC.LOCK_LIST, repoPath),
+
+    forceRelease: (repoPath: string, filePath: string): Promise<IpcResult<boolean>> =>
+      ipcRenderer.invoke(IPC.LOCK_FORCE_RELEASE, repoPath, filePath),
+
+    // Legacy list (for backwards compatibility)
     list: (): Promise<IpcResult<FileLock[]>> =>
       ipcRenderer.invoke(IPC.LOCK_LIST),
 
+    // Backwards compatibility alias
+    check: (files: string[]): Promise<IpcResult<FileConflict[]>> =>
+      ipcRenderer.invoke(IPC.LOCK_CHECK, files),
+
+    // Events
     onConflictDetected: (callback: (conflicts: FileConflict[]) => void): (() => void) => {
       const handler = (_event: IpcRendererEvent, conflicts: FileConflict[]) => callback(conflicts);
       ipcRenderer.on(IPC.CONFLICT_DETECTED, handler);
       return () => ipcRenderer.removeListener(IPC.CONFLICT_DETECTED, handler);
+    },
+
+    onLockChanged: (callback: (event: LockChangeEvent) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, lockEvent: LockChangeEvent) => callback(lockEvent);
+      ipcRenderer.on(IPC.LOCK_CHANGED, handler);
+      return () => ipcRenderer.removeListener(IPC.LOCK_CHANGED, handler);
     },
   },
 
@@ -1561,37 +1583,7 @@ const api = {
       ipcRenderer.invoke(IPC.MERGE_ABORT, repoPath),
   },
 
-  // ==========================================================================
-  // LOCK EXTENDED API
-  // ==========================================================================
-  lockExtended: {
-    forceRelease: (sessionId: string): Promise<IpcResult<void>> =>
-      ipcRenderer.invoke(IPC.LOCK_FORCE_RELEASE, sessionId),
-
-    onLockChanged: (callback: (locks: Array<{
-      sessionId: string;
-      agentType: string;
-      files: string[];
-      operation: string;
-      declaredAt: string;
-      estimatedDuration: number;
-      reason?: string;
-    }>) => void): (() => void) => {
-      const handler = (_event: IpcRendererEvent, locks: Array<{
-        sessionId: string;
-        agentType: string;
-        files: string[];
-        operation: string;
-        declaredAt: string;
-        estimatedDuration: number;
-        reason?: string;
-      }>) => callback(locks);
-      ipcRenderer.on(IPC.LOCK_CHANGED, handler);
-      return () => ipcRenderer.removeListener(IPC.LOCK_CHANGED, handler);
-    },
-  },
-
-};
+  };
 
 // Expose to renderer
 contextBridge.exposeInMainWorld('api', api);

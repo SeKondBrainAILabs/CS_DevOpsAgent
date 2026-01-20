@@ -91,6 +91,33 @@ export interface FileLock {
   reason?: string;
 }
 
+/** Per-file lock for auto-locking when agents modify files */
+export interface AutoFileLock {
+  filePath: string;           // Relative path from repo root
+  sessionId: string;
+  agentType: AgentType;
+  repoPath: string;           // Repo this lock belongs to
+  lockedAt: string;
+  lastModified: string;       // Last time file was modified
+  autoLocked: boolean;        // True if auto-locked by watcher
+  branchName?: string;        // Branch where file is being modified
+}
+
+/** Summary of locks for a repository */
+export interface RepoLockSummary {
+  repoPath: string;
+  totalLocks: number;
+  locksBySession: Record<string, string[]>;  // sessionId -> file paths
+  conflicts: FileConflict[];
+}
+
+/** Lock change event for real-time updates */
+export interface LockChangeEvent {
+  type: 'acquired' | 'released' | 'conflict' | 'force-released';
+  lock: AutoFileLock;
+  conflictWith?: AutoFileLock;  // Set if type is 'conflict'
+}
+
 export interface FileConflict {
   file: string;
   conflictsWith: string;
