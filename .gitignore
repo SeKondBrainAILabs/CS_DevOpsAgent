@@ -103,3 +103,6 @@ SESSION_README.md
 
 # Test artifacts
 test_cases/contract-automation/temp_test_env/
+
+# Electron build output
+release/
