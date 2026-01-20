@@ -9,7 +9,7 @@
 
 import React, { useMemo } from 'react';
 import { AgentCardSkeleton } from './AgentCard';
-import { useAgentStore, selectAgentList, selectSessionsByAgentType } from '../../store/agentStore';
+import { useAgentStore } from '../../store/agentStore';
 import type { AgentInfo, SessionReport } from '../../../shared/agent-protocol';
 import type { AgentType } from '../../../shared/types';
 
@@ -60,16 +60,25 @@ const AGENT_TYPE_NAMES: Record<string, string> = {
 };
 
 export function AgentList(): React.ReactElement {
-  const agents = useAgentStore(selectAgentList);
+  const agentsMap = useAgentStore((state) => state.agents);
   const selectedAgentType = useAgentStore((state) => state.selectedAgentType);
   const setSelectedAgentType = useAgentStore((state) => state.setSelectedAgentType);
   const selectedSessionId = useAgentStore((state) => state.selectedSessionId);
   const setSelectedSession = useAgentStore((state) => state.setSelectedSession);
   const isInitialized = useAgentStore((state) => state.isInitialized);
+  const reportedSessions = useAgentStore((state) => state.reportedSessions);
+
+  const agents = useMemo(() => Array.from(agentsMap.values()), [agentsMap]);
 
   // Get sessions for selected agent type
-  const sessionsForType = useAgentStore((state) =>
-    selectedAgentType ? selectSessionsByAgentType(state, selectedAgentType) : []
+  const sessionsForType = useMemo(
+    () =>
+      selectedAgentType
+        ? Array.from(reportedSessions.values()).filter(
+            (session) => session.agentType === selectedAgentType
+          )
+        : [],
+    [reportedSessions, selectedAgentType]
   );
 
   // Group agents by type
@@ -380,10 +389,11 @@ function getTimeAgo(date: Date): string {
  * AgentListCompact - Smaller version for tight spaces
  */
 export function AgentListCompact(): React.ReactElement {
-  const agents = useAgentStore(selectAgentList);
+  const agentsMap = useAgentStore((state) => state.agents);
   const selectedAgentType = useAgentStore((state) => state.selectedAgentType);
   const setSelectedAgentType = useAgentStore((state) => state.setSelectedAgentType);
 
+  const agents = useMemo(() => Array.from(agentsMap.values()), [agentsMap]);
   const aliveAgents = agents.filter((a) => a.isAlive);
 
   // Group by type for compact view
