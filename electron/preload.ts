@@ -1656,6 +1656,69 @@ const api = {
       ipcRenderer.invoke(IPC.COMMIT_GET_ENHANCED_ENABLED),
   },
 
+  // ==========================================================================
+  // DEBUG LOG API
+  // Error tracking and diagnostics
+  // ==========================================================================
+  debugLog: {
+    /**
+     * Get recent logs from memory buffer
+     */
+    getRecent: (count?: number, level?: string): Promise<IpcResult<Array<{
+      timestamp: string;
+      level: 'debug' | 'info' | 'warn' | 'error';
+      source: string;
+      message: string;
+      details?: unknown;
+    }>>> =>
+      ipcRenderer.invoke(IPC.DEBUG_LOG_GET_RECENT, count, level),
+
+    /**
+     * Export all logs for sharing
+     */
+    export: (): Promise<IpcResult<{
+      exportedAt: string;
+      appVersion: string;
+      platform: string;
+      entries: Array<{
+        timestamp: string;
+        level: 'debug' | 'info' | 'warn' | 'error';
+        source: string;
+        message: string;
+        details?: unknown;
+      }>;
+    }>> =>
+      ipcRenderer.invoke(IPC.DEBUG_LOG_EXPORT),
+
+    /**
+     * Clear all logs
+     */
+    clear: (): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.DEBUG_LOG_CLEAR),
+
+    /**
+     * Get log statistics
+     */
+    getStats: (): Promise<IpcResult<{
+      memoryEntries: number;
+      fileSize: number;
+      rotatedFiles: number;
+    }>> =>
+      ipcRenderer.invoke(IPC.DEBUG_LOG_GET_STATS),
+
+    /**
+     * Get log file path
+     */
+    getPath: (): Promise<IpcResult<string>> =>
+      ipcRenderer.invoke(IPC.DEBUG_LOG_GET_PATH),
+
+    /**
+     * Open log folder in system file explorer
+     */
+    openFolder: (): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.DEBUG_LOG_OPEN_FOLDER),
+  },
+
   };
 
 // Expose to renderer

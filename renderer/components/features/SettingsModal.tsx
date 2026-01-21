@@ -31,7 +31,7 @@ const agentTypes: { value: AgentType; label: string }[] = [
   { value: 'custom', label: 'Custom' },
 ];
 
-type Tab = 'general' | 'credentials' | 'maintenance';
+type Tab = 'general' | 'credentials' | 'maintenance' | 'debug';
 
 export function SettingsModal({ onClose }: SettingsModalProps): React.ReactElement {
   const [activeTab, setActiveTab] = useState<Tab>('general');
@@ -48,6 +48,11 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
   const [isCleaning, setIsCleaning] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState<string>('');
+
+  // Debug log state
+  const [logStats, setLogStats] = useState<{ memoryEntries: number; fileSize: number; rotatedFiles: number } | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isClearingLogs, setIsClearingLogs] = useState(false);
 
   // Load settings
   useEffect(() => {
@@ -270,6 +275,24 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
             }`}
           >
             Maintenance
+          </button>
+          <button
+            onClick={() => {
+              setActiveTab('debug');
+              // Load log stats when switching to debug tab
+              window.api.debugLog?.getStats?.().then((result) => {
+                if (result?.success && result.data) {
+                  setLogStats(result.data);
+                }
+              });
+            }}
+            className={`px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === 'debug'
+                ? 'text-accent border-b-2 border-accent'
+                : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            Debug
           </button>
         </div>
 
@@ -506,6 +529,116 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
                 <p className="text-xs text-gray-500">
                   Quick cleanup will prune stale worktrees and remove old session files.
                 </p>
+              </div>
+            </>
+          )}
+
+          {activeTab === 'debug' && (
+            <>
+              {/* Log Statistics */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-medium text-gray-200">Debug Logs</h3>
+                <p className="text-xs text-gray-400">
+                  Export debug logs to share with support or diagnose issues.
+                </p>
+
+                {logStats && (
+                  <div className="bg-surface-tertiary rounded-lg p-3 space-y-1 text-sm">
+                    <div className="flex justify-between text-gray-300">
+                      <span>In-memory entries:</span>
+                      <span className="font-mono">{logStats.memoryEntries}</span>
+                    </div>
+                    <div className="flex justify-between text-gray-300">
+                      <span>Log file size:</span>
+                      <span className="font-mono">{(logStats.fileSize / 1024).toFixed(1)} KB</span>
+                    </div>
+                    <div className="flex justify-between text-gray-300">
+                      <span>Rotated files:</span>
+                      <span className="font-mono">{logStats.rotatedFiles}</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={async () => {
+                      setIsExporting(true);
+                      setMessage(null);
+                      try {
+                        const result = await window.api.debugLog?.export?.();
+                        if (result?.success && result.data) {
+                          // Create and download JSON file
+                          const blob = new Blob([JSON.stringify(result.data, null, 2)], { type: 'application/json' });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = `kanvas-debug-log-${new Date().toISOString().split('T')[0]}.json`;
+                          document.body.appendChild(a);
+                          a.click();
+                          document.body.removeChild(a);
+                          URL.revokeObjectURL(url);
+                          setMessage({ type: 'success', text: `Exported ${result.data.entries.length} log entries` });
+                        } else {
+                          setMessage({ type: 'error', text: 'Failed to export logs' });
+                        }
+                      } catch {
+                        setMessage({ type: 'error', text: 'Export failed' });
+                      } finally {
+                        setIsExporting(false);
+                      }
+                    }}
+                    disabled={isExporting}
+                    className="btn-primary flex-1"
+                  >
+                    {isExporting ? 'Exporting...' : 'Export Logs'}
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      window.api.debugLog?.openFolder?.();
+                    }}
+                    className="btn-secondary px-4"
+                    title="Open log folder"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <div className="border-t border-border my-4" />
+
+              {/* Clear Logs */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-medium text-gray-200">Clear Logs</h3>
+                <p className="text-xs text-gray-400">
+                  Remove all debug logs from memory and disk.
+                </p>
+                <button
+                  onClick={async () => {
+                    if (!confirm('Are you sure you want to clear all debug logs?')) return;
+                    setIsClearingLogs(true);
+                    setMessage(null);
+                    try {
+                      const result = await window.api.debugLog?.clear?.();
+                      if (result?.success) {
+                        setLogStats({ memoryEntries: 0, fileSize: 0, rotatedFiles: 0 });
+                        setMessage({ type: 'success', text: 'Debug logs cleared' });
+                      } else {
+                        setMessage({ type: 'error', text: 'Failed to clear logs' });
+                      }
+                    } catch {
+                      setMessage({ type: 'error', text: 'Clear failed' });
+                    } finally {
+                      setIsClearingLogs(false);
+                    }
+                  }}
+                  disabled={isClearingLogs}
+                  className="btn-secondary w-full"
+                >
+                  {isClearingLogs ? 'Clearing...' : 'Clear All Logs'}
+                </button>
               </div>
             </>
           )}
