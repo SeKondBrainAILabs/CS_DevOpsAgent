@@ -75,7 +75,8 @@
         "dmg",
         "zip"
       ],
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "icon": "resources/icon.icns"
     },
     "win": {
       "target": [
