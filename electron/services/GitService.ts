@@ -330,15 +330,28 @@ export class GitService extends BaseService {
         await this.git(['pull', '--rebase', 'origin', targetBranch], repoPath);
         return { success: true, message: 'Rebase successful' };
       } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+
         // Abort the rebase to clean up
         try {
           await this.git(['rebase', '--abort'], repoPath);
         } catch {
           // Ignore abort errors
         }
+
+        // Provide user-friendly error messages
+        let userMessage = 'Rebase failed';
+        if (errorMsg.includes('CONFLICT') || errorMsg.includes('conflict')) {
+          userMessage = 'Rebase failed due to merge conflicts. Please resolve manually.';
+        } else if (errorMsg.includes('exit code')) {
+          userMessage = 'Rebase failed - there may be conflicts or the branch is out of sync.';
+        } else {
+          userMessage = `Rebase failed: ${errorMsg}`;
+        }
+
         return {
           success: false,
-          message: error instanceof Error ? error.message : 'Rebase failed due to conflicts',
+          message: userMessage,
         };
       }
     }, 'GIT_REBASE_FAILED');
@@ -355,8 +368,31 @@ export class GitService extends BaseService {
     return this.wrap(async () => {
       console.log(`[GitService] Starting rebase of ${repoPath} onto ${baseBranch}`);
 
-      // 1. Fetch latest
-      await this.git(['fetch', 'origin', baseBranch], repoPath);
+      // 1. Fetch latest - with better error handling
+      try {
+        await this.git(['fetch', 'origin', baseBranch], repoPath);
+      } catch (fetchError) {
+        const errorMsg = fetchError instanceof Error ? fetchError.message : String(fetchError);
+        console.error(`[GitService] Fetch failed:`, errorMsg);
+
+        // Check if branch exists on remote
+        try {
+          await this.git(['ls-remote', '--exit-code', '--heads', 'origin', baseBranch], repoPath);
+        } catch {
+          return {
+            success: false,
+            message: `Branch '${baseBranch}' not found on remote. Check your base branch setting.`,
+            hadChanges: false,
+          };
+        }
+
+        // Branch exists but fetch failed for another reason
+        return {
+          success: false,
+          message: `Failed to fetch from origin: ${errorMsg.includes('exit code') ? 'Git error - check your network connection and credentials' : errorMsg}`,
+          hadChanges: false,
+        };
+      }
 
       // 2. Stash any uncommitted changes
       const stashResult = await this.stash(repoPath, `Auto-stash before rebase onto ${baseBranch}`);

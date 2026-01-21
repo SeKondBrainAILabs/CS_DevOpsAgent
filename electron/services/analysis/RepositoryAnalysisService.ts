@@ -12,7 +12,7 @@ import { EventTrackerService } from './EventTrackerService';
 import { DependencyGraphService } from './DependencyGraphService';
 import * as fs from 'fs';
 import * as path from 'path';
-import glob from 'glob';
+import { globSync } from 'glob';
 import { IPC } from '../../../shared/ipc-channels';
 import type {
   RepositoryAnalysis,
@@ -133,7 +133,7 @@ export class RepositoryAnalysisService extends BaseService {
 
     for (const [language, patterns] of Object.entries(SOURCE_PATTERNS)) {
       for (const pattern of patterns) {
-        const files = glob.sync(path.join(absolutePath, pattern), {
+        const files = globSync(path.join(absolutePath, pattern), {
           ignore: IGNORE_PATTERNS,
         });
         allFiles.push(...files);
@@ -175,7 +175,7 @@ export class RepositoryAnalysisService extends BaseService {
 
     // Try each feature pattern
     for (const pattern of FEATURE_PATTERNS) {
-      const matches = glob.sync(path.join(repoPath, pattern), {
+      const matches = globSync(path.join(repoPath, pattern), {
         ignore: IGNORE_PATTERNS,
       });
 
@@ -242,7 +242,7 @@ export class RepositoryAnalysisService extends BaseService {
     const allSourceFiles: string[] = [];
     for (const patterns of Object.values(SOURCE_PATTERNS)) {
       for (const pattern of patterns) {
-        const files = glob.sync(path.join(dirPath, pattern), {
+        const files = globSync(path.join(dirPath, pattern), {
           ignore: IGNORE_PATTERNS,
         });
         allSourceFiles.push(...files.map((f: string) => path.relative(repoPath, f)));

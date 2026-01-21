@@ -17,7 +17,7 @@ import type {
 import { IPC } from '../../shared/ipc-channels';
 import { promises as fs } from 'fs';
 import path from 'path';
-import glob from 'glob';
+import { globSync } from 'glob';
 import type { AIService } from './AIService';
 import type { ContractRegistryService } from './ContractRegistryService';
 import { KANVAS_PATHS } from '../../shared/agent-protocol';
@@ -216,7 +216,7 @@ export class ContractGenerationService extends BaseService {
         if (pattern === '*') continue; // Already handled above
         const fullPattern = path.join(repoPath, pattern);
         try {
-          const matches = glob.sync(fullPattern, {
+          const matches = globSync(fullPattern, {
             nodir: false,
             ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**'],
           });
@@ -283,7 +283,7 @@ export class ContractGenerationService extends BaseService {
       for (const pattern of patterns) {
         const fullPattern = path.join(featurePath, pattern);
         try {
-          const matches = glob.sync(fullPattern, {
+          const matches = globSync(fullPattern, {
             ignore: ['**/node_modules/**', '**/.git/**'],
           });
 
@@ -332,7 +332,7 @@ export class ContractGenerationService extends BaseService {
     for (const pattern of SOURCE_PATTERNS) {
       const fullPattern = path.join(featurePath, pattern);
       try {
-        const matches = glob.sync(fullPattern, {
+        const matches = globSync(fullPattern, {
           ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**'],
         });
         const matchArray = Array.isArray(matches) ? matches : [];
