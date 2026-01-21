@@ -23,12 +23,33 @@ import path from 'path';
 // Map to track worktree paths by session ID
 const worktreePaths: Map<string, { repoPath: string; worktreePath: string }> = new Map();
 
+// Dynamic import helper for execa (ESM-only module)
+// Handles various bundling scenarios with fallback patterns
+let _execa: ((cmd: string, args: string[], options?: object) => Promise<{ stdout: string; stderr: string }>) | null = null;
+
+async function getExeca() {
+  if (!_execa) {
+    const mod = await import('execa');
+    // Try different export patterns based on how the bundler resolves the module
+    if (typeof mod.execa === 'function') {
+      _execa = mod.execa;
+    } else if (typeof mod.default === 'function') {
+      _execa = mod.default;
+    } else if (typeof mod.default?.execa === 'function') {
+      _execa = mod.default.execa;
+    } else {
+      throw new Error(`Unable to resolve execa function from module: ${JSON.stringify(Object.keys(mod))}`);
+    }
+  }
+  return _execa;
+}
+
 export class GitService extends BaseService {
   /**
    * Execute a git command (uses dynamic import for ESM-only execa)
    */
   private async git(args: string[], cwd: string): Promise<string> {
-    const { execa } = await import('execa');
+    const execa = await getExeca();
     const { stdout } = await execa('git', args, { cwd });
     return stdout.trim();
   }

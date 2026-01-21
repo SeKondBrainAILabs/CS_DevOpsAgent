@@ -6,13 +6,34 @@
 import { BaseService } from './BaseService';
 import type { IpcResult, MergePreview, MergeResult } from '../../shared/types';
 
+// Dynamic import helper for execa (ESM-only module)
+// Handles various bundling scenarios with fallback patterns
+let _execa: ((cmd: string, args: string[], options?: object) => Promise<{ stdout: string; stderr: string; exitCode?: number }>) | null = null;
+
+async function getExeca() {
+  if (!_execa) {
+    const mod = await import('execa');
+    // Try different export patterns based on how the bundler resolves the module
+    if (typeof mod.execa === 'function') {
+      _execa = mod.execa;
+    } else if (typeof mod.default === 'function') {
+      _execa = mod.default;
+    } else if (typeof mod.default?.execa === 'function') {
+      _execa = mod.default.execa;
+    } else {
+      throw new Error(`Unable to resolve execa function from module: ${JSON.stringify(Object.keys(mod))}`);
+    }
+  }
+  return _execa;
+}
+
 export class MergeService extends BaseService {
   /**
    * Execute a git command (uses dynamic import for ESM-only execa)
    */
   private async git(args: string[], cwd: string): Promise<{ stdout: string; exitCode: number }> {
     try {
-      const { execa } = await import('execa');
+      const execa = await getExeca();
       const result = await execa('git', args, { cwd, reject: false });
       return { stdout: result.stdout.trim(), exitCode: result.exitCode ?? 0 };
     } catch (error) {
