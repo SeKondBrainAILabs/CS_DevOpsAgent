@@ -17,9 +17,17 @@ import type {
 import { IPC } from '../../shared/ipc-channels';
 import { promises as fs } from 'fs';
 import path from 'path';
-import pkg from 'glob';
-const { globSync } = pkg;
 import type { AIService } from './AIService';
+
+// Helper to get globSync via dynamic import (glob v11 is ESM-only)
+let _globSync: ((pattern: string, options?: object) => string[]) | null = null;
+async function getGlobSync() {
+  if (!_globSync) {
+    const glob = await import('glob');
+    _globSync = glob.globSync;
+  }
+  return _globSync;
+}
 import type { ContractRegistryService } from './ContractRegistryService';
 import { KANVAS_PATHS } from '../../shared/agent-protocol';
 // Phase 3: Analysis services for enhanced contract generation
@@ -674,6 +682,7 @@ export class ContractGenerationService extends BaseService {
         if (pattern === '*') continue; // Already handled above
         const fullPattern = path.join(repoPath, pattern);
         try {
+          const globSync = await getGlobSync();
           const matches = globSync(fullPattern, {
             nodir: false,
             ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**'],
@@ -750,6 +759,7 @@ export class ContractGenerationService extends BaseService {
       for (const pattern of patterns) {
         const fullPattern = path.join(featurePath, pattern);
         try {
+          const globSync = await getGlobSync();
           const matches = globSync(fullPattern, {
             ignore: ['**/node_modules/**', '**/.git/**'],
           });
@@ -799,7 +809,8 @@ export class ContractGenerationService extends BaseService {
     for (const pattern of SOURCE_PATTERNS) {
       const fullPattern = path.join(featurePath, pattern);
       try {
-        const matches = globSync(fullPattern, {
+        const globSync = await getGlobSync();
+          const matches = globSync(fullPattern, {
           ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**'],
         });
         const matchArray = Array.isArray(matches) ? matches : [];

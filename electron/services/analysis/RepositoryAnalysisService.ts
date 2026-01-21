@@ -12,9 +12,17 @@ import { EventTrackerService } from './EventTrackerService';
 import { DependencyGraphService } from './DependencyGraphService';
 import * as fs from 'fs';
 import * as path from 'path';
-import pkg from 'glob';
-const { globSync } = pkg;
 import { IPC } from '../../../shared/ipc-channels';
+
+// Helper to get globSync via dynamic import (glob v11 is ESM-only)
+let _globSync: ((pattern: string, options?: object) => string[]) | null = null;
+async function getGlobSync() {
+  if (!_globSync) {
+    const glob = await import('glob');
+    _globSync = glob.globSync;
+  }
+  return _globSync;
+}
 import type {
   RepositoryAnalysis,
   FeatureAnalysis,
@@ -132,6 +140,7 @@ export class RepositoryAnalysisService extends BaseService {
       go: { files: 0, lines: 0 },
     };
 
+    const globSync = await getGlobSync();
     for (const [language, patterns] of Object.entries(SOURCE_PATTERNS)) {
       for (const pattern of patterns) {
         const files = globSync(path.join(absolutePath, pattern), {
@@ -173,6 +182,7 @@ export class RepositoryAnalysisService extends BaseService {
   async detectFeatures(repoPath: string): Promise<DiscoveredFeature[]> {
     const features: DiscoveredFeature[] = [];
     const processedPaths = new Set<string>();
+    const globSync = await getGlobSync();
 
     // Try each feature pattern
     for (const pattern of FEATURE_PATTERNS) {
@@ -241,6 +251,7 @@ export class RepositoryAnalysisService extends BaseService {
 
     // Scan for source files
     const allSourceFiles: string[] = [];
+    const globSync = await getGlobSync();
     for (const patterns of Object.values(SOURCE_PATTERNS)) {
       for (const pattern of patterns) {
         const files = globSync(path.join(dirPath, pattern), {
