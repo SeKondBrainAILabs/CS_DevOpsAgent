@@ -77,6 +77,38 @@ export interface BranchInfo {
   lastCommit?: string;
 }
 
+/**
+ * Extended commit info with file statistics
+ * Used by CommitsTab for commit history display
+ */
+export interface GitCommitWithFiles extends GitCommit {
+  filesChanged: number;
+  additions: number;
+  deletions: number;
+  files?: Array<{
+    path: string;
+    status: 'added' | 'modified' | 'deleted' | 'renamed';
+    additions: number;
+    deletions: number;
+  }>;
+}
+
+/**
+ * Detailed diff information for a single commit
+ * Used when expanding a commit to see file diffs
+ */
+export interface CommitDiffDetail {
+  commit: GitCommitWithFiles;
+  files: Array<{
+    path: string;
+    status: string;
+    additions: number;
+    deletions: number;
+    diff: string;
+    language?: string;
+  }>;
+}
+
 // =============================================================================
 // FILE LOCK TYPES
 // =============================================================================

@@ -110,3 +110,7 @@ release/
 # DevOps Agent Kit (local data - do not commit)
 .S9N_KIT_DevOpsAgent/
 !.S9N_KIT_DevOpsAgent/houserules.md
+
+# Test fixtures - cloned repos
+tests/kanvas/fixtures/SA-Piggy-Bank/
+tests/kanvas/fixtures/sample-repo/

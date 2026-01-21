@@ -481,6 +481,17 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   });
 
   // ==========================================================================
+  // COMMIT HISTORY HANDLERS
+  // ==========================================================================
+  ipcMain.handle(IPC.GIT_GET_COMMIT_HISTORY, async (_, repoPath: string, baseBranch?: string, limit?: number) => {
+    return services.git.getCommitHistory(repoPath, baseBranch, limit);
+  });
+
+  ipcMain.handle(IPC.GIT_GET_COMMIT_DIFF, async (_, repoPath: string, commitHash: string) => {
+    return services.git.getCommitDiff(repoPath, commitHash);
+  });
+
+  // ==========================================================================
   // CONTRACT DETECTION HANDLERS
   // ==========================================================================
   ipcMain.handle(IPC.CONTRACT_ANALYZE_COMMIT, async (_, repoPath: string, commitHash?: string) => {

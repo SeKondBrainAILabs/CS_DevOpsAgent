@@ -136,6 +136,46 @@ const api = {
     }>> =>
       ipcRenderer.invoke(IPC.GIT_GET_DIFF_SUMMARY, repoPath),
 
+    getCommitHistory: (repoPath: string, baseBranch?: string, limit?: number): Promise<IpcResult<Array<{
+      hash: string;
+      shortHash: string;
+      message: string;
+      author: string;
+      date: string;
+      filesChanged: number;
+      additions: number;
+      deletions: number;
+      files?: Array<{
+        path: string;
+        status: 'added' | 'modified' | 'deleted' | 'renamed';
+        additions: number;
+        deletions: number;
+      }>;
+    }>>> =>
+      ipcRenderer.invoke(IPC.GIT_GET_COMMIT_HISTORY, repoPath, baseBranch, limit),
+
+    getCommitDiff: (repoPath: string, commitHash: string): Promise<IpcResult<{
+      commit: {
+        hash: string;
+        shortHash: string;
+        message: string;
+        author: string;
+        date: string;
+        filesChanged: number;
+        additions: number;
+        deletions: number;
+      };
+      files: Array<{
+        path: string;
+        status: string;
+        additions: number;
+        deletions: number;
+        diff: string;
+        language?: string;
+      }>;
+    }>> =>
+      ipcRenderer.invoke(IPC.GIT_GET_COMMIT_DIFF, repoPath, commitHash),
+
     fetch: (repoPath: string, remote?: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.GIT_FETCH, repoPath, remote),
 

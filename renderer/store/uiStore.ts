@@ -5,10 +5,15 @@
 
 import { create } from 'zustand';
 
+export type MainView = 'dashboard' | 'commits';
+
 interface UIState {
   // Sidebar
   sidebarCollapsed: boolean;
   sidebarWidth: number;
+
+  // Main view
+  mainView: MainView;
 
   // Modals
   showNewSessionWizard: boolean;
@@ -23,6 +28,7 @@ interface UIState {
   // Actions
   toggleSidebar: () => void;
   setSidebarWidth: (width: number) => void;
+  setMainView: (view: MainView) => void;
   setShowNewSessionWizard: (show: boolean) => void;
   setShowCloseSessionDialog: (show: boolean, sessionId?: string) => void;
   setShowSettingsModal: (show: boolean) => void;
@@ -34,6 +40,9 @@ export const useUIStore = create<UIState>((set) => ({
   // Sidebar
   sidebarCollapsed: false,
   sidebarWidth: 256,
+
+  // Main view
+  mainView: 'dashboard',
 
   // Modals
   showNewSessionWizard: false,
@@ -50,6 +59,8 @@ export const useUIStore = create<UIState>((set) => ({
     set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
 
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
+
+  setMainView: (view) => set({ mainView: view }),
 
   setShowNewSessionWizard: (show) => set({ showNewSessionWizard: show }),
 

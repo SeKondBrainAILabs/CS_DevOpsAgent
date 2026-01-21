@@ -174,6 +174,13 @@ export const IPC = {
   GIT_GET_DIFF_SUMMARY: 'git:get-diff-summary',
 
   // ==========================================================================
+  // COMMIT HISTORY CHANNELS
+  // Get commit history and detailed diffs for session tracking
+  // ==========================================================================
+  GIT_GET_COMMIT_HISTORY: 'git:get-commit-history',
+  GIT_GET_COMMIT_DIFF: 'git:get-commit-diff',
+
+  // ==========================================================================
   // REBASE WATCHER CHANNELS
   // Auto-rebase on remote changes (on-demand mode)
   // ==========================================================================

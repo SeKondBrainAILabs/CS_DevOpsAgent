@@ -564,6 +564,55 @@ export class ContractGenerationService extends BaseService {
   }
 
   /**
+   * Parse .gitmodules file to get list of submodule paths
+   */
+  private async getGitSubmodulePaths(repoPath: string): Promise<Set<string>> {
+    const submodulePaths = new Set<string>();
+    const gitmodulesPath = path.join(repoPath, '.gitmodules');
+
+    try {
+      const content = await fs.readFile(gitmodulesPath, 'utf-8');
+      // Parse .gitmodules format:
+      // [submodule "name"]
+      //   path = some/path
+      const pathMatches = content.matchAll(/^\s*path\s*=\s*(.+)$/gm);
+      for (const match of pathMatches) {
+        const submodulePath = match[1].trim();
+        submodulePaths.add(submodulePath);
+        // Also add just the folder name for top-level matching
+        const folderName = submodulePath.split('/')[0];
+        submodulePaths.add(folderName);
+      }
+      console.log(`[ContractGeneration] Found ${submodulePaths.size} git submodule paths`);
+    } catch {
+      // No .gitmodules file or can't read it - that's fine
+    }
+
+    return submodulePaths;
+  }
+
+  /**
+   * Get feature name from package.json if available, otherwise use folder name
+   */
+  private async getFeatureName(featurePath: string, fallbackName: string): Promise<string> {
+    const packageJsonPath = path.join(featurePath, 'package.json');
+    try {
+      const content = await fs.readFile(packageJsonPath, 'utf-8');
+      const pkg = JSON.parse(content);
+      if (pkg.name) {
+        // Remove scope if present (e.g., @org/package-name -> package-name)
+        const name = pkg.name.startsWith('@')
+          ? pkg.name.split('/')[1] || pkg.name
+          : pkg.name;
+        return name;
+      }
+    } catch {
+      // No package.json or can't parse it - use fallback
+    }
+    return fallbackName;
+  }
+
+  /**
    * Discover all features in a repository
    */
   async discoverFeatures(repoPath: string): Promise<IpcResult<DiscoveredFeature[]>> {
@@ -571,6 +620,9 @@ export class ContractGenerationService extends BaseService {
       console.log(`[ContractGeneration] Discovering features in ${repoPath}`);
       const features: DiscoveredFeature[] = [];
       const processedPaths = new Set<string>();
+
+      // Get git submodule paths to exclude
+      const submodulePaths = await this.getGitSubmodulePaths(repoPath);
 
       // 1. Scan top-level directories first (most repos have this structure)
       try {
@@ -585,6 +637,12 @@ export class ContractGenerationService extends BaseService {
             continue;
           }
 
+          // Skip git submodules
+          if (submodulePaths.has(entry.name)) {
+            console.log(`[ContractGeneration] Skipping git submodule: ${entry.name}`);
+            continue;
+          }
+
           const featurePath = path.join(repoPath, entry.name);
           if (processedPaths.has(featurePath)) continue;
 
@@ -595,13 +653,15 @@ export class ContractGenerationService extends BaseService {
 
           if (totalFiles > 0) {
             processedPaths.add(featurePath);
+            // Get feature name from package.json if available
+            const featureName = await this.getFeatureName(featurePath, entry.name);
             features.push({
-              name: entry.name,
+              name: featureName,
               basePath: featurePath,
               files,
               contractPatternMatches: totalFiles,
             });
-            console.log(`[ContractGeneration] Found feature: ${entry.name} (${totalFiles} files)`);
+            console.log(`[ContractGeneration] Found feature: ${featureName} (${totalFiles} files)`);
           }
         }
       } catch (err) {
@@ -623,14 +683,23 @@ export class ContractGenerationService extends BaseService {
             if (!stat?.isDirectory()) continue;
             if (processedPaths.has(featurePath)) continue;
 
-            const featureName = path.basename(featurePath);
-            if (IGNORE_FOLDERS.has(featureName)) continue;
+            const folderName = path.basename(featurePath);
+            if (IGNORE_FOLDERS.has(folderName)) continue;
+
+            // Check if this path is a submodule
+            const relativePath = path.relative(repoPath, featurePath);
+            if (submodulePaths.has(relativePath) || submodulePaths.has(folderName)) {
+              console.log(`[ContractGeneration] Skipping git submodule: ${relativePath}`);
+              continue;
+            }
 
             const files = await this.scanFeatureFiles(featurePath, repoPath);
             const totalFiles = this.countFeatureFiles(files);
 
             if (totalFiles > 0) {
               processedPaths.add(featurePath);
+              // Get feature name from package.json if available
+              const featureName = await this.getFeatureName(featurePath, folderName);
               features.push({
                 name: featureName,
                 basePath: featurePath,
@@ -945,9 +1014,8 @@ export class ContractGenerationService extends BaseService {
         endpoints: analysisData.endpoints.map(ep => ({
           method: ep.method,
           path: ep.path,
-          handler: ep.handler,
+          description: `Handler: ${ep.handler}`,
           file: ep.file,
-          line: ep.line,
         })),
         exports: analysisData.exports.map(exp => ({
           name: exp.name,
@@ -1107,7 +1175,7 @@ export class ContractGenerationService extends BaseService {
     console.log(`[ContractGeneration] Saved markdown: ${markdownPath}`);
 
     // 2. Save JSON to registry
-    const registryDir = path.join(repoPath, KANVAS_PATHS.ROOT, 'contracts', 'features');
+    const registryDir = path.join(repoPath, KANVAS_PATHS.baseDir, 'contracts', 'features');
     await fs.mkdir(registryDir, { recursive: true });
 
     const jsonPath = path.join(registryDir, `${feature.name}.contracts.json`);
@@ -1178,7 +1246,7 @@ export class ContractGenerationService extends BaseService {
               feature: feature.name,
               success: true,
               markdownPath: existingPath,
-              jsonPath: path.join(repoPath, KANVAS_PATHS.ROOT, 'contracts', 'features', `${feature.name}.contracts.json`),
+              jsonPath: path.join(repoPath, KANVAS_PATHS.baseDir, 'contracts', 'features', `${feature.name}.contracts.json`),
             });
             console.log(`[ContractGeneration] Skipping existing: ${feature.name}`);
             continue;

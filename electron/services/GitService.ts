@@ -9,6 +9,8 @@ import { IPC } from '../../shared/ipc-channels';
 import type {
   GitStatus,
   GitCommit,
+  GitCommitWithFiles,
+  CommitDiffDetail,
   GitFileChange,
   BranchInfo,
   FileStatus,
@@ -857,5 +859,264 @@ export class GitService extends BaseService {
         files,
       };
     }, 'GIT_GET_DIFF_SUMMARY_FAILED');
+  }
+
+  // ==========================================================================
+  // COMMIT HISTORY OPERATIONS
+  // ==========================================================================
+
+  /**
+   * Get commit history for a branch since divergence from base branch
+   * Used by CommitsTab to show all commits in a session
+   */
+  async getCommitHistory(
+    repoPath: string,
+    baseBranch = 'main',
+    limit = 50
+  ): Promise<IpcResult<GitCommitWithFiles[]>> {
+    return this.wrap(async () => {
+      const currentBranch = await this.git(['branch', '--show-current'], repoPath);
+
+      // Find merge-base to determine where branch diverged
+      let mergeBase: string;
+      try {
+        mergeBase = await this.git(['merge-base', `origin/${baseBranch}`, currentBranch], repoPath);
+      } catch {
+        try {
+          mergeBase = await this.git(['merge-base', baseBranch, currentBranch], repoPath);
+        } catch {
+          // If no merge-base, get all commits up to limit
+          mergeBase = '';
+        }
+      }
+
+      // Get commit log with stats
+      const range = mergeBase ? `${mergeBase}..HEAD` : `-${limit}`;
+      const logFormat = '%H|%h|%s|%an|%aI';
+
+      const logOutput = await this.git([
+        'log',
+        range,
+        `--format=${logFormat}`,
+        '--shortstat',
+        `-${limit}`,
+      ], repoPath);
+
+      const commits: GitCommitWithFiles[] = [];
+      const lines = logOutput.split('\n');
+
+      let i = 0;
+      while (i < lines.length) {
+        const line = lines[i].trim();
+        if (!line) {
+          i++;
+          continue;
+        }
+
+        // Check if line contains commit info (has | separators)
+        if (line.includes('|')) {
+          const [hash, shortHash, message, author, date] = line.split('|');
+
+          const commit: GitCommitWithFiles = {
+            hash,
+            shortHash,
+            message,
+            author,
+            date,
+            filesChanged: 0,
+            additions: 0,
+            deletions: 0,
+          };
+
+          // Next line might be stats
+          i++;
+          if (i < lines.length) {
+            const statsLine = lines[i].trim();
+            // Parse: "3 files changed, 120 insertions(+), 30 deletions(-)"
+            const filesMatch = statsLine.match(/(\d+) files? changed/);
+            const addMatch = statsLine.match(/(\d+) insertions?\(\+\)/);
+            const delMatch = statsLine.match(/(\d+) deletions?\(-\)/);
+
+            if (filesMatch || addMatch || delMatch) {
+              commit.filesChanged = filesMatch ? parseInt(filesMatch[1], 10) : 0;
+              commit.additions = addMatch ? parseInt(addMatch[1], 10) : 0;
+              commit.deletions = delMatch ? parseInt(delMatch[1], 10) : 0;
+              i++;
+            }
+          }
+
+          commits.push(commit);
+        } else {
+          i++;
+        }
+      }
+
+      return commits;
+    }, 'GIT_GET_COMMIT_HISTORY_FAILED');
+  }
+
+  /**
+   * Get detailed diff for a specific commit
+   * Used when user expands a commit to see file-by-file changes
+   */
+  async getCommitDiff(repoPath: string, commitHash: string): Promise<IpcResult<CommitDiffDetail>> {
+    return this.wrap(async () => {
+      // Get commit info
+      const logOutput = await this.git([
+        'log',
+        '-1',
+        '--format=%H|%h|%s|%an|%aI',
+        '--shortstat',
+        commitHash,
+      ], repoPath);
+
+      const lines = logOutput.split('\n');
+      const [hash, shortHash, message, author, date] = lines[0].split('|');
+
+      let filesChanged = 0;
+      let additions = 0;
+      let deletions = 0;
+
+      if (lines[1]) {
+        const statsLine = lines[1].trim();
+        const filesMatch = statsLine.match(/(\d+) files? changed/);
+        const addMatch = statsLine.match(/(\d+) insertions?\(\+\)/);
+        const delMatch = statsLine.match(/(\d+) deletions?\(-\)/);
+        filesChanged = filesMatch ? parseInt(filesMatch[1], 10) : 0;
+        additions = addMatch ? parseInt(addMatch[1], 10) : 0;
+        deletions = delMatch ? parseInt(delMatch[1], 10) : 0;
+      }
+
+      const commit: GitCommitWithFiles = {
+        hash,
+        shortHash,
+        message,
+        author,
+        date,
+        filesChanged,
+        additions,
+        deletions,
+      };
+
+      // Get list of files changed in commit with their stats
+      const numstatOutput = await this.git([
+        'diff-tree',
+        '--no-commit-id',
+        '--numstat',
+        '-r',
+        commitHash,
+      ], repoPath);
+
+      const nameStatusOutput = await this.git([
+        'diff-tree',
+        '--no-commit-id',
+        '--name-status',
+        '-r',
+        commitHash,
+      ], repoPath);
+
+      // Build file stats map
+      const fileStats = new Map<string, { additions: number; deletions: number }>();
+      for (const line of numstatOutput.split('\n').filter(Boolean)) {
+        const [add, del, ...pathParts] = line.split('\t');
+        const filePath = pathParts.join('\t');
+        fileStats.set(filePath, {
+          additions: add === '-' ? 0 : parseInt(add, 10),
+          deletions: del === '-' ? 0 : parseInt(del, 10),
+        });
+      }
+
+      // Build file status map
+      const fileStatusMap = new Map<string, string>();
+      for (const line of nameStatusOutput.split('\n').filter(Boolean)) {
+        const [statusChar, ...pathParts] = line.split('\t');
+        const filePath = pathParts.join('\t');
+        let status = 'modified';
+        switch (statusChar[0]) {
+          case 'A': status = 'added'; break;
+          case 'M': status = 'modified'; break;
+          case 'D': status = 'deleted'; break;
+          case 'R': status = 'renamed'; break;
+          case 'C': status = 'copied'; break;
+        }
+        fileStatusMap.set(filePath, status);
+      }
+
+      // Get diffs for each file
+      const files: CommitDiffDetail['files'] = [];
+
+      for (const [filePath, stats] of fileStats) {
+        const status = fileStatusMap.get(filePath) || 'modified';
+
+        // Get the actual diff for this file
+        let diff = '';
+        try {
+          diff = await this.git([
+            'diff',
+            `${commitHash}^..${commitHash}`,
+            '--',
+            filePath,
+          ], repoPath);
+        } catch {
+          // Might fail for first commit, try without parent
+          try {
+            diff = await this.git([
+              'show',
+              commitHash,
+              '--',
+              filePath,
+            ], repoPath);
+          } catch {
+            diff = '(diff not available)';
+          }
+        }
+
+        // Truncate large diffs
+        const maxDiffLength = 5000;
+        if (diff.length > maxDiffLength) {
+          diff = diff.substring(0, maxDiffLength) + '\n... (diff truncated, ' + (diff.length - maxDiffLength) + ' more characters)';
+        }
+
+        // Detect language from extension
+        const ext = path.extname(filePath).toLowerCase();
+        const languageMap: Record<string, string> = {
+          '.ts': 'typescript',
+          '.tsx': 'typescript',
+          '.js': 'javascript',
+          '.jsx': 'javascript',
+          '.json': 'json',
+          '.md': 'markdown',
+          '.css': 'css',
+          '.scss': 'scss',
+          '.html': 'html',
+          '.yaml': 'yaml',
+          '.yml': 'yaml',
+          '.py': 'python',
+          '.go': 'go',
+          '.rs': 'rust',
+          '.java': 'java',
+          '.sql': 'sql',
+        };
+
+        files.push({
+          path: filePath,
+          status,
+          additions: stats.additions,
+          deletions: stats.deletions,
+          diff,
+          language: languageMap[ext] || 'text',
+        });
+      }
+
+      // Also populate files array on commit
+      commit.files = files.map(f => ({
+        path: f.path,
+        status: f.status as 'added' | 'modified' | 'deleted' | 'renamed',
+        additions: f.additions,
+        deletions: f.deletions,
+      }));
+
+      return { commit, files };
+    }, 'GIT_GET_COMMIT_DIFF_FAILED');
   }
 }

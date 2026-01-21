@@ -7,8 +7,9 @@ import React, { useState, useEffect } from 'react';
 import type { SessionReport } from '../../../shared/agent-protocol';
 import type { AgentInstance, ContractType, Contract, ActivityLogEntry } from '../../../shared/types';
 import { useAgentStore } from '../../store/agentStore';
+import { CommitsTab } from './CommitsTab';
 
-type DetailTab = 'prompt' | 'activity' | 'files' | 'contracts' | 'terminal';
+type DetailTab = 'prompt' | 'activity' | 'commits' | 'files' | 'contracts' | 'terminal';
 
 interface SessionDetailViewProps {
   session: SessionReport;
@@ -246,7 +247,7 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
 
         {/* Tabs */}
         <div className="flex gap-2 flex-wrap">
-          {(['prompt', 'activity', 'terminal', 'files', 'contracts'] as DetailTab[]).map((tab) => (
+          {(['prompt', 'activity', 'commits', 'terminal', 'files', 'contracts'] as DetailTab[]).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -280,6 +281,9 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
         )}
         {activeTab === 'activity' && (
           <ActivityTab sessionId={session.sessionId} />
+        )}
+        {activeTab === 'commits' && (
+          <CommitsTab session={session} />
         )}
         {activeTab === 'files' && (
           <FilesTab session={session} />
