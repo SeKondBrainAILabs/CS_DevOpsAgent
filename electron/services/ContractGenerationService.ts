@@ -29,6 +29,99 @@ import type { SchemaExtractorService } from './analysis/SchemaExtractorService';
 import type { DependencyGraphService } from './analysis/DependencyGraphService';
 import type { ParsedAST, ExtractedEndpoint, ExtractedSchema, DependencyGraph } from '../../shared/analysis-types';
 
+// Repository structure analysis result
+interface RepoStructureAnalysis {
+  applicationType: string;
+  techStack: {
+    languages: string[];
+    frameworks: string[];
+    databases: string[];
+    keyDependencies: string[];
+  };
+  architecturePattern: string;
+  entryPoints: Array<{ file: string; description: string }>;
+  features: Array<{ name: string; path: string; description: string }>;
+  externalIntegrations: Array<{ name: string; type: string; purpose: string }>;
+}
+
+// Feature analysis result with APIs exposed/consumed
+interface FeatureAnalysis {
+  feature: string;
+  purpose: string;
+  apisExposed: {
+    httpEndpoints: Array<{
+      method: string;
+      path: string;
+      handler: string;
+      file: string;
+      line?: number;
+      parameters?: Array<{ name: string; type: string; in: string; required: boolean }>;
+      responseType?: string;
+      authentication?: string;
+      description?: string;
+    }>;
+    exportedFunctions: Array<{
+      name: string;
+      file: string;
+      line?: number;
+      signature?: string;
+      description?: string;
+      isAsync?: boolean;
+    }>;
+    exportedTypes: Array<{
+      name: string;
+      kind: string;
+      file: string;
+      line?: number;
+      properties?: Array<{ name: string; type: string; optional: boolean }>;
+    }>;
+    eventsEmitted: Array<{
+      eventName: string;
+      payload?: string;
+      emittedFrom?: string;
+    }>;
+  };
+  apisConsumed: {
+    httpCalls: Array<{
+      method: string;
+      url: string;
+      purpose?: string;
+      calledFrom?: string;
+    }>;
+    internalImports: Array<{
+      from: string;
+      imports: string[];
+      usedIn?: string;
+    }>;
+    externalPackages: Array<{
+      package: string;
+      imports: string[];
+      purpose?: string;
+    }>;
+    databaseOperations: Array<{
+      type: string;
+      table?: string;
+      file: string;
+      line?: number;
+    }>;
+    eventsConsumed: Array<{
+      eventName: string;
+      handler?: string;
+      file?: string;
+    }>;
+  };
+  dataModels: Array<{
+    name: string;
+    type: string;
+    file: string;
+    fields?: Array<{ name: string; type: string; constraints?: string }>;
+  }>;
+  dependencies: {
+    internal: string[];
+    external: string[];
+  };
+}
+
 // Contract file patterns - reused from ContractDetectionService
 const CONTRACT_PATTERNS = {
   // API files
@@ -168,6 +261,359 @@ export class ContractGenerationService extends BaseService {
   }
 
   /**
+   * PHASE 1: Analyze repository structure to understand the codebase
+   * This should be called BEFORE discovering features
+   */
+  async analyzeRepoStructure(repoPath: string): Promise<IpcResult<RepoStructureAnalysis>> {
+    return this.wrap(async () => {
+      console.log(`[ContractGeneration] Analyzing repository structure: ${repoPath}`);
+
+      // Get directory tree
+      const directoryTree = await this.getDirectoryTree(repoPath, 3);
+
+      // Check for key config files
+      const hasPackageJson = await this.fileExists(path.join(repoPath, 'package.json'));
+      const hasTsconfig = await this.fileExists(path.join(repoPath, 'tsconfig.json'));
+      const hasDockerfile = await this.fileExists(path.join(repoPath, 'Dockerfile'));
+      const hasDockerCompose = await this.fileExists(path.join(repoPath, 'docker-compose.yml')) ||
+                               await this.fileExists(path.join(repoPath, 'docker-compose.yaml'));
+
+      // Read package.json if exists
+      let packageJsonContent = '';
+      if (hasPackageJson) {
+        try {
+          const content = await fs.readFile(path.join(repoPath, 'package.json'), 'utf-8');
+          const parsed = JSON.parse(content);
+          // Only include relevant parts
+          packageJsonContent = JSON.stringify({
+            name: parsed.name,
+            version: parsed.version,
+            description: parsed.description,
+            main: parsed.main,
+            scripts: Object.keys(parsed.scripts || {}),
+            dependencies: Object.keys(parsed.dependencies || {}),
+            devDependencies: Object.keys(parsed.devDependencies || {}),
+          }, null, 2);
+        } catch {
+          packageJsonContent = 'Failed to parse';
+        }
+      }
+
+      // Use AI to analyze the structure
+      const result = await this.aiService.sendWithMode({
+        modeId: 'contract_generator',
+        promptKey: 'analyze_repo_structure',
+        variables: {
+          repo_name: path.basename(repoPath),
+          directory_tree: directoryTree,
+          has_package_json: String(hasPackageJson),
+          has_tsconfig: String(hasTsconfig),
+          has_dockerfile: String(hasDockerfile),
+          has_docker_compose: String(hasDockerCompose),
+          package_json_content: packageJsonContent || 'Not present',
+        },
+      });
+
+      if (!result.success || !result.data) {
+        throw new Error(`Failed to analyze repo structure: ${result.error?.message}`);
+      }
+
+      // Parse the JSON response
+      let analysis: RepoStructureAnalysis;
+      try {
+        let jsonStr = result.data.trim();
+        // Remove markdown code fences if present
+        if (jsonStr.includes('```json')) {
+          jsonStr = jsonStr.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+        } else if (jsonStr.includes('```')) {
+          jsonStr = jsonStr.replace(/```\n?/g, '');
+        }
+        analysis = JSON.parse(jsonStr);
+      } catch {
+        console.warn('[ContractGeneration] Failed to parse AI response, using defaults');
+        analysis = {
+          applicationType: 'Unknown',
+          techStack: { languages: [], frameworks: [], databases: [], keyDependencies: [] },
+          architecturePattern: 'Unknown',
+          entryPoints: [],
+          features: [],
+          externalIntegrations: [],
+        };
+      }
+
+      console.log(`[ContractGeneration] Repo analysis complete: ${analysis.applicationType}, ${analysis.features.length} features identified`);
+      return analysis;
+    }, 'ANALYZE_REPO_STRUCTURE_ERROR');
+  }
+
+  /**
+   * PHASE 2: Generate README documentation for the repository
+   */
+  async generateRepoReadme(
+    repoPath: string,
+    structureAnalysis: RepoStructureAnalysis
+  ): Promise<IpcResult<string>> {
+    return this.wrap(async () => {
+      console.log(`[ContractGeneration] Generating README for: ${repoPath}`);
+
+      const directoryTree = await this.getDirectoryTree(repoPath, 3);
+
+      const result = await this.aiService.sendWithMode({
+        modeId: 'contract_generator',
+        promptKey: 'generate_readme',
+        variables: {
+          repo_name: path.basename(repoPath),
+          analysis_json: JSON.stringify(structureAnalysis, null, 2),
+          directory_tree: directoryTree,
+        },
+      });
+
+      if (!result.success || !result.data) {
+        throw new Error(`Failed to generate README: ${result.error?.message}`);
+      }
+
+      // Save README to repo
+      const readmePath = path.join(repoPath, 'ARCHITECTURE.md');
+      await fs.writeFile(readmePath, result.data, 'utf-8');
+      console.log(`[ContractGeneration] Saved architecture doc: ${readmePath}`);
+
+      return result.data;
+    }, 'GENERATE_README_ERROR');
+  }
+
+  /**
+   * PHASE 3: Deep analysis of a feature - identifies APIs exposed and consumed
+   */
+  async analyzeFeatureDeep(
+    repoPath: string,
+    feature: DiscoveredFeature
+  ): Promise<IpcResult<FeatureAnalysis>> {
+    return this.wrap(async () => {
+      console.log(`[ContractGeneration] Deep analyzing feature: ${feature.name}`);
+
+      // Get file list
+      const allFiles = [
+        ...feature.files.api,
+        ...feature.files.schema,
+        ...feature.files.other.slice(0, 20), // Limit other files
+      ];
+
+      // Extract code samples from key files
+      const codeSamples = await this.extractCodeSamplesDeep(repoPath, feature, 15);
+
+      const result = await this.aiService.sendWithMode({
+        modeId: 'contract_generator',
+        promptKey: 'analyze_feature',
+        variables: {
+          feature_name: feature.name,
+          feature_path: path.relative(repoPath, feature.basePath),
+          repo_name: path.basename(repoPath),
+          file_list: allFiles.join('\n'),
+          code_samples: codeSamples,
+        },
+      });
+
+      if (!result.success || !result.data) {
+        throw new Error(`Failed to analyze feature: ${result.error?.message}`);
+      }
+
+      // Parse the JSON response
+      let analysis: FeatureAnalysis;
+      try {
+        let jsonStr = result.data.trim();
+        if (jsonStr.includes('```json')) {
+          jsonStr = jsonStr.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+        } else if (jsonStr.includes('```')) {
+          jsonStr = jsonStr.replace(/```\n?/g, '');
+        }
+        analysis = JSON.parse(jsonStr);
+      } catch {
+        console.warn(`[ContractGeneration] Failed to parse feature analysis for ${feature.name}`);
+        analysis = this.createEmptyFeatureAnalysis(feature.name);
+      }
+
+      console.log(`[ContractGeneration] Feature ${feature.name}: ${analysis.apisExposed.httpEndpoints.length} endpoints exposed, ${analysis.apisConsumed.httpCalls.length} HTTP calls consumed`);
+      return analysis;
+    }, 'ANALYZE_FEATURE_DEEP_ERROR');
+  }
+
+  /**
+   * Helper: Create empty feature analysis structure
+   */
+  private createEmptyFeatureAnalysis(featureName: string): FeatureAnalysis {
+    return {
+      feature: featureName,
+      purpose: '',
+      apisExposed: {
+        httpEndpoints: [],
+        exportedFunctions: [],
+        exportedTypes: [],
+        eventsEmitted: [],
+      },
+      apisConsumed: {
+        httpCalls: [],
+        internalImports: [],
+        externalPackages: [],
+        databaseOperations: [],
+        eventsConsumed: [],
+      },
+      dataModels: [],
+      dependencies: { internal: [], external: [] },
+    };
+  }
+
+  /**
+   * Helper: Get directory tree as string
+   */
+  private async getDirectoryTree(dirPath: string, maxDepth: number, currentDepth = 0, prefix = ''): Promise<string> {
+    if (currentDepth >= maxDepth) return '';
+
+    const lines: string[] = [];
+    try {
+      const entries = await fs.readdir(dirPath, { withFileTypes: true });
+      const filteredEntries = entries
+        .filter(e => !e.name.startsWith('.') && !IGNORE_FOLDERS.has(e.name))
+        .sort((a, b) => {
+          // Directories first
+          if (a.isDirectory() && !b.isDirectory()) return -1;
+          if (!a.isDirectory() && b.isDirectory()) return 1;
+          return a.name.localeCompare(b.name);
+        });
+
+      for (let i = 0; i < filteredEntries.length; i++) {
+        const entry = filteredEntries[i];
+        const isLast = i === filteredEntries.length - 1;
+        const connector = isLast ? '└── ' : '├── ';
+        const newPrefix = prefix + (isLast ? '    ' : '│   ');
+
+        lines.push(`${prefix}${connector}${entry.name}${entry.isDirectory() ? '/' : ''}`);
+
+        if (entry.isDirectory()) {
+          const subTree = await this.getDirectoryTree(
+            path.join(dirPath, entry.name),
+            maxDepth,
+            currentDepth + 1,
+            newPrefix
+          );
+          if (subTree) lines.push(subTree);
+        }
+      }
+    } catch {
+      // Skip unreadable directories
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Helper: Check if file exists
+   */
+  private async fileExists(filePath: string): Promise<boolean> {
+    try {
+      await fs.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Helper: Extract more comprehensive code samples
+   */
+  private async extractCodeSamplesDeep(
+    repoPath: string,
+    feature: DiscoveredFeature,
+    maxFiles: number
+  ): Promise<string> {
+    const samples: string[] = [];
+    let fileCount = 0;
+
+    // Priority order: types/interfaces, routes/api, index files, services, other
+    const priorityFiles = [
+      ...feature.files.schema.filter(f => f.includes('types') || f.includes('interface') || f.endsWith('.d.ts')),
+      ...feature.files.api.filter(f => f.includes('routes') || f.includes('api') || f.includes('controller')),
+      ...feature.files.other.filter(f => f.endsWith('index.ts') || f.endsWith('index.js')),
+      ...feature.files.api,
+      ...feature.files.schema,
+      ...feature.files.other.filter(f => f.includes('service') || f.includes('Service')),
+    ];
+
+    // Deduplicate
+    const uniqueFiles = [...new Set(priorityFiles)];
+
+    for (const file of uniqueFiles) {
+      if (fileCount >= maxFiles) break;
+
+      const fullPath = path.join(repoPath, file);
+      try {
+        const content = await fs.readFile(fullPath, 'utf-8');
+        // Truncate large files but keep more context
+        const maxSize = 3000;
+        const truncated = content.length > maxSize
+          ? content.slice(0, maxSize) + '\n// ... truncated (' + (content.length - maxSize) + ' more chars)'
+          : content;
+
+        const ext = path.extname(file).replace('.', '') || 'txt';
+        samples.push(`### ${file}\n\`\`\`${ext}\n${truncated}\n\`\`\``);
+        fileCount++;
+      } catch {
+        // Skip unreadable files
+      }
+    }
+
+    return samples.join('\n\n');
+  }
+
+  /**
+   * Parse .gitmodules file to get list of submodule paths
+   */
+  private async getGitSubmodulePaths(repoPath: string): Promise<Set<string>> {
+    const submodulePaths = new Set<string>();
+    const gitmodulesPath = path.join(repoPath, '.gitmodules');
+
+    try {
+      const content = await fs.readFile(gitmodulesPath, 'utf-8');
+      // Parse .gitmodules format:
+      // [submodule "name"]
+      //   path = some/path
+      const pathMatches = content.matchAll(/^\s*path\s*=\s*(.+)$/gm);
+      for (const match of pathMatches) {
+        const submodulePath = match[1].trim();
+        submodulePaths.add(submodulePath);
+        // Also add just the folder name for top-level matching
+        const folderName = submodulePath.split('/')[0];
+        submodulePaths.add(folderName);
+      }
+      console.log(`[ContractGeneration] Found ${submodulePaths.size} git submodule paths`);
+    } catch {
+      // No .gitmodules file or can't read it - that's fine
+    }
+
+    return submodulePaths;
+  }
+
+  /**
+   * Get feature name from package.json if available, otherwise use folder name
+   */
+  private async getFeatureName(featurePath: string, fallbackName: string): Promise<string> {
+    const packageJsonPath = path.join(featurePath, 'package.json');
+    try {
+      const content = await fs.readFile(packageJsonPath, 'utf-8');
+      const pkg = JSON.parse(content);
+      if (pkg.name) {
+        // Remove scope if present (e.g., @org/package-name -> package-name)
+        const name = pkg.name.startsWith('@')
+          ? pkg.name.split('/')[1] || pkg.name
+          : pkg.name;
+        return name;
+      }
+    } catch {
+      // No package.json or can't parse it - use fallback
+    }
+    return fallbackName;
+  }
+
+  /**
    * Discover all features in a repository
    */
   async discoverFeatures(repoPath: string): Promise<IpcResult<DiscoveredFeature[]>> {
@@ -175,6 +621,9 @@ export class ContractGenerationService extends BaseService {
       console.log(`[ContractGeneration] Discovering features in ${repoPath}`);
       const features: DiscoveredFeature[] = [];
       const processedPaths = new Set<string>();
+
+      // Get git submodule paths to exclude
+      const submodulePaths = await this.getGitSubmodulePaths(repoPath);
 
       // 1. Scan top-level directories first (most repos have this structure)
       try {
@@ -189,6 +638,12 @@ export class ContractGenerationService extends BaseService {
             continue;
           }
 
+          // Skip git submodules
+          if (submodulePaths.has(entry.name)) {
+            console.log(`[ContractGeneration] Skipping git submodule: ${entry.name}`);
+            continue;
+          }
+
           const featurePath = path.join(repoPath, entry.name);
           if (processedPaths.has(featurePath)) continue;
 
@@ -199,13 +654,15 @@ export class ContractGenerationService extends BaseService {
 
           if (totalFiles > 0) {
             processedPaths.add(featurePath);
+            // Get feature name from package.json if available
+            const featureName = await this.getFeatureName(featurePath, entry.name);
             features.push({
-              name: entry.name,
+              name: featureName,
               basePath: featurePath,
               files,
               contractPatternMatches: totalFiles,
             });
-            console.log(`[ContractGeneration] Found feature: ${entry.name} (${totalFiles} files)`);
+            console.log(`[ContractGeneration] Found feature: ${featureName} (${totalFiles} files)`);
           }
         }
       } catch (err) {
@@ -227,14 +684,23 @@ export class ContractGenerationService extends BaseService {
             if (!stat?.isDirectory()) continue;
             if (processedPaths.has(featurePath)) continue;
 
-            const featureName = path.basename(featurePath);
-            if (IGNORE_FOLDERS.has(featureName)) continue;
+            const folderName = path.basename(featurePath);
+            if (IGNORE_FOLDERS.has(folderName)) continue;
+
+            // Check if this path is a submodule
+            const relativePath = path.relative(repoPath, featurePath);
+            if (submodulePaths.has(relativePath) || submodulePaths.has(folderName)) {
+              console.log(`[ContractGeneration] Skipping git submodule: ${relativePath}`);
+              continue;
+            }
 
             const files = await this.scanFeatureFiles(featurePath, repoPath);
             const totalFiles = this.countFeatureFiles(files);
 
             if (totalFiles > 0) {
               processedPaths.add(featurePath);
+              // Get feature name from package.json if available
+              const featureName = await this.getFeatureName(featurePath, folderName);
               features.push({
                 name: featureName,
                 basePath: featurePath,
@@ -427,7 +893,7 @@ export class ContractGenerationService extends BaseService {
 
       // Generate Markdown contract using AI
       const markdownResult = await this.aiService.sendWithMode({
-        modeId: 'contract-generator',
+        modeId: 'contract_generator',
         promptKey: 'generate_feature_contract',
         variables: {
           feature_name: feature.name,
@@ -446,7 +912,7 @@ export class ContractGenerationService extends BaseService {
 
       // Generate JSON contract using AI
       const jsonResult = await this.aiService.sendWithMode({
-        modeId: 'contract-generator',
+        modeId: 'contract_generator',
         promptKey: 'generate_json_contract',
         variables: {
           feature_name: feature.name,
@@ -549,9 +1015,8 @@ export class ContractGenerationService extends BaseService {
         endpoints: analysisData.endpoints.map(ep => ({
           method: ep.method,
           path: ep.path,
-          handler: ep.handler,
+          description: `Handler: ${ep.handler}`,
           file: ep.file,
-          line: ep.line,
         })),
         exports: analysisData.exports.map(exp => ({
           name: exp.name,
@@ -711,7 +1176,7 @@ export class ContractGenerationService extends BaseService {
     console.log(`[ContractGeneration] Saved markdown: ${markdownPath}`);
 
     // 2. Save JSON to registry
-    const registryDir = path.join(repoPath, KANVAS_PATHS.ROOT, 'contracts', 'features');
+    const registryDir = path.join(repoPath, KANVAS_PATHS.baseDir, 'contracts', 'features');
     await fs.mkdir(registryDir, { recursive: true });
 
     const jsonPath = path.join(registryDir, `${feature.name}.contracts.json`);
@@ -782,7 +1247,7 @@ export class ContractGenerationService extends BaseService {
               feature: feature.name,
               success: true,
               markdownPath: existingPath,
-              jsonPath: path.join(repoPath, KANVAS_PATHS.ROOT, 'contracts', 'features', `${feature.name}.contracts.json`),
+              jsonPath: path.join(repoPath, KANVAS_PATHS.baseDir, 'contracts', 'features', `${feature.name}.contracts.json`),
             });
             console.log(`[ContractGeneration] Skipping existing: ${feature.name}`);
             continue;

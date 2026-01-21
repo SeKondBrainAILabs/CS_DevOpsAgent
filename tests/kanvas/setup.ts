@@ -39,6 +39,13 @@ const mockApi = {
     onAgentUpdate: (jest.fn() as MockFn).mockReturnValue(() => {}),
     onSessionUpdate: (jest.fn() as MockFn).mockReturnValue(() => {}),
   },
+  git: {
+    getCommitHistory: createMockFn({ success: true, data: [] }),
+    getCommitDiff: createMockFn({ success: true, data: { commit: {}, files: [] } }),
+    getChangedFiles: createMockFn({ success: true, data: [] }),
+    getFilesWithStatus: createMockFn({ success: true, data: [] }),
+    getDiffSummary: createMockFn({ success: true, data: { files: [] } }),
+  },
   instance: {
     create: createMockFn({ success: true, data: {} }),
     validateRepo: createMockFn({

@@ -174,6 +174,13 @@ export const IPC = {
   GIT_GET_DIFF_SUMMARY: 'git:get-diff-summary',
 
   // ==========================================================================
+  // COMMIT HISTORY CHANNELS
+  // Get commit history and detailed diffs for session tracking
+  // ==========================================================================
+  GIT_GET_COMMIT_HISTORY: 'git:get-commit-history',
+  GIT_GET_COMMIT_DIFF: 'git:get-commit-diff',
+
+  // ==========================================================================
   // REBASE WATCHER CHANNELS
   // Auto-rebase on remote changes (on-demand mode)
   // ==========================================================================
@@ -227,6 +234,10 @@ export const IPC = {
   CONTRACT_GENERATE_FEATURE: 'contract:generate-feature',
   CONTRACT_GENERATE_ALL: 'contract:generate-all',
   CONTRACT_CANCEL_GENERATION: 'contract:cancel-generation',
+  // New: Repo structure analysis and README generation
+  CONTRACT_ANALYZE_REPO_STRUCTURE: 'contract:analyze-repo-structure',
+  CONTRACT_GENERATE_README: 'contract:generate-readme',
+  CONTRACT_ANALYZE_FEATURE_DEEP: 'contract:analyze-feature-deep',
   // Events
   CONTRACT_GENERATION_PROGRESS: 'contract:generation-progress',
   CONTRACT_GENERATION_COMPLETE: 'contract:generation-complete',

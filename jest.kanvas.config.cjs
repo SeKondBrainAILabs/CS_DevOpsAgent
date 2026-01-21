@@ -8,11 +8,12 @@ module.exports = {
   testMatch: [
     '**/tests/kanvas/**/*.test.ts',
     '**/tests/kanvas/**/*.test.tsx',
+    '**/tests/kanvas/**/*.integration.test.ts',
   ],
   testPathIgnorePatterns: [
     '/node_modules/',
-    '/local_deploy/',
     '/dist/',
+    '/tests/kanvas/fixtures/',
   ],
   modulePathIgnorePatterns: [
     '<rootDir>/local_deploy/',

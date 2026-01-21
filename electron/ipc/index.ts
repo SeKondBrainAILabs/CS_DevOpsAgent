@@ -481,6 +481,17 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   });
 
   // ==========================================================================
+  // COMMIT HISTORY HANDLERS
+  // ==========================================================================
+  ipcMain.handle(IPC.GIT_GET_COMMIT_HISTORY, async (_, repoPath: string, baseBranch?: string, limit?: number) => {
+    return services.git.getCommitHistory(repoPath, baseBranch, limit);
+  });
+
+  ipcMain.handle(IPC.GIT_GET_COMMIT_DIFF, async (_, repoPath: string, commitHash: string) => {
+    return services.git.getCommitDiff(repoPath, commitHash);
+  });
+
+  // ==========================================================================
   // CONTRACT DETECTION HANDLERS
   // ==========================================================================
   ipcMain.handle(IPC.CONTRACT_ANALYZE_COMMIT, async (_, repoPath: string, commitHash?: string) => {
@@ -560,6 +571,19 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   ipcMain.handle(IPC.CONTRACT_CANCEL_GENERATION, async () => {
     services.contractGeneration.cancelGeneration();
     return { success: true };
+  });
+
+  // New: Repo structure analysis and README generation
+  ipcMain.handle(IPC.CONTRACT_ANALYZE_REPO_STRUCTURE, async (_, repoPath: string) => {
+    return services.contractGeneration.analyzeRepoStructure(repoPath);
+  });
+
+  ipcMain.handle(IPC.CONTRACT_GENERATE_README, async (_, repoPath: string, structureAnalysis: unknown) => {
+    return services.contractGeneration.generateRepoReadme(repoPath, structureAnalysis as any);
+  });
+
+  ipcMain.handle(IPC.CONTRACT_ANALYZE_FEATURE_DEEP, async (_, repoPath: string, feature: unknown) => {
+    return services.contractGeneration.analyzeFeatureDeep(repoPath, feature as any);
   });
 
   // ==========================================================================

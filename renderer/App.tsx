@@ -12,6 +12,7 @@ import { Sidebar } from './components/layouts/Sidebar';
 import { StatusBar } from './components/layouts/StatusBar';
 import { DashboardCanvas } from './components/features/DashboardCanvas';
 import { SessionDetailView } from './components/features/SessionDetailView';
+import { UniversalCommitsView } from './components/features/UniversalCommitsView';
 import { NewSessionWizard } from './components/features/NewSessionWizard';
 import { CloseSessionDialog } from './components/features/CloseSessionDialog';
 import { SettingsModal } from './components/features/SettingsModal';
@@ -125,7 +126,11 @@ export default function App(): React.ReactElement {
     }
   };
 
+  const mainView = useUIStore((state) => state.mainView);
+  const setMainView = useUIStore((state) => state.setMainView);
+
   // Determine what to show in main content
+  // Priority: 1) Session detail, 2) Commits view, 3) Dashboard
   const mainContent = selectedSession ? (
     <SessionDetailView
       session={selectedSession}
@@ -133,9 +138,19 @@ export default function App(): React.ReactElement {
       onDelete={handleDeleteSession}
       onRestart={handleRestartSession}
     />
+  ) : mainView === 'commits' ? (
+    <UniversalCommitsView />
   ) : (
     <DashboardCanvas agent={selectedAgent} />
   );
+
+  // When selecting a session, switch back to dashboard view
+  const handleSelectSession = (sessionId: string | null) => {
+    if (sessionId) {
+      setMainView('dashboard');
+    }
+    setSelectedSession(sessionId);
+  };
 
   return (
     <div className="h-screen flex flex-col bg-surface text-text-primary">
