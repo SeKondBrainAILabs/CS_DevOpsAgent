@@ -14,7 +14,7 @@ import type {
   FileStatus,
   IpcResult,
 } from '../../shared/types';
-import execa from 'execa';
+import { execa } from 'execa';
 import { promises as fs } from 'fs';
 import { existsSync } from 'fs';
 import path from 'path';

@@ -4,7 +4,7 @@
  */
 
 import { BaseService } from './BaseService';
-import execa from 'execa';
+import { execa } from 'execa';
 import type { IpcResult, MergePreview, MergeResult } from '../../shared/types';
 
 export class MergeService extends BaseService {

@@ -12,7 +12,7 @@ import { existsSync, constants } from 'fs';
 import { join, basename } from 'path';
 import { BrowserWindow } from 'electron';
 import Store from 'electron-store';
-import execa from 'execa';
+import { execa } from 'execa';
 import { BaseService } from './BaseService';
 import { KANVAS_PATHS, FILE_COORDINATION_PATHS, DEVOPS_KIT_DIR } from '../../shared/agent-protocol';
 import { getAgentInstructions, generateClaudePrompt, InstructionVars } from '../../shared/agent-instructions';

@@ -1,0 +1,611 @@
+{
+  "packageJson": {
+    "name": "s9n-devops-agent",
+    "version": "2.0.18-dev.13",
+    "description": "CS_DevOpsAgent - Intelligent Git Automation System with multi-agent support and session management",
+    "type": "module",
+    "main": "src/cs-devops-agent-worker.js",
+    "bin": {
+      "s9n-devops-agent": "bin/cs-devops-agent"
+    },
+    "dependencies": {
+      "chokidar": "^3.5.3",
+      "execa": "^7.1.1",
+      "groq-sdk": "^0.37.0",
+      "openai": "^4.20.0"
+    },
+    "devDependencies": {
+      "@jest/globals": "^29.7.0",
+      "eslint": "^8.56.0",
+      "jest": "^29.7.0"
+    },
+    "scripts": {
+      "start": "./start-devops-session.sh",
+      "dev": "./start-devops-session.sh",
+      "devops": "./start-devops-session.sh",
+      "devops:list": "node src/session-coordinator.js list",
+      "devops:start": "node src/session-coordinator.js start",
+      "devops:close": "node src/close-session.js",
+      "devops:cleanup": "./cleanup-sessions.sh",
+      "chat": "node src/agent-chat.js",
+      "setup": "node src/setup-cs-devops-agent.js",
+      "house-rules:status": "node src/house-rules-manager.js status",
+      "house-rules:update": "node src/house-rules-manager.js update",
+      "house-rules:repair": "./scripts/repair-house-rules.sh",
+      "test": "NODE_OPTIONS=--experimental-vm-modules jest test_cases/",
+      "test:watch": "jest --watch",
+      "test:coverage": "jest --coverage",
+      "test:worktree": "jest test_cases/worktree/",
+      "test:e2e": "./test_scripts/test-e2e-multi-session.sh",
+      "test:contracts": "jest tests/integration/contract-workflow.test.js",
+      "test:push-behind": "jest test_scripts/push_behind_spec.js",
+      "test:debug": "./debug-failing-tests.sh"
+    }
+  },
+  "directoryStructure": {
+    "bin": [
+      "cs-devops-agent"
+    ],
+    "src": [
+      "agent-chat.js",
+      "agent-commands.js",
+      "branch-config-manager.js",
+      "claude-session-manager.js",
+      "close-session.js",
+      "credentials-manager.js",
+      "cs-devops-agent-worker.js",
+      "display-utils.cjs",
+      "docker-utils.js",
+      "enhanced-close-session.js",
+      "file-coordinator.cjs",
+      "file-monitor-enhanced.cjs",
+      "help-system.js",
+      "house-rules-manager.js",
+      "instruction-formatter.js",
+      "orphan-cleaner.js",
+      "run-with-agent.js",
+      "session-coordinator.js",
+      "setup-cs-devops-agent.js",
+      "tutorial-mode.js",
+      "ui-utils.js",
+      "weekly-consolidator.js",
+      "worktree-manager.js"
+    ]
+  },
+  "sourceFiles": [
+    {
+      "filename": "agent-chat.js",
+      "description": "AI-powered chat interface for DevOps session management",
+      "moduleType": "ES Module",
+      "exports": ["default (main function)"],
+      "mainFunctions": [
+        "initGroqClient - Initialize Groq API client",
+        "loadProjectContext - Load project settings from local_deploy",
+        "sendToGroq - Send messages to Groq LLM API",
+        "main - Main chat loop for interactive session"
+      ],
+      "dependencies": ["fs", "path", "readline", "groq-sdk", "child_process", "./credentials-manager.js", "./session-coordinator.js", "./ui-utils.js"]
+    },
+    {
+      "filename": "agent-commands.js",
+      "description": "Watches for special command files to trigger agent actions",
+      "moduleType": "CommonJS",
+      "exports": ["AgentCommandMonitor (class)"],
+      "mainFunctions": [
+        "startMonitoring - Check for command file every 5 seconds",
+        "checkForCommands - Process command file if exists",
+        "processCommand - Handle commands like CLOSE_SESSION, STATUS, PUSH",
+        "handleCloseSession - Commit changes, push, create cleanup marker",
+        "handleStatus - Show session status",
+        "handlePush - Push to remote"
+      ],
+      "dependencies": ["fs", "path", "child_process"]
+    },
+    {
+      "filename": "branch-config-manager.js",
+      "description": "Manages branch management settings in project-settings.json",
+      "moduleType": "CommonJS",
+      "exports": ["BranchConfigManager (class)"],
+      "mainFunctions": [
+        "loadSettings - Load project settings from JSON",
+        "saveSettings - Persist settings to JSON",
+        "displaySettings - Show current configuration",
+        "runConfigWizard - Interactive configuration wizard",
+        "getSetting/setSetting - Get/set individual settings",
+        "resetSettings - Reset to defaults",
+        "validateSettings - Validate configuration"
+      ],
+      "dependencies": ["fs", "path", "child_process", "readline"]
+    },
+    {
+      "filename": "claude-session-manager.js",
+      "description": "Manages Claude/Cline sessions with automatic worktree assignment",
+      "moduleType": "ES Module",
+      "exports": ["ClaudeSessionManager (class)"],
+      "mainFunctions": [
+        "startSession - Create new session with worktree",
+        "createWorktreeConfig - Create .claude-session.json in worktree",
+        "createVSCodeWorkspace - Create VS Code workspace file",
+        "getCurrentSession - Get session by current directory",
+        "listSessions - List all active sessions",
+        "endSession - End session with optional cleanup",
+        "startAgent - Generate command to start DevOps agent"
+      ],
+      "dependencies": ["fs", "path", "child_process", "url", "crypto"]
+    },
+    {
+      "filename": "close-session.js",
+      "description": "Handles session closure and cleanup",
+      "moduleType": "CommonJS",
+      "exports": ["CloseSession functions"],
+      "mainFunctions": [
+        "loadSettings - Load project settings",
+        "getActiveSessions - Get all active sessions from locks",
+        "closeSession - Merge and cleanup session",
+        "mergeBranch - Merge session to daily/target branch"
+      ],
+      "dependencies": ["fs", "path", "child_process", "readline"]
+    },
+    {
+      "filename": "credentials-manager.js",
+      "description": "Securely manages API credentials for Groq/OpenAI",
+      "moduleType": "ES Module",
+      "exports": ["credentialsManager (singleton)"],
+      "mainFunctions": [
+        "load - Load credentials from file",
+        "save - Persist credentials to file",
+        "setGroqApiKey - Store Groq API key",
+        "getGroqApiKey - Retrieve Groq API key",
+        "hasGroqApiKey - Check if key exists",
+        "injectEnv - Inject credentials into process.env",
+        "clearAll - Remove all credentials"
+      ],
+      "dependencies": ["fs", "path", "child_process", "url"]
+    },
+    {
+      "filename": "cs-devops-agent-worker.js",
+      "description": "Main worker that monitors files and auto-commits changes",
+      "moduleType": "ES Module",
+      "exports": ["DevOpsAgentWorker (class)"],
+      "mainFunctions": [
+        "start - Initialize file watching and monitoring",
+        "watchForChanges - Use chokidar to watch file changes",
+        "handleFileChange - Process file modifications",
+        "commitChanges - Stage and commit changes",
+        "pushChanges - Push to remote repository",
+        "handleCommitMessage - Read commit message file and trigger commit"
+      ],
+      "dependencies": ["fs", "path", "child_process", "chokidar", "./file-coordinator.cjs", "./file-monitor-enhanced.cjs", "./agent-commands.js", "./display-utils.cjs"]
+    },
+    {
+      "filename": "display-utils.cjs",
+      "description": "Console formatting utilities for clean output",
+      "moduleType": "CommonJS",
+      "exports": ["DisplayUtils (singleton instance)"],
+      "mainFunctions": [
+        "header - Print header box",
+        "section - Print section header",
+        "success/error/warning/info - Colored status messages",
+        "step - Progress indicator",
+        "keyValue - Print key-value pairs",
+        "table - Print formatted table",
+        "alertBox - Emoji-based alert boxes",
+        "progressBar - Progress bar display",
+        "sessionInfo - Display session information",
+        "menu - Print menu options",
+        "agentInstructions - Print AI agent instructions"
+      ],
+      "dependencies": []
+    },
+    {
+      "filename": "docker-utils.js",
+      "description": "Docker container management utilities",
+      "moduleType": "ES Module",
+      "exports": ["detectDockerCompose", "restartDockerContainers", "listDockerContainers"],
+      "mainFunctions": [
+        "detectDockerCompose - Find docker-compose files",
+        "restartDockerContainers - Restart containers after push",
+        "listDockerContainers - List running containers",
+        "rebuildContainers - Rebuild Docker containers"
+      ],
+      "dependencies": ["fs", "path", "child_process"]
+    },
+    {
+      "filename": "enhanced-close-session.js",
+      "description": "Enhanced session closing with dual merge support",
+      "moduleType": "CommonJS",
+      "exports": ["EnhancedSessionCloser (class)"],
+      "mainFunctions": [
+        "performDualMerge - Merge to both daily AND target branch",
+        "performSingleMerge - Single merge to daily branch",
+        "cleanupSessionFiles - Remove worktree and lock files",
+        "listSessions - Show all sessions",
+        "selectSession - Interactive session selection",
+        "closeSession - Complete session closure workflow",
+        "mergeAndCleanup - Merge branch and cleanup files"
+      ],
+      "dependencies": ["fs", "path", "child_process", "readline"]
+    },
+    {
+      "filename": "file-coordinator.cjs",
+      "description": "Multi-agent file coordination system for conflict detection",
+      "moduleType": "CommonJS",
+      "exports": ["FileCoordinator (class)"],
+      "mainFunctions": [
+        "findRepoRoot - Find git repository root",
+        "ensureDirectories - Create coordination directories",
+        "getActiveDeclarations - Get all agents' file declarations",
+        "checkFilesForConflicts - Check if files are locked by other agents",
+        "detectUndeclaredEdits - Find files edited without declaration",
+        "findOurDeclaration - Find this session's declaration file",
+        "createConflictReport - Generate conflict report markdown",
+        "moveToCompleted - Move declaration to completed folder",
+        "cleanupStaleDeclarations - Remove old declarations"
+      ],
+      "dependencies": ["fs", "path", "child_process"]
+    },
+    {
+      "filename": "file-monitor-enhanced.cjs",
+      "description": "Real-time file monitoring with conflict alerting",
+      "moduleType": "CommonJS",
+      "exports": ["EnhancedFileMonitor (class)"],
+      "mainFunctions": [
+        "detectChanges - Get git status and detect file changes",
+        "handleFileChange - Process newly changed file",
+        "updateOurDeclaredFiles - Refresh declared files list",
+        "alertUndeclared - Show warning for undeclared edit",
+        "alertConflict - Show error for file conflict",
+        "startMonitoring - Begin periodic file monitoring",
+        "watchDeclarations - Watch for declaration changes",
+        "stopMonitoring - Stop file monitoring"
+      ],
+      "dependencies": ["fs", "path", "child_process", "./file-coordinator.cjs", "./display-utils.cjs"]
+    },
+    {
+      "filename": "help-system.js",
+      "description": "Context-aware help system for DevOps Agent",
+      "moduleType": "ES Module",
+      "exports": ["helpTopics", "showTopicHelp", "showHelpMenu", "helpBrowser", "quickHelp"],
+      "mainFunctions": [
+        "showTopicHelp - Display help for specific topic",
+        "showHelpMenu - Show all available help topics",
+        "helpBrowser - Interactive help navigation",
+        "quickHelp - Context-sensitive quick help"
+      ],
+      "dependencies": ["./ui-utils.js"]
+    },
+    {
+      "filename": "house-rules-manager.js",
+      "description": "Manages house rules documentation for AI agents",
+      "moduleType": "CommonJS",
+      "exports": ["HouseRulesManager (class)"],
+      "mainFunctions": [
+        "loadHouseRules - Load house rules from docs/houserules.md",
+        "updateDevOpsSection - Update DevOps-managed sections",
+        "checkStatus - Check house rules status",
+        "repair - Self-healing for damaged rules"
+      ],
+      "dependencies": ["fs", "path", "child_process"]
+    },
+    {
+      "filename": "instruction-formatter.js",
+      "description": "Generates formatted instructions for AI assistants",
+      "moduleType": "ES Module",
+      "exports": ["formatInstructions", "formatCondensedInstructions", "formatResumeInstructions", "formatMultiAgentWarning", "formatClosingInstructions", "formatQuickReference", "createSession", "getAgentDisplayName"],
+      "mainFunctions": [
+        "formatInstructions - Full session instructions for AI",
+        "formatCondensedInstructions - Short-form for experienced users",
+        "formatResumeInstructions - Instructions for resuming session",
+        "formatMultiAgentWarning - Warning when agents conflict",
+        "formatClosingInstructions - Session close instructions",
+        "formatQuickReference - Quick reference card"
+      ],
+      "dependencies": ["path", "./ui-utils.js"]
+    },
+    {
+      "filename": "orphan-cleaner.js",
+      "description": "Detects and cleans up inactive/orphaned sessions",
+      "moduleType": "CommonJS",
+      "exports": ["OrphanedSessionCleaner (class)"],
+      "mainFunctions": [
+        "getLastCommitDate - Get last commit date for branch",
+        "branchExists - Check if branch exists",
+        "getDailyBranch - Get today's daily branch name",
+        "findOrphanedSessions - Find sessions inactive for threshold days",
+        "promptForOrphanCleanup - Interactive cleanup prompt",
+        "selectSessionsForCleanup - Select specific sessions",
+        "mergeBranch - Merge orphaned session branch",
+        "performDualMerge - Dual merge for orphaned session",
+        "cleanupSessionFiles - Remove session files/worktree",
+        "cleanupOrphanedSession - Full cleanup workflow",
+        "cleanupOrphans - Main cleanup process"
+      ],
+      "dependencies": ["fs", "path", "child_process", "readline"]
+    },
+    {
+      "filename": "run-with-agent.js",
+      "description": "Spawns DevOps agent worker with agent-specific environment",
+      "moduleType": "ES Module",
+      "exports": ["main"],
+      "mainFunctions": [
+        "detectAgent - Detect agent type from environment",
+        "parseArgs - Parse command line arguments",
+        "listWorktrees - List available git worktrees",
+        "main - Main entry point to start agent"
+      ],
+      "dependencies": ["fs", "path", "child_process", "url"],
+      "knownAgents": {
+        "claude": {"AC_MSG_FILE": ".claude-commit-msg", "AC_BRANCH_PREFIX": "claude_"},
+        "copilot": {"AC_MSG_FILE": ".copilot-commit-msg", "AC_BRANCH_PREFIX": "copilot_"},
+        "cursor": {"AC_MSG_FILE": ".cursor-commit-msg", "AC_BRANCH_PREFIX": "cursor_"},
+        "aider": {"AC_MSG_FILE": ".aider-commit-msg", "AC_BRANCH_PREFIX": "aider_"},
+        "warp": {"AC_MSG_FILE": ".warp-commit-msg", "AC_BRANCH_PREFIX": "warp_"}
+      }
+    },
+    {
+      "filename": "session-coordinator.js",
+      "description": "Central session coordinator for multi-agent management",
+      "moduleType": "ES Module",
+      "exports": ["SessionCoordinator (class)"],
+      "mainFunctions": [
+        "createSession - Create new session with worktree",
+        "listSessions - List all active sessions",
+        "resumeSession - Resume existing session",
+        "claimSession - Claim session for an agent",
+        "createWorktree - Create git worktree for session",
+        "createSessionLock - Create session lock file",
+        "generateSessionId - Generate unique session ID",
+        "interactiveSessionCreation - Interactive wizard for new session"
+      ],
+      "dependencies": ["fs", "path", "child_process", "readline", "url", "./ui-utils.js", "./worktree-manager.js", "./instruction-formatter.js"]
+    },
+    {
+      "filename": "setup-cs-devops-agent.js",
+      "description": "Setup wizard for first-time configuration",
+      "moduleType": "ES Module",
+      "exports": ["setup functions"],
+      "mainFunctions": [
+        "findProjectRoot - Find git repository root",
+        "setupNpmPackages - Install required npm packages",
+        "setupVSCodeSettings - Configure VS Code settings",
+        "setupVSCodeTasks - Create VS Code tasks",
+        "setupCommitFiles - Create agent commit message files",
+        "createRunScripts - Create personalized run scripts",
+        "setupEnvFile - Create .env configuration file",
+        "checkContractsExist - Check for house rules contracts",
+        "generateContracts - Generate house rules from templates"
+      ],
+      "dependencies": ["fs", "path", "child_process", "./credentials-manager.js", "./session-coordinator.js", "./ui-utils.js"]
+    },
+    {
+      "filename": "tutorial-mode.js",
+      "description": "Interactive tutorial for new users",
+      "moduleType": "ES Module",
+      "exports": ["runTutorial", "runQuickTutorial"],
+      "mainFunctions": [
+        "module1_understandingSessions - Tutorial on sessions",
+        "module2_creatingFirstSession - Tutorial on creating sessions",
+        "module3_workingWithAI - Tutorial on AI assistant integration",
+        "module4_multiAgent - Tutorial on multi-agent workflows",
+        "module5_advancedFeatures - Tutorial on advanced features",
+        "showCompletion - Tutorial completion summary",
+        "runTutorial - Full interactive tutorial",
+        "runQuickTutorial - Quick 5-minute tutorial"
+      ],
+      "dependencies": ["./ui-utils.js", "./help-system.js"]
+    },
+    {
+      "filename": "ui-utils.js",
+      "description": "Rich UI formatting utilities for console output",
+      "moduleType": "ES Module",
+      "exports": ["colors", "box", "status", "drawHeader", "drawSection", "drawBox", "success", "error", "warn", "info", "sectionTitle", "explain", "tip", "prompt", "confirm", "choose", "progressStep", "spinner", "showHelp", "showError", "showWelcome", "showCopyright"],
+      "mainFunctions": [
+        "drawHeader - Draw header box with title",
+        "drawSection - Draw section box",
+        "drawBox - Draw simple box",
+        "success/error/warn/info - Status messages",
+        "prompt - Prompt user for input",
+        "confirm - Yes/no confirmation",
+        "choose - Choice from list",
+        "progressStep - Progress indicator",
+        "spinner - Loading spinner animation",
+        "showHelp - Display contextual help",
+        "showError - Error with actionable guidance"
+      ],
+      "dependencies": ["readline"]
+    },
+    {
+      "filename": "weekly-consolidator.js",
+      "description": "Consolidates daily branches into weekly branches",
+      "moduleType": "CommonJS",
+      "exports": ["WeeklyConsolidator (class)"],
+      "mainFunctions": [
+        "getAllBranches - Get all remote branches",
+        "getLastWeekDailyBranches - Get dailies from last week",
+        "generateWeeklyBranchName - Generate weekly branch name",
+        "branchExists - Check if branch exists",
+        "createBranch - Create new branch from base",
+        "mergeBranch - Merge source to target branch",
+        "cleanupDailyBranches - Delete consolidated dailies",
+        "performDualMergeToTarget - Merge weekly to target branch",
+        "consolidateWeeklyBranches - Main consolidation process",
+        "listWeeklyBranches - List existing weekly branches",
+        "cleanupOldWeeklyBranches - Cleanup old weekly branches"
+      ],
+      "dependencies": ["fs", "path", "child_process"]
+    },
+    {
+      "filename": "worktree-manager.js",
+      "description": "Manages git worktrees for session isolation",
+      "moduleType": "ES Module",
+      "exports": ["WorktreeManager (class)"],
+      "mainFunctions": [
+        "createWorktree - Create git worktree for session",
+        "removeWorktree - Remove worktree",
+        "listWorktrees - List all worktrees",
+        "getWorktreePath - Get path for session worktree"
+      ],
+      "dependencies": ["fs", "path", "child_process"]
+    }
+  ],
+  "entryPointFlow": {
+    "description": "How CLI commands route to handlers",
+    "entryPoint": "bin/cs-devops-agent",
+    "commandRouting": {
+      "start|session|chat": "src/agent-chat.js - Kora Smart Assistant",
+      "worker": "src/cs-devops-agent-worker.js - Direct worker execution",
+      "setup": "src/setup-cs-devops-agent.js - Setup wizard",
+      "worktree": "src/worktree-manager.js - Worktree management",
+      "coordinator": "src/session-coordinator.js - Session operations",
+      "list": "src/session-coordinator.js list - List sessions",
+      "create": "src/session-coordinator.js create - Create session",
+      "resume": "src/session-coordinator.js resume - Resume session",
+      "close": "src/close-session.js - Close session",
+      "cleanup": "cleanup-sessions.sh - Cleanup stale sessions",
+      "creds": "Inline credentials management",
+      "tutorial": "src/tutorial-mode.js - Interactive tutorial",
+      "help-topics|help-browser": "src/help-system.js helpBrowser() - Interactive help",
+      "version": "Display package.json version",
+      "help": "Display usage information",
+      "default": "src/agent-chat.js - Kora Smart Assistant"
+    }
+  },
+  "keyPatterns": {
+    "sessionManagement": {
+      "description": "How sessions are created, managed, and closed",
+      "sessionCreation": {
+        "flow": [
+          "1. User runs 's9n-devops-agent start' or 'create'",
+          "2. session-coordinator.js generates unique session ID (timestamp + random bytes)",
+          "3. Creates git worktree in local_deploy/worktrees/<session-id>/",
+          "4. Creates session branch: session/<task>_<session-id>",
+          "5. Creates session lock file in local_deploy/session-locks/<session-id>.lock",
+          "6. Creates commit message file .devops-commit-<session-id>.msg",
+          "7. Generates formatted instructions for AI agent to paste"
+        ],
+        "keyFiles": [
+          "local_deploy/session-locks/<session-id>.lock - Session metadata",
+          "local_deploy/worktrees/<session-id>/ - Isolated git worktree",
+          ".devops-commit-<session-id>.msg - Commit message trigger file"
+        ]
+      },
+      "sessionStorage": {
+        "lockFiles": "local_deploy/session-locks/*.lock",
+        "worktrees": "local_deploy/worktrees/",
+        "projectSettings": "local_deploy/project-settings.json"
+      },
+      "sessionClosure": {
+        "flow": [
+          "1. User runs 's9n-devops-agent close'",
+          "2. Commit any pending changes",
+          "3. Merge session branch to daily branch (daily/<date>)",
+          "4. If dual merge enabled: also merge to target branch (development/main)",
+          "5. Delete session branch (local and remote)",
+          "6. Remove worktree directory",
+          "7. Remove session lock file"
+        ],
+        "dualMerge": "When enabled in project-settings.json, merges to both daily branch AND target branch"
+      }
+    },
+    "gitOperations": {
+      "description": "How git operations are handled throughout the codebase",
+      "executionMethod": "child_process.execSync for synchronous git commands",
+      "branchNaming": {
+        "session": "session/<task>_<session-id>",
+        "daily": "daily/<YYYY-MM-DD>",
+        "weekly": "weekly/<start-date>_to_<end-date>",
+        "agent-specific": "<agent>_<prefix>/<task>"
+      },
+      "worktreePattern": {
+        "location": "local_deploy/worktrees/<session-id>/",
+        "creation": "git worktree add -b <branch> <path> HEAD",
+        "removal": "git worktree remove --force <path>"
+      },
+      "mergePattern": {
+        "mergeType": "git merge --no-ff",
+        "pushAfterMerge": "git push origin <branch>",
+        "conflictHandling": "git merge --abort on failure"
+      },
+      "branchCleanup": {
+        "localDelete": "git branch -D <branch>",
+        "remoteDelete": "git push origin --delete <branch>"
+      }
+    },
+    "fileWatching": {
+      "description": "How file changes are detected and processed",
+      "library": "chokidar ^3.5.3",
+      "monitoredPaths": [
+        "Worktree directory for file changes",
+        "Commit message file (.devops-commit-<session-id>.msg)",
+        "File coordination directory (.file-coordination/active-edits/)"
+      ],
+      "triggerMechanism": {
+        "description": "Commit is triggered when commit message file is modified",
+        "flow": [
+          "1. chokidar watches worktree directory",
+          "2. When commit message file changes, read content",
+          "3. If content exists, run: git add -A && git commit -m <message>",
+          "4. Clear commit message file after successful commit",
+          "5. Push to remote if AC_PUSH is enabled"
+        ]
+      },
+      "conflictDetection": {
+        "implementation": "file-monitor-enhanced.cjs",
+        "checkInterval": "2000ms (2 seconds)",
+        "alerts": {
+          "orange": "File edited without declaration",
+          "red": "File locked by another agent"
+        }
+      }
+    },
+    "multiAgentCoordination": {
+      "description": "How multiple AI agents work without conflicts",
+      "fileCoordination": {
+        "declarationLocation": ".file-coordination/active-edits/<agent>-<session-id>.json",
+        "declarationFormat": {
+          "agent": "Agent name (claude, cursor, copilot, etc.)",
+          "session": "Session ID",
+          "files": "Array of files being edited",
+          "operation": "edit|read|delete",
+          "reason": "Description of work",
+          "declaredAt": "ISO timestamp",
+          "estimatedDuration": "Seconds (default 300)"
+        },
+        "conflictResolution": "Advisory locks - alert user for manual resolution"
+      },
+      "supportedAgents": ["claude", "copilot", "cursor", "aider", "warp", "cline"],
+      "isolation": "Each agent gets separate git worktree"
+    },
+    "configurationManagement": {
+      "projectSettings": {
+        "location": "local_deploy/project-settings.json",
+        "settings": {
+          "branchManagement": {
+            "enableDualMerge": "Merge to daily AND target",
+            "defaultMergeTarget": "Target branch for dual merge",
+            "enableWeeklyConsolidation": "Consolidate daily to weekly",
+            "orphanSessionThresholdDays": "Days before session is orphaned"
+          },
+          "cleanup": {
+            "retainWeeklyBranches": "Number of weekly branches to keep"
+          },
+          "versionPrefix": "Version number prefix",
+          "versionStartMinor": "Starting minor version",
+          "versionIncrement": "Version increment amount"
+        }
+      },
+      "credentials": {
+        "location": "local_deploy/credentials.json",
+        "stored": ["GROQ_API_KEY"]
+      }
+    }
+  },
+  "analysisMetadata": {
+    "generatedAt": "2026-01-10",
+    "totalSourceFiles": 23,
+    "moduleTypes": {
+      "esModule": 14,
+      "commonJS": 9
+    }
+  }
+}
