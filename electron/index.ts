@@ -54,7 +54,7 @@ async function createWindow(): Promise<void> {
       nodeIntegration: false,
       sandbox: false,
     },
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#ffffff',
     show: true,
   });
 
@@ -104,13 +104,24 @@ async function createWindow(): Promise<void> {
       console.log('Loading dev URL:', devServerUrl);
       await mainWindow.loadURL(devServerUrl);
     } else {
+      // Production: load from packaged files
+      // __dirname in production is inside app.asar/dist/electron
       const indexHtmlPath = join(__dirname, '../renderer/index.html');
-      console.log('ELECTRON_RENDERER_URL not set, loading file:', indexHtmlPath);
+      console.log('Production mode - app.isPackaged:', app.isPackaged);
+      console.log('__dirname:', __dirname);
+      console.log('Loading file:', indexHtmlPath);
+
+      // Verify the file exists (won't work in asar but helps debugging)
+      const { existsSync } = await import('fs');
+      console.log('File exists check:', existsSync(indexHtmlPath));
+
       await mainWindow.loadFile(indexHtmlPath);
     }
     console.log('Main window load completed');
   } catch (error) {
     console.error('Error loading main window:', error);
+    // Show error in window for debugging
+    mainWindow.webContents.loadURL(`data:text/html,<html><body style="background:#fff;color:#000;font-family:sans-serif;padding:40px;"><h1>Failed to load app</h1><pre>${error}</pre><p>__dirname: ${__dirname}</p></body></html>`);
   }
 
   // Open DevTools only when explicitly requested (Cmd+Option+I)
