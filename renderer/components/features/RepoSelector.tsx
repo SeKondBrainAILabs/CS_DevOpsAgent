@@ -37,14 +37,39 @@ export function RepoSelector({ selectedPath, onSelect, error }: RepoSelectorProp
     setIsValidating(true);
     try {
       const result = await window.api.instance.validateRepo(path);
+
       if (result.success && result.data) {
+        // Happy path: we got a RepoValidation object from the main process
         setValidation(result.data);
         if (result.data.isValid) {
           onSelect(path, result.data);
         }
+      } else {
+        // Validation failed at the IPC layer (e.g. git not available, command error, etc.)
+        console.error('Repository validation failed:', result.error);
+        setValidation({
+          isValid: false,
+          isGitRepo: false,
+          repoName: '',
+          currentBranch: '',
+          remoteUrl: undefined,
+          hasKanvasDir: false,
+          branches: [],
+          error: result.error?.message || 'Failed to validate repository',
+        });
       }
     } catch (err) {
       console.error('Validation error:', err);
+      setValidation({
+        isValid: false,
+        isGitRepo: false,
+        repoName: '',
+        currentBranch: '',
+        remoteUrl: undefined,
+        hasKanvasDir: false,
+        branches: [],
+        error: err instanceof Error ? err.message : 'Unexpected validation error',
+      });
     } finally {
       setIsValidating(false);
     }

@@ -51,7 +51,19 @@ function loadTreeSitter(): boolean {
     console.log('[ASTParserService] Tree-sitter modules loaded successfully');
     return true;
   } catch (error) {
-    console.error('[ASTParserService] Failed to load tree-sitter modules:', error);
+    // Tree-sitter is an optional native dependency. If it's not installed or fails to
+    // load, we should degrade gracefully without noisy stack traces in the console.
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (typeof message === 'string' && message.includes("Cannot find module 'tree-sitter'")) {
+      console.warn(
+        '[ASTParserService] Tree-sitter not installed; AST-based analysis is disabled. ' +
+        'Install the optional dependency "tree-sitter" to enable advanced analysis features.'
+      );
+    } else {
+      console.warn('[ASTParserService] Failed to load tree-sitter modules:', error);
+    }
+
     Parser = null;
     return false;
   }

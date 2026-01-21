@@ -12,6 +12,7 @@ import { existsSync, constants } from 'fs';
 import { join, basename } from 'path';
 import { BrowserWindow } from 'electron';
 import Store from 'electron-store';
+import execa from 'execa';
 import { BaseService } from './BaseService';
 import { KANVAS_PATHS, FILE_COORDINATION_PATHS, DEVOPS_KIT_DIR } from '../../shared/agent-protocol';
 import { getAgentInstructions, generateClaudePrompt, InstructionVars } from '../../shared/agent-instructions';
@@ -133,7 +134,6 @@ export class AgentInstanceService extends BaseService {
       }
 
       // Get repository info using git commands
-      const { execa } = await import('execa');
 
       // Get current branch
       const branchResult = await execa('git', ['branch', '--show-current'], { cwd: repoPath });
@@ -1088,8 +1088,6 @@ ${DEVOPS_KIT_DIR}/
     worktreePath: string
   ): Promise<{ committed: boolean; message?: string }> {
     try {
-      const { execa } = await import('execa');
-
       // Check if there are uncommitted changes
       const statusResult = await execa('git', ['status', '--porcelain'], { cwd: worktreePath });
       const hasChanges = statusResult.stdout.trim().length > 0;
@@ -1448,8 +1446,6 @@ ${DEVOPS_KIT_DIR}/
     const lastCommit = sessionState?.lastProcessedCommit;
 
     try {
-      const { execa } = await import('execa');
-
       // Get commits since last processed commit
       let gitArgs: string[];
       if (lastCommit) {
