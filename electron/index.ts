@@ -38,16 +38,22 @@ async function checkForOrphanedSessions(svc: Services | null): Promise<void> {
 }
 
 async function createWindow(): Promise<void> {
-  const iconPath = join(__dirname, '../../resources/icon.png');
+  // Icon path differs between dev and production
+  // In production, macOS uses the bundled .icns automatically
+  const iconPath = app.isPackaged
+    ? join(process.resourcesPath, 'icon.icns')
+    : join(__dirname, '../../resources/icon.png');
 
   console.log('Creating BrowserWindow...');
+  console.log('app.isPackaged:', app.isPackaged);
+  console.log('Icon path:', iconPath);
 
-  mainWindow = new BrowserWindow({
+  // Build window options - only set icon in development
+  const windowOptions: Electron.BrowserWindowConstructorOptions = {
     width: 1400,
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    icon: iconPath,
     webPreferences: {
       preload: join(__dirname, '../preload/preload.mjs'),
       contextIsolation: true,
@@ -56,12 +62,19 @@ async function createWindow(): Promise<void> {
     },
     backgroundColor: '#ffffff',
     show: true,
-  });
+  };
+
+  // Only set icon explicitly in development (production uses bundled .icns)
+  if (!app.isPackaged) {
+    windowOptions.icon = iconPath;
+  }
+
+  mainWindow = new BrowserWindow(windowOptions);
 
   console.log('BrowserWindow created');
 
-  // Set dock icon on macOS
-  if (process.platform === 'darwin' && app.dock) {
+  // Set dock icon on macOS (only in dev, production uses bundled icon)
+  if (!app.isPackaged && process.platform === 'darwin' && app.dock) {
     app.dock.setIcon(iconPath);
   }
 
