@@ -14,7 +14,6 @@ import type {
   FileStatus,
   IpcResult,
 } from '../../shared/types';
-import { execa } from 'execa';
 import { promises as fs } from 'fs';
 import { existsSync } from 'fs';
 import path from 'path';
@@ -24,9 +23,10 @@ const worktreePaths: Map<string, { repoPath: string; worktreePath: string }> = n
 
 export class GitService extends BaseService {
   /**
-   * Execute a git command
+   * Execute a git command (uses dynamic import for ESM-only execa)
    */
   private async git(args: string[], cwd: string): Promise<string> {
+    const { execa } = await import('execa');
     const { stdout } = await execa('git', args, { cwd });
     return stdout.trim();
   }

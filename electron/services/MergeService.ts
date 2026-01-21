@@ -4,15 +4,15 @@
  */
 
 import { BaseService } from './BaseService';
-import { execa } from 'execa';
 import type { IpcResult, MergePreview, MergeResult } from '../../shared/types';
 
 export class MergeService extends BaseService {
   /**
-   * Execute a git command
+   * Execute a git command (uses dynamic import for ESM-only execa)
    */
   private async git(args: string[], cwd: string): Promise<{ stdout: string; exitCode: number }> {
     try {
+      const { execa } = await import('execa');
       const result = await execa('git', args, { cwd, reject: false });
       return { stdout: result.stdout.trim(), exitCode: result.exitCode ?? 0 };
     } catch (error) {

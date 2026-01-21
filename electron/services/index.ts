@@ -24,6 +24,7 @@ import { QuickActionService } from './QuickActionService';
 import { MergeService } from './MergeService';
 import { HeartbeatService } from './HeartbeatService';
 import { CommitAnalysisService } from './CommitAnalysisService';
+import { DebugLogService } from './DebugLogService';
 import { databaseService } from './DatabaseService';
 import {
   initializeAnalysisServices,
@@ -58,6 +59,7 @@ export interface Services {
   merge: MergeService;
   heartbeat: HeartbeatService;
   commitAnalysis: CommitAnalysisService;
+  debugLog: DebugLogService;
   // Analysis services (Phase 1)
   astParser: ASTParserService;
   repositoryAnalysis: RepositoryAnalysisService;
@@ -79,6 +81,10 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // Initialize database service first (stores activities, settings, logs)
   await databaseService.initialize();
   console.log('[Services] Database initialized');
+
+  // Initialize Debug Log service early (for logging during initialization)
+  const debugLog = new DebugLogService();
+  await debugLog.initialize();
 
   // Initialize config service (other services may depend on it)
   const config = new ConfigService();
@@ -218,6 +224,7 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     merge,
     heartbeat,
     commitAnalysis,
+    debugLog,
     // Analysis services (Phase 1)
     astParser: analysisServices.astParser,
     repositoryAnalysis: analysisServices.repositoryAnalysis,
@@ -291,6 +298,7 @@ export { QuickActionService } from './QuickActionService';
 export { MergeService } from './MergeService';
 export { HeartbeatService } from './HeartbeatService';
 export { CommitAnalysisService } from './CommitAnalysisService';
+export { DebugLogService } from './DebugLogService';
 export { databaseService } from './DatabaseService';
 // Analysis services (Phase 1 + Phase 2 + Phase 3)
 export {

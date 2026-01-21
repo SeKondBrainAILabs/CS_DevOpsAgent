@@ -312,6 +312,16 @@ export const IPC = {
   COMMIT_GET_ENHANCED_ENABLED: 'commit:get-enhanced-enabled',
 
   // ==========================================================================
+  // DEBUG LOG CHANNELS
+  // ==========================================================================
+  DEBUG_LOG_GET_RECENT: 'debug-log:get-recent',
+  DEBUG_LOG_EXPORT: 'debug-log:export',
+  DEBUG_LOG_CLEAR: 'debug-log:clear',
+  DEBUG_LOG_GET_STATS: 'debug-log:get-stats',
+  DEBUG_LOG_GET_PATH: 'debug-log:get-path',
+  DEBUG_LOG_OPEN_FOLDER: 'debug-log:open-folder',
+
+  // ==========================================================================
   // APP CHANNELS
   // ==========================================================================
   APP_GET_VERSION: 'app:getVersion',

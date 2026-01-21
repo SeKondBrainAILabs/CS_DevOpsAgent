@@ -12,8 +12,13 @@ import { existsSync, constants } from 'fs';
 import { join, basename } from 'path';
 import { BrowserWindow } from 'electron';
 import Store from 'electron-store';
-import { execa } from 'execa';
 import { BaseService } from './BaseService';
+
+// Dynamic import helper for execa (ESM-only module)
+async function execaCmd(cmd: string, args: string[], options?: { cwd?: string }): Promise<{ stdout: string; stderr: string }> {
+  const { execa } = await import('execa');
+  return execa(cmd, args, options);
+}
 import { KANVAS_PATHS, FILE_COORDINATION_PATHS, DEVOPS_KIT_DIR } from '../../shared/agent-protocol';
 import { getAgentInstructions, generateClaudePrompt, InstructionVars } from '../../shared/agent-instructions';
 import type {
@@ -136,17 +141,17 @@ export class AgentInstanceService extends BaseService {
       // Get repository info using git commands
 
       // Get current branch
-      const branchResult = await execa('git', ['branch', '--show-current'], { cwd: repoPath });
+      const branchResult = await execaCmd('git', ['branch', '--show-current'], { cwd: repoPath });
       const currentBranch = branchResult.stdout.trim() || 'HEAD';
 
       // Get all branches
-      const branchesResult = await execa('git', ['branch', '-a', '--format=%(refname:short)'], { cwd: repoPath });
+      const branchesResult = await execaCmd('git', ['branch', '-a', '--format=%(refname:short)'], { cwd: repoPath });
       const branches = branchesResult.stdout.split('\n').filter(Boolean);
 
       // Get remote URL
       let remoteUrl: string | undefined;
       try {
-        const remoteResult = await execa('git', ['remote', 'get-url', 'origin'], { cwd: repoPath });
+        const remoteResult = await execaCmd('git', ['remote', 'get-url', 'origin'], { cwd: repoPath });
         remoteUrl = remoteResult.stdout.trim();
       } catch {
         // No remote configured
@@ -498,18 +503,16 @@ ${DEVOPS_KIT_DIR}/
    */
   private async createBranchIfNeeded(config: AgentInstanceConfig): Promise<void> {
     try {
-      const { execa } = await import('execa');
-
       // Check if branch exists
-      const branchResult = await execa('git', ['branch', '--list', config.branchName], { cwd: config.repoPath });
+      const branchResult = await execaCmd('git', ['branch', '--list', config.branchName], { cwd: config.repoPath });
 
       if (!branchResult.stdout.trim()) {
         // Branch doesn't exist, create it
-        await execa('git', ['checkout', '-b', config.branchName, config.baseBranch], { cwd: config.repoPath });
+        await execaCmd('git', ['checkout', '-b', config.branchName, config.baseBranch], { cwd: config.repoPath });
         console.log(`[AgentInstanceService] Created branch ${config.branchName} from ${config.baseBranch}`);
 
         // Switch back to original branch
-        await execa('git', ['checkout', '-'], { cwd: config.repoPath });
+        await execaCmd('git', ['checkout', '-'], { cwd: config.repoPath });
       }
     } catch (error) {
       console.warn(`[AgentInstanceService] Could not create branch: ${error}`);
@@ -523,8 +526,6 @@ ${DEVOPS_KIT_DIR}/
    */
   private async createWorktreeIfNeeded(config: AgentInstanceConfig): Promise<string> {
     try {
-      const { execa } = await import('execa');
-
       // Worktree directory: local_deploy/{branchName}
       const worktreeDir = join(config.repoPath, 'local_deploy', config.branchName);
 
@@ -541,7 +542,7 @@ ${DEVOPS_KIT_DIR}/
       }
 
       // Create worktree
-      await execa('git', ['worktree', 'add', worktreeDir, config.branchName], { cwd: config.repoPath });
+      await execaCmd('git', ['worktree', 'add', worktreeDir, config.branchName], { cwd: config.repoPath });
       console.log(`[AgentInstanceService] Created worktree at ${worktreeDir} for branch ${config.branchName}`);
 
       // Initialize .S9N_KIT_DevOpsAgent in the worktree
@@ -1089,7 +1090,7 @@ ${DEVOPS_KIT_DIR}/
   ): Promise<{ committed: boolean; message?: string }> {
     try {
       // Check if there are uncommitted changes
-      const statusResult = await execa('git', ['status', '--porcelain'], { cwd: worktreePath });
+      const statusResult = await execaCmd('git', ['status', '--porcelain'], { cwd: worktreePath });
       const hasChanges = statusResult.stdout.trim().length > 0;
 
       if (!hasChanges) {
@@ -1117,7 +1118,7 @@ ${DEVOPS_KIT_DIR}/
       }
 
       // Stage all changes
-      await execa('git', ['add', '-A'], { cwd: worktreePath });
+      await execaCmd('git', ['add', '-A'], { cwd: worktreePath });
 
       // Create consolidated commit message
       let commitMessage: string;
@@ -1129,7 +1130,7 @@ ${DEVOPS_KIT_DIR}/
       }
 
       // Commit
-      await execa('git', ['commit', '-m', commitMessage], { cwd: worktreePath });
+      await execaCmd('git', ['commit', '-m', commitMessage], { cwd: worktreePath });
 
       console.log(`[AgentInstanceService] Committed ${commitMessages.length > 0 ? 'consolidated' : 'pending'} changes`);
       return { committed: true, message: commitMessage.split('\n')[0] };
@@ -1456,7 +1457,7 @@ ${DEVOPS_KIT_DIR}/
         gitArgs = ['log', '-10', '--format=%H|%s|%aI', '--reverse'];
       }
 
-      const result = await execa('git', gitArgs, { cwd: worktreePath });
+      const result = await execaCmd('git', gitArgs, { cwd: worktreePath });
       const lines = result.stdout.trim().split('\n').filter(Boolean);
 
       const commits = lines.map(line => {

@@ -982,6 +982,39 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   });
 
   // ==========================================================================
+  // DEBUG LOG HANDLERS
+  // ==========================================================================
+  ipcMain.handle(IPC.DEBUG_LOG_GET_RECENT, async (_, count?: number, level?: string) => {
+    return services.debugLog.getRecentLogs(count, level as any);
+  });
+
+  ipcMain.handle(IPC.DEBUG_LOG_EXPORT, async () => {
+    return services.debugLog.exportLogs();
+  });
+
+  ipcMain.handle(IPC.DEBUG_LOG_CLEAR, async () => {
+    return services.debugLog.clearLogs();
+  });
+
+  ipcMain.handle(IPC.DEBUG_LOG_GET_STATS, async () => {
+    return services.debugLog.getLogStats();
+  });
+
+  ipcMain.handle(IPC.DEBUG_LOG_GET_PATH, async () => {
+    return services.debugLog.getLogFilePath();
+  });
+
+  ipcMain.handle(IPC.DEBUG_LOG_OPEN_FOLDER, async () => {
+    const pathResult = services.debugLog.getLogDirectory();
+    if (pathResult.success && pathResult.data) {
+      const { shell } = await import('electron');
+      shell.openPath(pathResult.data);
+      return { success: true };
+    }
+    return { success: false, error: { code: 'PATH_NOT_FOUND', message: 'Log directory not found' } };
+  });
+
+  // ==========================================================================
   // APP HANDLERS
   // ==========================================================================
   ipcMain.handle(IPC.APP_GET_VERSION, () => {

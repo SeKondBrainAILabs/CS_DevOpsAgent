@@ -9,8 +9,13 @@
 import { BaseService } from './BaseService';
 import type { IpcResult } from '../../shared/types';
 import type { AIService } from './AIService';
-import { execa } from 'execa';
 import * as path from 'path';
+
+// Dynamic import helper for execa (ESM-only module)
+async function execaCmd(cmd: string, args: string[], options?: { cwd?: string }): Promise<{ stdout: string; stderr: string }> {
+  const { execa } = await import('execa');
+  return execa(cmd, args, options);
+}
 
 export interface FileChangeAnalysis {
   path: string;
@@ -123,7 +128,7 @@ export class CommitAnalysisService extends BaseService {
 
     try {
       // Get list of staged files
-      const stagedResult = await execa('git', ['diff', '--cached', '--name-status'], { cwd: repoPath });
+      const stagedResult = await execaCmd('git', ['diff', '--cached', '--name-status'], { cwd: repoPath });
       const stagedLines = stagedResult.stdout.split('\n').filter(Boolean);
 
       if (stagedLines.length === 0) {
@@ -134,11 +139,11 @@ export class CommitAnalysisService extends BaseService {
       }
 
       // Also get unstaged changes for complete picture
-      const unstagedResult = await execa('git', ['diff', '--name-status'], { cwd: repoPath });
+      const unstagedResult = await execaCmd('git', ['diff', '--name-status'], { cwd: repoPath });
       const unstagedLines = unstagedResult.stdout.split('\n').filter(Boolean);
 
       // Get untracked files
-      const untrackedResult = await execa('git', ['ls-files', '--others', '--exclude-standard'], { cwd: repoPath });
+      const untrackedResult = await execaCmd('git', ['ls-files', '--others', '--exclude-standard'], { cwd: repoPath });
       const untrackedFiles = untrackedResult.stdout.split('\n').filter(Boolean);
 
       // Combine all changes
@@ -212,7 +217,7 @@ export class CommitAnalysisService extends BaseService {
 
     try {
       // Get files changed in the commit
-      const showResult = await execa(
+      const showResult = await execaCmd(
         'git',
         ['show', '--name-status', '--format=', commitHash],
         { cwd: repoPath }
@@ -280,18 +285,18 @@ export class CommitAnalysisService extends BaseService {
       if (status !== 'deleted') {
         try {
           // Get staged diff
-          const stagedDiff = await execa('git', ['diff', '--cached', '--', filePath], { cwd: repoPath })
+          const stagedDiff = await execaCmd('git', ['diff', '--cached', '--', filePath], { cwd: repoPath })
             .then(r => r.stdout)
             .catch(() => '');
 
           // Get unstaged diff
-          const unstagedDiff = await execa('git', ['diff', '--', filePath], { cwd: repoPath })
+          const unstagedDiff = await execaCmd('git', ['diff', '--', filePath], { cwd: repoPath })
             .then(r => r.stdout)
             .catch(() => '');
 
           // For untracked files
           if (!stagedDiff && !unstagedDiff && statusCode === 'A') {
-            const content = await execa('cat', [filePath], { cwd: repoPath })
+            const content = await execaCmd('cat', [filePath], { cwd: repoPath })
               .then(r => r.stdout)
               .catch(() => '');
             diff = `+++ new file\n${content.split('\n').map(l => `+ ${l}`).join('\n')}`;
@@ -353,7 +358,7 @@ export class CommitAnalysisService extends BaseService {
       let deletions = 0;
 
       try {
-        const diffResult = await execa(
+        const diffResult = await execaCmd(
           'git',
           ['show', '--format=', commitHash, '--', filePath],
           { cwd: repoPath }
