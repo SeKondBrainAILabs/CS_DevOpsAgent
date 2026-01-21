@@ -17,7 +17,8 @@ import type {
 import { IPC } from '../../shared/ipc-channels';
 import { promises as fs } from 'fs';
 import path from 'path';
-import { globSync } from 'glob';
+import pkg from 'glob';
+const { globSync } = pkg;
 import type { AIService } from './AIService';
 import type { ContractRegistryService } from './ContractRegistryService';
 import { KANVAS_PATHS } from '../../shared/agent-protocol';
