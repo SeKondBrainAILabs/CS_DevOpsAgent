@@ -301,6 +301,17 @@ export const IPC = {
   MERGE_ABORT: 'merge:abort',
 
   // ==========================================================================
+  // COMMIT ANALYSIS CHANNELS
+  // AI-powered commit message generation from file diffs
+  // ==========================================================================
+  COMMIT_ANALYZE_STAGED: 'commit:analyze-staged',
+  COMMIT_ANALYZE_COMMIT: 'commit:analyze-commit',
+  COMMIT_GENERATE_MESSAGE: 'commit:generate-message',
+  COMMIT_ENHANCE_MESSAGE: 'commit:enhance-message',
+  COMMIT_SET_ENHANCED_ENABLED: 'commit:set-enhanced-enabled',
+  COMMIT_GET_ENHANCED_ENABLED: 'commit:get-enhanced-enabled',
+
+  // ==========================================================================
   // APP CHANNELS
   // ==========================================================================
   APP_GET_VERSION: 'app:getVersion',
