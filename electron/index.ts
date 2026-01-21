@@ -93,16 +93,24 @@ async function createWindow(): Promise<void> {
     }, 1500);
   });
 
-  // Load the app - electron-vite sets ELECTRON_RENDERER_URL
-  const devServerUrl = process.env.ELECTRON_RENDERER_URL || 'http://localhost:5173';
-  console.log('ELECTRON_RENDERER_URL:', process.env.ELECTRON_RENDERER_URL);
-  console.log('Loading URL:', devServerUrl);
+  // Load the app
+  // In development, electron-vite sets ELECTRON_RENDERER_URL to the dev server URL
+  // In production, we load the built index.html from disk
+  const devServerUrl = process.env.ELECTRON_RENDERER_URL;
 
   try {
-    await mainWindow.loadURL(devServerUrl);
-    console.log('loadURL completed');
+    if (devServerUrl) {
+      console.log('ELECTRON_RENDERER_URL:', devServerUrl);
+      console.log('Loading dev URL:', devServerUrl);
+      await mainWindow.loadURL(devServerUrl);
+    } else {
+      const indexHtmlPath = join(__dirname, '../renderer/index.html');
+      console.log('ELECTRON_RENDERER_URL not set, loading file:', indexHtmlPath);
+      await mainWindow.loadFile(indexHtmlPath);
+    }
+    console.log('Main window load completed');
   } catch (error) {
-    console.error('loadURL error:', error);
+    console.error('Error loading main window:', error);
   }
 
   // Open DevTools only when explicitly requested (Cmd+Option+I)
