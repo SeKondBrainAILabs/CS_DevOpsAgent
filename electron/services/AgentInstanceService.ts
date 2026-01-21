@@ -1123,7 +1123,7 @@ ${DEVOPS_KIT_DIR}/
       if (lastCommit) {
         try {
           // Get all commit messages since last processed commit
-          const logResult = await execa(
+          const logResult = await execaCmd(
             'git',
             ['log', `${lastCommit}..HEAD`, '--format=%s', '--reverse'],
             { cwd: worktreePath }
