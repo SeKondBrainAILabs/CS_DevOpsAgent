@@ -136,8 +136,10 @@ export function CreateAgentWizard({ onClose }: CreateAgentWizardProps): React.Re
   const handleAgentSelect = (type: AgentType) => {
     setAgentType(type);
     setError(null);
+    // Generate unique branch name with date + short random suffix to avoid collisions
     const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    setSettings(s => ({ ...s, branchName: `${type}-session-${timestamp}` }));
+    const uniqueSuffix = Math.random().toString(36).substring(2, 6);
+    setSettings(s => ({ ...s, branchName: `${type}-session-${timestamp}-${uniqueSuffix}` }));
     setTimeout(() => setCurrentStep('workflow'), 300);
   };
 

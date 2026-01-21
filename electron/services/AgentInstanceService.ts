@@ -324,6 +324,23 @@ ${DEVOPS_KIT_DIR}/
         }
       }
 
+      // Check if branch name is already in use by an active session
+      const existingSession = Array.from(this.instances.values()).find(
+        inst => inst.config.branchName === config.branchName &&
+                inst.config.repoPath === config.repoPath &&
+                inst.status !== 'completed' &&
+                inst.status !== 'closed'
+      );
+      if (existingSession) {
+        return {
+          success: false,
+          error: {
+            code: 'BRANCH_IN_USE',
+            message: `Branch "${config.branchName}" is already in use by an active session. Please use a different branch name.`,
+          },
+        };
+      }
+
       // Generate unique ID
       const id = `inst_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
