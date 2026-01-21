@@ -23,6 +23,7 @@ import { TerminalLogService } from './TerminalLogService';
 import { QuickActionService } from './QuickActionService';
 import { MergeService } from './MergeService';
 import { HeartbeatService } from './HeartbeatService';
+import { CommitAnalysisService } from './CommitAnalysisService';
 import { databaseService } from './DatabaseService';
 import {
   initializeAnalysisServices,
@@ -56,6 +57,7 @@ export interface Services {
   quickAction: QuickActionService;
   merge: MergeService;
   heartbeat: HeartbeatService;
+  commitAnalysis: CommitAnalysisService;
   // Analysis services (Phase 1)
   astParser: ASTParserService;
   repositoryAnalysis: RepositoryAnalysisService;
@@ -168,6 +170,11 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   const heartbeat = new HeartbeatService();
   heartbeat.setMainWindow(mainWindow);
 
+  // Initialize Commit Analysis service
+  // For AI-powered commit message generation from file diffs
+  const commitAnalysis = new CommitAnalysisService();
+  commitAnalysis.setAIService(ai);
+
   // Initialize Analysis services
   // For AST parsing, repository analysis, and API extraction
   const analysisServices = await initializeAnalysisServices();
@@ -186,6 +193,9 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     analysisServices.astParser,
     analysisServices.repositoryAnalysis
   );
+
+  // Connect commit analysis service to watcher for enhanced commit messages
+  watcher.setCommitAnalysisService(commitAnalysis);
 
   services = {
     session,
@@ -207,6 +217,7 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     quickAction,
     merge,
     heartbeat,
+    commitAnalysis,
     // Analysis services (Phase 1)
     astParser: analysisServices.astParser,
     repositoryAnalysis: analysisServices.repositoryAnalysis,
@@ -279,6 +290,7 @@ export { TerminalLogService } from './TerminalLogService';
 export { QuickActionService } from './QuickActionService';
 export { MergeService } from './MergeService';
 export { HeartbeatService } from './HeartbeatService';
+export { CommitAnalysisService } from './CommitAnalysisService';
 export { databaseService } from './DatabaseService';
 // Analysis services (Phase 1 + Phase 2 + Phase 3)
 export {

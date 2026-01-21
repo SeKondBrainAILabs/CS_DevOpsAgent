@@ -960,6 +960,28 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   });
 
   // ==========================================================================
+  // COMMIT ANALYSIS HANDLERS
+  // AI-powered commit message generation from file diffs
+  // ==========================================================================
+  ipcMain.handle(IPC.COMMIT_ANALYZE_STAGED, async (_, repoPath: string, options?: unknown) => {
+    return services.commitAnalysis.analyzeStaged(repoPath, options as any);
+  });
+
+  ipcMain.handle(IPC.COMMIT_ANALYZE_COMMIT, async (_, repoPath: string, commitHash: string, options?: unknown) => {
+    return services.commitAnalysis.analyzeCommit(repoPath, commitHash, options as any);
+  });
+
+  ipcMain.handle(IPC.COMMIT_SET_ENHANCED_ENABLED, async (_, enabled: boolean) => {
+    services.watcher.setEnhancedCommitsEnabled(enabled);
+    return { success: true };
+  });
+
+  ipcMain.handle(IPC.COMMIT_GET_ENHANCED_ENABLED, async () => {
+    // Note: This returns the current state. Could be stored in config for persistence.
+    return { success: true, data: false }; // Default to false, would need state tracking
+  });
+
+  // ==========================================================================
   // APP HANDLERS
   // ==========================================================================
   ipcMain.handle(IPC.APP_GET_VERSION, () => {

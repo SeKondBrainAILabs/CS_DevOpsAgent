@@ -1583,6 +1583,79 @@ const api = {
       ipcRenderer.invoke(IPC.MERGE_ABORT, repoPath),
   },
 
+  // ==========================================================================
+  // COMMIT ANALYSIS API
+  // AI-powered commit message generation from file diffs
+  // ==========================================================================
+  commitAnalysis: {
+    analyzeStaged: (repoPath: string, options?: {
+      includeBody?: boolean;
+      maxFilesToAnalyze?: number;
+      contextTask?: string;
+      contextBranch?: string;
+      useAI?: boolean;
+    }): Promise<IpcResult<{
+      overallType: 'feat' | 'fix' | 'refactor' | 'docs' | 'style' | 'test' | 'build' | 'ci' | 'chore' | 'perf';
+      scope: string | null;
+      subject: string;
+      body: string;
+      breakingChange: boolean;
+      filesAnalyzed: Array<{
+        path: string;
+        status: 'added' | 'modified' | 'deleted' | 'renamed';
+        additions: number;
+        deletions: number;
+        diff: string;
+        language: string;
+        changeType: 'feature' | 'fix' | 'refactor' | 'style' | 'docs' | 'test' | 'config' | 'other';
+        summary: string;
+      }>;
+      suggestedMessage: string;
+      alternativeMessages: string[];
+    }>> =>
+      ipcRenderer.invoke(IPC.COMMIT_ANALYZE_STAGED, repoPath, options),
+
+    analyzeCommit: (repoPath: string, commitHash: string, options?: {
+      includeBody?: boolean;
+      maxFilesToAnalyze?: number;
+      contextTask?: string;
+      contextBranch?: string;
+      useAI?: boolean;
+    }): Promise<IpcResult<{
+      overallType: 'feat' | 'fix' | 'refactor' | 'docs' | 'style' | 'test' | 'build' | 'ci' | 'chore' | 'perf';
+      scope: string | null;
+      subject: string;
+      body: string;
+      breakingChange: boolean;
+      filesAnalyzed: Array<{
+        path: string;
+        status: 'added' | 'modified' | 'deleted' | 'renamed';
+        additions: number;
+        deletions: number;
+        diff: string;
+        language: string;
+        changeType: 'feature' | 'fix' | 'refactor' | 'style' | 'docs' | 'test' | 'config' | 'other';
+        summary: string;
+      }>;
+      suggestedMessage: string;
+      alternativeMessages: string[];
+    }>> =>
+      ipcRenderer.invoke(IPC.COMMIT_ANALYZE_COMMIT, repoPath, commitHash, options),
+
+    /**
+     * Enable/disable automatic AI-enhanced commit messages
+     * When enabled, commits will analyze actual file diffs to generate detailed messages
+     */
+    setEnhancedEnabled: (enabled: boolean): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.COMMIT_SET_ENHANCED_ENABLED, enabled),
+
+    /**
+     * Get whether enhanced commit messages are enabled
+     */
+    getEnhancedEnabled: (): Promise<IpcResult<boolean>> =>
+      ipcRenderer.invoke(IPC.COMMIT_GET_ENHANCED_ENABLED),
+  },
+
   };
 
 // Expose to renderer

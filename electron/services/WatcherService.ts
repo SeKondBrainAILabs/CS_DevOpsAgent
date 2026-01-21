@@ -19,6 +19,7 @@ import type { AgentInstanceService } from './AgentInstanceService';
 import type { LockService } from './LockService';
 import type { ASTParserService } from './analysis/ASTParserService';
 import type { RepositoryAnalysisService } from './analysis/RepositoryAnalysisService';
+import type { CommitAnalysisService } from './CommitAnalysisService';
 import { databaseService } from './DatabaseService';
 import type { AgentType } from '../../shared/types';
 import chokidar, { FSWatcher } from 'chokidar';
@@ -54,6 +55,10 @@ export class WatcherService extends BaseService {
 
   // Auto-lock: Enable/disable file locking on change
   private autoLockEnabled = true;
+
+  // Commit Analysis: AI-enhanced commit message generation
+  private commitAnalysisService: CommitAnalysisService | null = null;
+  private enhancedCommitsEnabled = false;
 
   constructor(git: GitService, activity: ActivityService) {
     super();
@@ -109,6 +114,24 @@ export class WatcherService extends BaseService {
   setAutoLockEnabled(enabled: boolean): void {
     this.autoLockEnabled = enabled;
     console.log(`[WatcherService] Auto-locking ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
+  /**
+   * Set the commit analysis service for AI-enhanced commit messages
+   */
+  setCommitAnalysisService(commitAnalysis: CommitAnalysisService): void {
+    this.commitAnalysisService = commitAnalysis;
+    console.log('[WatcherService] CommitAnalysisService configured for enhanced commits');
+  }
+
+  /**
+   * Enable/disable AI-enhanced commit message generation
+   * When enabled, commits will use the CommitAnalysisService to generate
+   * detailed messages from actual file diffs instead of using the agent's message.
+   */
+  setEnhancedCommitsEnabled(enabled: boolean): void {
+    this.enhancedCommitsEnabled = enabled;
+    console.log(`[WatcherService] Enhanced commit messages ${enabled ? 'enabled' : 'disabled'}`);
   }
 
   async start(sessionId: string): Promise<IpcResult<void>> {
@@ -313,10 +336,35 @@ export class WatcherService extends BaseService {
       this.debounceTimers.delete(sessionId);
 
       try {
-        // Read commit message
+        // Read commit message from agent
         if (!existsSync(commitMsgFile)) return;
-        const message = (await fs.readFile(commitMsgFile, 'utf8')).trim();
+        let message = (await fs.readFile(commitMsgFile, 'utf8')).trim();
         if (!message) return;
+
+        // Optionally enhance commit message using AI analysis of actual diffs
+        if (this.enhancedCommitsEnabled && this.commitAnalysisService) {
+          try {
+            const analysis = await this.commitAnalysisService.analyzeStaged(
+              instance.worktreePath,
+              {
+                includeBody: true,
+                contextTask: message, // Use agent's message as context
+                contextBranch: instance.branchName,
+                useAI: true,
+              }
+            );
+
+            if (analysis.success && analysis.data) {
+              const enhancedMessage = analysis.data.suggestedMessage;
+              console.log(`[WatcherService] Enhanced commit message from "${message.substring(0, 30)}..." to "${enhancedMessage.substring(0, 50)}..."`);
+              this.terminalLogService?.log('info', `Commit message enhanced with AI analysis`, { sessionId, source: 'CommitAnalysis' });
+              message = enhancedMessage;
+            }
+          } catch (error) {
+            console.warn('[WatcherService] Commit message enhancement failed, using original:', error);
+            this.terminalLogService?.log('warn', `Commit enhancement failed, using original message`, { sessionId, source: 'CommitAnalysis' });
+          }
+        }
 
         // Emit commit triggered event
         const triggerEvent: CommitTriggerEvent = {
