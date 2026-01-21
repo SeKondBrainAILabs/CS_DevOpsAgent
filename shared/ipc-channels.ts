@@ -227,6 +227,10 @@ export const IPC = {
   CONTRACT_GENERATE_FEATURE: 'contract:generate-feature',
   CONTRACT_GENERATE_ALL: 'contract:generate-all',
   CONTRACT_CANCEL_GENERATION: 'contract:cancel-generation',
+  // New: Repo structure analysis and README generation
+  CONTRACT_ANALYZE_REPO_STRUCTURE: 'contract:analyze-repo-structure',
+  CONTRACT_GENERATE_README: 'contract:generate-readme',
+  CONTRACT_ANALYZE_FEATURE_DEEP: 'contract:analyze-feature-deep',
   // Events
   CONTRACT_GENERATION_PROGRESS: 'contract:generation-progress',
   CONTRACT_GENERATION_COMPLETE: 'contract:generation-complete',
