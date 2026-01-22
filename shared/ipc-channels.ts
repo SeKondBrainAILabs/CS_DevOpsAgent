@@ -323,6 +323,20 @@ export const IPC = {
   COMMIT_GET_ENHANCED_ENABLED: 'commit:get-enhanced-enabled',
 
   // ==========================================================================
+  // MERGE CONFLICT RESOLUTION CHANNELS
+  // AI-powered conflict analysis and resolution
+  // ==========================================================================
+  CONFLICT_GET_FILES: 'conflict:get-files',
+  CONFLICT_READ_FILE: 'conflict:read-file',
+  CONFLICT_ANALYZE: 'conflict:analyze',
+  CONFLICT_RESOLVE_FILE: 'conflict:resolve-file',
+  CONFLICT_APPLY_RESOLUTION: 'conflict:apply-resolution',
+  CONFLICT_REBASE_WITH_AI: 'conflict:rebase-with-ai',
+  // Events
+  CONFLICT_RESOLUTION_PROGRESS: 'conflict:resolution-progress',
+  CONFLICT_RESOLUTION_COMPLETE: 'conflict:resolution-complete',
+
+  // ==========================================================================
   // DEBUG LOG CHANNELS
   // ==========================================================================
   DEBUG_LOG_GET_RECENT: 'debug-log:get-recent',
@@ -426,6 +440,13 @@ export const REQUEST_CHANNELS = [
   IPC.ANALYSIS_PARSE_KUBERNETES,
   IPC.ANALYSIS_PARSE_DOCKER_COMPOSE,
   IPC.ANALYSIS_GET_INFRA_SUMMARY,
+  // Merge conflict resolution
+  IPC.CONFLICT_GET_FILES,
+  IPC.CONFLICT_READ_FILE,
+  IPC.CONFLICT_ANALYZE,
+  IPC.CONFLICT_RESOLVE_FILE,
+  IPC.CONFLICT_APPLY_RESOLUTION,
+  IPC.CONFLICT_REBASE_WITH_AI,
 ] as const;
 
 export const EVENT_CHANNELS = [
@@ -453,4 +474,7 @@ export const EVENT_CHANNELS = [
   IPC.ANALYSIS_PROGRESS,
   IPC.ANALYSIS_COMPLETE,
   IPC.ANALYSIS_ERROR,
+  // Conflict resolution events
+  IPC.CONFLICT_RESOLUTION_PROGRESS,
+  IPC.CONFLICT_RESOLUTION_COMPLETE,
 ] as const;

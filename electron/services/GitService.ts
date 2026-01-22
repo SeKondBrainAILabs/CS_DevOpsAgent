@@ -463,6 +463,104 @@ export class GitService extends BaseService {
     }, 'GIT_PERFORM_REBASE_FAILED');
   }
 
+  /**
+   * Perform rebase with AI-powered conflict resolution
+   * This method uses MergeConflictService to automatically resolve conflicts
+   */
+  async performRebaseWithAI(
+    repoPath: string,
+    baseBranch: string,
+    mergeConflictService: import('./MergeConflictService').MergeConflictService
+  ): Promise<IpcResult<{
+    success: boolean;
+    message: string;
+    hadChanges: boolean;
+    conflictsResolved?: number;
+    conflictsFailed?: number;
+    resolutions?: import('./MergeConflictService').ResolutionResult[];
+  }>> {
+    return this.wrap(async () => {
+      console.log(`[GitService] Starting AI-powered rebase of ${repoPath} onto ${baseBranch}`);
+
+      // 1. Fetch latest
+      try {
+        await this.git(['fetch', 'origin', baseBranch], repoPath);
+      } catch (fetchError) {
+        const errorMsg = fetchError instanceof Error ? fetchError.message : String(fetchError);
+        console.error(`[GitService] Fetch failed:`, errorMsg);
+
+        try {
+          await this.git(['ls-remote', '--exit-code', '--heads', 'origin', baseBranch], repoPath);
+        } catch {
+          return {
+            success: false,
+            message: `Branch '${baseBranch}' not found on remote.`,
+            hadChanges: false,
+          };
+        }
+
+        return {
+          success: false,
+          message: `Failed to fetch from origin: ${errorMsg}`,
+          hadChanges: false,
+        };
+      }
+
+      // 2. Stash any uncommitted changes
+      const stashResult = await this.stash(repoPath, `Auto-stash before AI rebase onto ${baseBranch}`);
+      const hadChanges = stashResult.success && stashResult.data === true;
+
+      // 3. Use MergeConflictService for rebase with AI resolution
+      const rebaseResult = await mergeConflictService.rebaseWithResolution(repoPath, baseBranch);
+
+      if (!rebaseResult.success || !rebaseResult.data?.success) {
+        // Rebase failed - try to pop stash if we stashed
+        if (hadChanges) {
+          try {
+            await this.git(['stash', 'pop'], repoPath);
+          } catch {
+            console.warn('[GitService] Could not pop stash after failed rebase');
+          }
+        }
+        return {
+          success: false,
+          message: rebaseResult.data?.message || 'AI rebase failed',
+          hadChanges,
+          conflictsResolved: rebaseResult.data?.conflictsResolved || 0,
+          conflictsFailed: rebaseResult.data?.conflictsFailed || 0,
+          resolutions: rebaseResult.data?.resolutions || [],
+        };
+      }
+
+      // 4. Pop stash if we stashed
+      if (hadChanges) {
+        try {
+          await this.git(['stash', 'pop'], repoPath);
+        } catch (error) {
+          console.warn('[GitService] Stash pop had conflicts:', error);
+          return {
+            success: true,
+            message: 'Rebase successful but stash pop had conflicts',
+            hadChanges,
+            conflictsResolved: rebaseResult.data.conflictsResolved,
+            conflictsFailed: rebaseResult.data.conflictsFailed,
+            resolutions: rebaseResult.data.resolutions,
+          };
+        }
+      }
+
+      console.log(`[GitService] AI-powered rebase completed. Resolved ${rebaseResult.data.conflictsResolved} conflicts.`);
+      return {
+        success: true,
+        message: rebaseResult.data.message,
+        hadChanges,
+        conflictsResolved: rebaseResult.data.conflictsResolved,
+        conflictsFailed: rebaseResult.data.conflictsFailed,
+        resolutions: rebaseResult.data.resolutions,
+      };
+    }, 'GIT_PERFORM_REBASE_AI_FAILED');
+  }
+
   // ==========================================================================
   // WORKTREE AND CLEANUP OPERATIONS
   // ==========================================================================
