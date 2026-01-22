@@ -102,6 +102,88 @@ prompts:
       ```
 
   # ==========================================================================
+  # PHASE 1.5: DISCOVER DOMAIN FEATURES (Business-Level)
+  # ==========================================================================
+
+  filter_features:
+    system: |
+      {base_system}
+
+      You are identifying BUSINESS/DOMAIN FEATURES from a codebase - not just folders.
+
+      A DOMAIN FEATURE is a distinct business capability or epic, such as:
+      - Authentication (user login, registration, password reset)
+      - User Management (CRUD operations on users)
+      - Payments/Billing (transactions, subscriptions)
+      - Notifications (email, push, in-app)
+      - Admin Panel (administrative functions)
+      - Frontend/UI (web or mobile user interface)
+      - API Gateway (request routing, rate limiting)
+      - Charity/Donations (charitable giving functionality)
+
+      Your task:
+      1. Identify ALL BUSINESS FEATURES this application implements
+      2. Give each feature a proper BUSINESS NAME (e.g., "Authentication" not "auth-service")
+      3. Map each feature to the code folder(s) that implement it
+      4. Briefly describe what the feature does
+
+      INCLUDE these as features:
+      - Frontend/UI applications (React, Vue, Angular apps in frontend/, web/, client/)
+      - API Gateway or routing services (api-gateway/, gateway/)
+      - Shared libraries that provide reusable business logic
+
+      EXCLUDE these from being features:
+      - Test directories (tests/, __tests__)
+      - Documentation (docs/)
+      - Database migrations only (database/, migrations/)
+      - Build artifacts (dist/, build/)
+      - Configuration-only folders (config/, scripts/)
+      - Project management (pm_artefacts/, notes/)
+      - Container folders that ONLY hold other features (services/, packages/) - but DO include services within them
+
+    user_template: |
+      Repository: {repo_name}
+
+      Discovered folders:
+      {folder_list}
+
+      Directory structure:
+      ```
+      {directory_tree}
+      ```
+
+      Identify the BUSINESS/DOMAIN FEATURES this application implements.
+
+      For each feature, provide:
+      - A proper business name (e.g., "Authentication", "Family Management", "Notifications")
+      - The code path(s) that implement it
+      - A brief description of what it does
+
+      Return ONLY valid JSON (no explanations):
+      ```json
+      {
+        "features": [
+          {
+            "name": "Authentication",
+            "paths": ["services/auth-service"],
+            "description": "User registration, login, password reset, and session management"
+          },
+          {
+            "name": "Notifications",
+            "paths": ["services/notification-service"],
+            "description": "Email, push, and in-app notification delivery"
+          }
+        ]
+      }
+      ```
+
+      IMPORTANT:
+      - Use BUSINESS names (Authentication, not auth-service)
+      - Group related functionality into single features
+      - A feature can map to multiple code paths
+      - Exclude utility folders (tests, docs, database, config, pm_artefacts)
+
+  # ==========================================================================
   # PHASE 2: GENERATE README / ARCHITECTURE DOC
   # ==========================================================================
 

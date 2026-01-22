@@ -591,6 +591,7 @@ export interface ContractGenerationOptions {
   maxFilesPerFeature?: number;
   skipExisting?: boolean;
   features?: string[]; // Generate only specific features (empty = all)
+  useAI?: boolean; // Use LLM to intelligently identify actual features (not just folders)
 }
 
 /**

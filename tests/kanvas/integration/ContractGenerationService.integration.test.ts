@@ -18,6 +18,25 @@ const mockAIService = {
   sendWithMode: async () => ({ success: true, data: '{}' }),
 };
 
+// Mock AIService that simulates intelligent feature detection
+const createSmartMockAIService = (expectedFeatures: string[]) => ({
+  sendWithMode: async (params: { promptKey: string; variables: Record<string, string> }) => {
+    // If filter_features is called, return the expected features
+    if (params.promptKey === 'filter_features') {
+      const features = expectedFeatures.map(f => ({
+        path: f,
+        name: f,
+        description: `${f} feature`,
+      }));
+      return {
+        success: true,
+        data: JSON.stringify({ features }),
+      };
+    }
+    return { success: true, data: '{}' };
+  },
+});
+
 // Mock RegistryService
 const mockRegistryService = {
   register: async () => ({ success: true }),
@@ -231,6 +250,103 @@ describe('ContractGenerationService - Integration Tests', () => {
       // For now, we just verify the service handles errors gracefully
       expect(true).toBe(true);
     });
+  });
+});
+
+// =========================================================================
+// AI-Based Feature Detection Tests
+// =========================================================================
+describe('ContractGenerationService - AI Feature Detection', () => {
+  it('should filter out non-feature folders when useAI=true', async () => {
+    // Create a service with smart mock that only identifies frontend and services as features
+    const smartMock = createSmartMockAIService(['frontend', 'services']);
+    const aiService = new ContractGenerationService(
+      smartMock as any,
+      mockRegistryService as any
+    );
+
+    const result = await aiService.discoverFeatures(PIGGY_BANK_PATH, true);
+
+    expect(result.success).toBe(true);
+    expect(result.data).toBeDefined();
+
+    const featureNames = result.data!.map(f => f.name);
+    console.log('AI-filtered features:', featureNames);
+
+    // Should only include features identified by AI
+    expect(featureNames.length).toBe(2);
+
+    // Should have frontend and services
+    const hasFrontend = result.data!.some(f => f.basePath.includes('frontend'));
+    const hasServices = result.data!.some(f => f.basePath.includes('services'));
+    expect(hasFrontend).toBe(true);
+    expect(hasServices).toBe(true);
+  });
+
+  it('should exclude tests, database, and pm_artefacts folders with AI detection', async () => {
+    // Only identify frontend and services as features
+    const smartMock = createSmartMockAIService(['frontend', 'services']);
+    const aiService = new ContractGenerationService(
+      smartMock as any,
+      mockRegistryService as any
+    );
+
+    const result = await aiService.discoverFeatures(PIGGY_BANK_PATH, true);
+
+    expect(result.success).toBe(true);
+
+    const featureNames = result.data!.map(f => f.name);
+    const featurePaths = result.data!.map(f => path.relative(PIGGY_BANK_PATH, f.basePath));
+
+    console.log('AI-filtered feature paths:', featurePaths);
+
+    // These are not features and should be excluded
+    expect(featureNames).not.toContain('tests');
+    expect(featureNames).not.toContain('database');
+    expect(featureNames).not.toContain('pm_artefacts');
+    expect(featurePaths).not.toContain('tests');
+    expect(featurePaths).not.toContain('database');
+    expect(featurePaths).not.toContain('pm_artefacts');
+  });
+
+  it('should fall back to mechanical scan when AI fails', async () => {
+    // Create a service with failing AI mock
+    const failingMock = {
+      sendWithMode: async () => ({ success: false, error: { message: 'AI unavailable' } }),
+    };
+    const aiService = new ContractGenerationService(
+      failingMock as any,
+      mockRegistryService as any
+    );
+
+    const result = await aiService.discoverFeatures(PIGGY_BANK_PATH, true);
+
+    expect(result.success).toBe(true);
+    expect(result.data).toBeDefined();
+    // Should still find features (fallback to mechanical scan)
+    expect(result.data!.length).toBeGreaterThan(0);
+
+    console.log('Fallback features:', result.data!.map(f => f.name));
+  });
+
+  it('should include all candidate folders without AI (useAI=false)', async () => {
+    // Use basic mock - no AI filtering
+    const basicService = new ContractGenerationService(
+      mockAIService as any,
+      mockRegistryService as any
+    );
+
+    const result = await basicService.discoverFeatures(PIGGY_BANK_PATH, false);
+
+    expect(result.success).toBe(true);
+    expect(result.data).toBeDefined();
+
+    const featureNames = result.data!.map(f => f.name);
+    console.log('Non-AI features:', featureNames);
+
+    // Without AI, it should find more "features" (actually just folders)
+    // This includes tests, database, etc.
+    expect(result.data!.length).toBeGreaterThan(2);
   });
 });
 

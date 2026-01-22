@@ -4,6 +4,7 @@
  * Supports mode-based prompts via AIConfigRegistry
  */
 
+import 'groq-sdk/shims/node';
 import { BaseService } from './BaseService';
 import { IPC } from '../../shared/ipc-channels';
 import type { ChatMessage, IpcResult } from '../../shared/types';
@@ -84,7 +85,10 @@ export class AIService extends BaseService {
       if (!apiKey) {
         throw new Error('Groq API key not configured');
       }
-      this.groq = new Groq({ apiKey });
+      this.groq = new Groq({
+        apiKey,
+        dangerouslyAllowBrowser: true, // Allow in test/browser environments
+      });
     }
     return this.groq;
   }
@@ -362,7 +366,7 @@ export class AIService extends BaseService {
   /**
    * Cleanup
    */
-  dispose(): void {
+  async dispose(): Promise<void> {
     this.stopStream();
     this.groq = null;
   }
