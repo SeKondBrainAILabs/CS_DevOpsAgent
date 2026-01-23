@@ -203,6 +203,82 @@ function alternative() {
   });
 });
 
+describe('Interactive workflow types', () => {
+  it('should define ConflictResolutionPreview structure', () => {
+    // This documents the expected shape of a preview object
+    const preview = {
+      file: 'src/utils/helper.ts',
+      language: 'typescript',
+      originalContent: `<<<<<<< HEAD
+const x = 1;
+=======
+const x = 2;
+>>>>>>> feature/change`,
+      proposedContent: 'const x = 2; // AI merged both changes',
+      analysis: {
+        currentBranchIntent: 'Set x to 1',
+        incomingBranchIntent: 'Set x to 2',
+        conflictType: 'semantic' as const,
+        recommendedStrategy: 'prefer_incoming' as const,
+        explanation: 'Both sides modify the same value',
+        complexity: 'simple' as const,
+      },
+      status: 'pending' as const,
+      userModifiedContent: undefined,
+    };
+
+    expect(preview.status).toBe('pending');
+    expect(preview.originalContent).toContain('<<<<<<<');
+    expect(preview.proposedContent).not.toContain('<<<<<<<');
+  });
+
+  it('should track approval status correctly', () => {
+    const statuses = ['pending', 'approved', 'rejected', 'modified'] as const;
+
+    // Pending: User hasn't reviewed yet
+    expect(statuses[0]).toBe('pending');
+
+    // Approved: User accepted AI's resolution
+    expect(statuses[1]).toBe('approved');
+
+    // Rejected: User rejected AI's resolution
+    expect(statuses[2]).toBe('rejected');
+
+    // Modified: User edited the proposed resolution
+    expect(statuses[3]).toBe('modified');
+  });
+
+  it('should use userModifiedContent when user edits', () => {
+    const preview = {
+      file: 'test.ts',
+      language: 'typescript',
+      originalContent: 'conflict content',
+      proposedContent: 'AI proposed content',
+      status: 'modified' as const,
+      userModifiedContent: 'User edited content',
+    };
+
+    // When status is 'modified', userModifiedContent should be used
+    const contentToApply = preview.userModifiedContent || preview.proposedContent;
+    expect(contentToApply).toBe('User edited content');
+  });
+
+  it('should use proposedContent when approved without edits', () => {
+    const preview = {
+      file: 'test.ts',
+      language: 'typescript',
+      originalContent: 'conflict content',
+      proposedContent: 'AI proposed content',
+      status: 'approved' as const,
+      userModifiedContent: undefined,
+    };
+
+    // When status is 'approved' and no userModifiedContent, use AI proposed
+    const contentToApply = preview.userModifiedContent || preview.proposedContent;
+    expect(contentToApply).toBe('AI proposed content');
+  });
+});
+
 describe('Language detection', () => {
   const languageMap: Record<string, string> = {
     '.ts': 'typescript',

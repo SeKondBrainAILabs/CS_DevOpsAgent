@@ -54,6 +54,44 @@ export interface ResolutionResult {
   analysis?: ConflictAnalysis;
 }
 
+/**
+ * Preview of a proposed conflict resolution
+ * User must approve before it's applied
+ */
+export interface ConflictResolutionPreview {
+  file: string;
+  language: string;
+  originalContent: string;       // The file with conflict markers
+  proposedContent: string;       // AI's proposed resolution
+  analysis?: ConflictAnalysis;   // AI's analysis of the conflict
+  status: 'pending' | 'approved' | 'rejected' | 'modified';
+  userModifiedContent?: string;  // If user edits the proposed resolution
+}
+
+/**
+ * Result of generating previews for all conflicts
+ */
+export interface ConflictPreviewResult {
+  repoPath: string;
+  currentBranch: string;
+  targetBranch: string;
+  previews: ConflictResolutionPreview[];
+  totalConflicts: number;
+  resolvedByAI: number;
+  failedToResolve: number;
+}
+
+/**
+ * Result of applying approved resolutions
+ */
+export interface ApplyResolutionsResult {
+  success: boolean;
+  message: string;
+  applied: string[];
+  failed: string[];
+  skipped: string[];
+}
+
 export interface RebaseWithResolutionResult {
   success: boolean;
   message: string;
@@ -278,7 +316,7 @@ export class MergeConflictService extends BaseService {
   }
 
   /**
-   * Apply a resolved file's content
+   * Apply a resolved file's content (internal use)
    */
   async applyResolution(repoPath: string, filePath: string, content: string): Promise<IpcResult<void>> {
     return this.wrap(async () => {
@@ -289,8 +327,232 @@ export class MergeConflictService extends BaseService {
     }, 'APPLY_RESOLUTION_FAILED');
   }
 
+  // ==========================================================================
+  // INTERACTIVE WORKFLOW - Preview & Approval
+  // ==========================================================================
+
+  /**
+   * Start rebase and generate previews for all conflicts
+   * Does NOT apply any changes - returns previews for user approval
+   */
+  async generateResolutionPreviews(
+    repoPath: string,
+    targetBranch: string
+  ): Promise<IpcResult<ConflictPreviewResult>> {
+    return this.wrap(async () => {
+      const currentBranch = await this.git(['branch', '--show-current'], repoPath);
+      console.log(`[MergeConflict] Generating previews for rebase of ${currentBranch} onto ${targetBranch}`);
+
+      // Fetch latest
+      try {
+        await this.git(['fetch', 'origin', targetBranch], repoPath);
+      } catch {
+        throw new Error(`Failed to fetch ${targetBranch}`);
+      }
+
+      // Start rebase (may fail with conflicts)
+      try {
+        await this.git(['rebase', `origin/${targetBranch}`], repoPath);
+        // If no error, rebase succeeded without conflicts
+        return {
+          repoPath,
+          currentBranch,
+          targetBranch,
+          previews: [],
+          totalConflicts: 0,
+          resolvedByAI: 0,
+          failedToResolve: 0,
+        };
+      } catch {
+        // Expected - rebase has conflicts, continue to generate previews
+        console.log(`[MergeConflict] Rebase has conflicts, generating AI previews`);
+      }
+
+      // Get conflicted files
+      const conflictedResult = await this.getConflictedFiles(repoPath);
+      if (!conflictedResult.success || !conflictedResult.data) {
+        throw new Error('Failed to get conflicted files');
+      }
+
+      const conflictedFiles = conflictedResult.data;
+      const previews: ConflictResolutionPreview[] = [];
+      let resolvedByAI = 0;
+      let failedToResolve = 0;
+
+      // Generate preview for each conflicted file
+      for (const file of conflictedFiles) {
+        const fileResult = await this.readConflictedFile(repoPath, file);
+        if (!fileResult.success || !fileResult.data) {
+          previews.push({
+            file,
+            language: 'text',
+            originalContent: '',
+            proposedContent: '',
+            status: 'pending',
+            analysis: undefined,
+          });
+          failedToResolve++;
+          continue;
+        }
+
+        const { content, language } = fileResult.data;
+
+        // First, analyze the conflict
+        let analysis: ConflictAnalysis | undefined;
+        try {
+          const analysisResult = await this.analyzeConflict(repoPath, file);
+          if (analysisResult.success && analysisResult.data) {
+            analysis = analysisResult.data;
+          }
+        } catch {
+          // Analysis is optional, continue without it
+        }
+
+        // Generate AI resolution (but don't apply)
+        const resolution = await this.resolveFileConflict(
+          repoPath,
+          file,
+          currentBranch,
+          targetBranch
+        );
+
+        if (resolution.success && resolution.data?.resolved && resolution.data.content) {
+          previews.push({
+            file,
+            language,
+            originalContent: content,
+            proposedContent: resolution.data.content,
+            analysis,
+            status: 'pending',
+          });
+          resolvedByAI++;
+        } else {
+          // AI couldn't resolve - still show preview with original for manual resolution
+          previews.push({
+            file,
+            language,
+            originalContent: content,
+            proposedContent: content, // Keep original with markers for manual editing
+            analysis,
+            status: 'pending',
+          });
+          failedToResolve++;
+        }
+      }
+
+      return {
+        repoPath,
+        currentBranch,
+        targetBranch,
+        previews,
+        totalConflicts: conflictedFiles.length,
+        resolvedByAI,
+        failedToResolve,
+      };
+    }, 'GENERATE_PREVIEWS_FAILED');
+  }
+
+  /**
+   * Apply user-approved resolutions and continue rebase
+   * Only processes previews with status 'approved'
+   */
+  async applyApprovedResolutions(
+    repoPath: string,
+    approvedPreviews: ConflictResolutionPreview[]
+  ): Promise<IpcResult<ApplyResolutionsResult>> {
+    return this.wrap(async () => {
+      const applied: string[] = [];
+      const failed: string[] = [];
+      const skipped: string[] = [];
+
+      for (const preview of approvedPreviews) {
+        if (preview.status === 'rejected') {
+          skipped.push(preview.file);
+          continue;
+        }
+
+        if (preview.status !== 'approved' && preview.status !== 'modified') {
+          skipped.push(preview.file);
+          continue;
+        }
+
+        // Use user-modified content if provided, otherwise use AI proposed content
+        const contentToApply = preview.userModifiedContent || preview.proposedContent;
+
+        // Verify no conflict markers in content to apply
+        if (this.hasConflictMarkers(contentToApply)) {
+          console.error(`[MergeConflict] Cannot apply ${preview.file} - still has conflict markers`);
+          failed.push(preview.file);
+          continue;
+        }
+
+        const result = await this.applyResolution(repoPath, preview.file, contentToApply);
+        if (result.success) {
+          applied.push(preview.file);
+        } else {
+          failed.push(preview.file);
+        }
+      }
+
+      // If all approved files applied successfully, try to continue rebase
+      if (failed.length === 0 && applied.length > 0) {
+        try {
+          await this.git(['rebase', '--continue'], repoPath);
+        } catch {
+          // May have more conflicts - that's okay, user will see them
+        }
+      }
+
+      const allApplied = failed.length === 0;
+      return {
+        success: allApplied,
+        message: allApplied
+          ? `Applied ${applied.length} resolution(s)`
+          : `Applied ${applied.length}, failed ${failed.length}`,
+        applied,
+        failed,
+        skipped,
+      };
+    }, 'APPLY_APPROVED_RESOLUTIONS_FAILED');
+  }
+
+  /**
+   * Abort the current rebase operation
+   */
+  async abortRebase(repoPath: string): Promise<IpcResult<void>> {
+    return this.wrap(async () => {
+      await this.git(['rebase', '--abort'], repoPath);
+      console.log(`[MergeConflict] Rebase aborted`);
+    }, 'ABORT_REBASE_FAILED');
+  }
+
+  /**
+   * Check if a rebase is currently in progress
+   */
+  async isRebaseInProgress(repoPath: string): Promise<IpcResult<boolean>> {
+    return this.wrap(async () => {
+      try {
+        const gitDir = await this.git(['rev-parse', '--git-dir'], repoPath);
+        const rebaseMergePath = path.join(repoPath, gitDir, 'rebase-merge');
+        const rebaseApplyPath = path.join(repoPath, gitDir, 'rebase-apply');
+
+        const mergeExists = await fs.access(rebaseMergePath).then(() => true).catch(() => false);
+        const applyExists = await fs.access(rebaseApplyPath).then(() => true).catch(() => false);
+
+        return mergeExists || applyExists;
+      } catch {
+        return false;
+      }
+    }, 'CHECK_REBASE_FAILED');
+  }
+
+  // ==========================================================================
+  // AUTOMATIC WORKFLOW (kept for backwards compatibility, but use with caution)
+  // ==========================================================================
+
   /**
    * Perform rebase with automatic AI conflict resolution
+   * WARNING: This auto-applies resolutions. Prefer generateResolutionPreviews + applyApprovedResolutions
    */
   async rebaseWithResolution(
     repoPath: string,

@@ -324,17 +324,25 @@ export const IPC = {
 
   // ==========================================================================
   // MERGE CONFLICT RESOLUTION CHANNELS
-  // AI-powered conflict analysis and resolution
+  // AI-powered conflict analysis and resolution with user approval
   // ==========================================================================
   CONFLICT_GET_FILES: 'conflict:get-files',
   CONFLICT_READ_FILE: 'conflict:read-file',
   CONFLICT_ANALYZE: 'conflict:analyze',
   CONFLICT_RESOLVE_FILE: 'conflict:resolve-file',
   CONFLICT_APPLY_RESOLUTION: 'conflict:apply-resolution',
+  // Interactive workflow with user approval
+  CONFLICT_GENERATE_PREVIEWS: 'conflict:generate-previews',    // Start rebase, return previews
+  CONFLICT_APPLY_APPROVED: 'conflict:apply-approved',          // Apply user-approved resolutions
+  CONFLICT_ABORT_REBASE: 'conflict:abort-rebase',              // Abort and revert
+  CONFLICT_IS_REBASE_IN_PROGRESS: 'conflict:is-rebase-in-progress',
+  // Legacy auto-apply (use with caution)
   CONFLICT_REBASE_WITH_AI: 'conflict:rebase-with-ai',
   // Events
   CONFLICT_RESOLUTION_PROGRESS: 'conflict:resolution-progress',
   CONFLICT_RESOLUTION_COMPLETE: 'conflict:resolution-complete',
+  CONFLICT_PREVIEWS_READY: 'conflict:previews-ready',          // Previews generated, awaiting approval
+  CONFLICT_APPROVAL_REQUIRED: 'conflict:approval-required',    // User must review before applying
 
   // ==========================================================================
   // DEBUG LOG CHANNELS
@@ -446,6 +454,10 @@ export const REQUEST_CHANNELS = [
   IPC.CONFLICT_ANALYZE,
   IPC.CONFLICT_RESOLVE_FILE,
   IPC.CONFLICT_APPLY_RESOLUTION,
+  IPC.CONFLICT_GENERATE_PREVIEWS,
+  IPC.CONFLICT_APPLY_APPROVED,
+  IPC.CONFLICT_ABORT_REBASE,
+  IPC.CONFLICT_IS_REBASE_IN_PROGRESS,
   IPC.CONFLICT_REBASE_WITH_AI,
 ] as const;
 
@@ -477,4 +489,6 @@ export const EVENT_CHANNELS = [
   // Conflict resolution events
   IPC.CONFLICT_RESOLUTION_PROGRESS,
   IPC.CONFLICT_RESOLUTION_COMPLETE,
+  IPC.CONFLICT_PREVIEWS_READY,
+  IPC.CONFLICT_APPROVAL_REQUIRED,
 ] as const;
