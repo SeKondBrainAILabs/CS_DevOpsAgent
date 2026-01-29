@@ -1423,7 +1423,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
   const [loading, setLoading] = useState(true);
 
   // Contract generation state
-  const [scanPathOption, setScanPathOption] = useState<'main' | 'worktree'>('main');
+  const [scanPathOption, setScanPathOption] = useState<'main' | 'worktree'>('worktree');
   const [discoveredFeatures, setDiscoveredFeatures] = useState<Array<{
     name: string;
     description?: string;
@@ -1654,6 +1654,25 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
     return session.worktreePath || session.repoPath;
   };
 
+  // Load saved discovered features on mount
+  useEffect(() => {
+    const loadSavedFeatures = async () => {
+      const repoPath = getScanPath();
+      if (!repoPath) return;
+
+      try {
+        const result = await window.api?.contractGeneration?.loadDiscoveredFeatures(repoPath);
+        if (result?.success && result.data && Array.isArray(result.data) && result.data.length > 0) {
+          setDiscoveredFeatures(result.data as typeof discoveredFeatures);
+        }
+      } catch (err) {
+        console.error('Failed to load saved features:', err);
+      }
+    };
+
+    loadSavedFeatures();
+  }, [session.worktreePath, session.repoPath, scanPathOption]);
+
   // Discover features in the repository
   const handleDiscoverFeatures = async () => {
     const repoPath = getScanPath();
@@ -1668,6 +1687,8 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
       const result = await window.api?.contractGeneration?.discoverFeatures(repoPath, true);
       if (result?.success && result.data) {
         setDiscoveredFeatures(result.data);
+        // Save discovered features for later
+        await window.api?.contractGeneration?.saveDiscoveredFeatures(repoPath, result.data);
       }
     } catch (err) {
       console.error('Failed to discover features:', err);
@@ -1833,8 +1854,8 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
 
       {/* Discovered Features - Table View */}
       {discoveredFeatures.length > 0 && !isGenerating && (
-        <div className="mx-4 mt-4 p-3 bg-surface-secondary rounded-xl border border-border">
-          <div className="flex items-center justify-between mb-3">
+        <div className="mx-4 mt-4 p-3 bg-surface-secondary rounded-xl border border-border max-h-[400px] flex flex-col">
+          <div className="flex items-center justify-between mb-3 flex-shrink-0">
             <span className="text-sm font-medium text-text-primary">
               Discovered {discoveredFeatures.length} feature(s)
             </span>
@@ -1847,7 +1868,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
           </div>
 
           {/* Features Table */}
-          <div className="overflow-x-auto">
+          <div className="overflow-auto flex-1 min-h-0">
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-border text-left text-text-secondary">
@@ -1893,7 +1914,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
                           )}
                         </div>
                         {f.description && (
-                          <div className="text-text-secondary text-[10px] mt-0.5 truncate max-w-[200px]" title={f.description}>
+                          <div className="text-text-secondary text-[10px] mt-0.5 max-w-[300px] leading-tight">
                             {f.description}
                           </div>
                         )}

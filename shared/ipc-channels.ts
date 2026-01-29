@@ -231,6 +231,8 @@ export const IPC = {
   // Scan codebase and generate contract documentation
   // ==========================================================================
   CONTRACT_DISCOVER_FEATURES: 'contract:discover-features',
+  CONTRACT_SAVE_DISCOVERED_FEATURES: 'contract:save-discovered-features',
+  CONTRACT_LOAD_DISCOVERED_FEATURES: 'contract:load-discovered-features',
   CONTRACT_GENERATE_FEATURE: 'contract:generate-feature',
   CONTRACT_GENERATE_ALL: 'contract:generate-all',
   CONTRACT_CANCEL_GENERATION: 'contract:cancel-generation',

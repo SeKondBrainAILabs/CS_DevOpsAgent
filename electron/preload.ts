@@ -874,6 +874,12 @@ const api = {
     }>>> =>
       ipcRenderer.invoke(IPC.CONTRACT_DISCOVER_FEATURES, repoPath, useAI),
 
+    saveDiscoveredFeatures: (repoPath: string, features: unknown[]): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.CONTRACT_SAVE_DISCOVERED_FEATURES, repoPath, features),
+
+    loadDiscoveredFeatures: (repoPath: string): Promise<IpcResult<unknown[]>> =>
+      ipcRenderer.invoke(IPC.CONTRACT_LOAD_DISCOVERED_FEATURES, repoPath),
+
     generateFeature: (repoPath: string, feature: {
       name: string;
       basePath: string;

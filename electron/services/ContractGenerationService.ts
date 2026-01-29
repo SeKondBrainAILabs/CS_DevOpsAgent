@@ -188,13 +188,31 @@ const SOURCE_PATTERNS = [
 
 // Feature folder patterns to scan (ordered by specificity)
 const FEATURE_FOLDER_PATTERNS = [
-  // Standard patterns
+  // Standard nested patterns
   'src/features/*',
   'src/modules/*',
   'packages/*',
   'apps/*',
   'lib/*',
   'services/*',
+  // Service-level patterns (deeper scanning for routes, services, handlers)
+  'backend/src/routes',
+  'backend/src/services',
+  'backend/src/handlers',
+  'backend/src/controllers',
+  'backend/src/modules/*',
+  'backend/src/features/*',
+  'backend/routes',
+  'backend/services',
+  'server/src/routes',
+  'server/src/services',
+  'api/src/routes',
+  'api/src/services',
+  // AI worker patterns
+  'ai-worker/src/handlers',
+  'ai-worker/src/services',
+  'ai-worker/src/processors',
+  'workers/*/src',
   // Common top-level structures
   'backend',
   'frontend',
@@ -214,26 +232,11 @@ const FEATURE_FOLDER_PATTERNS = [
   '*',
 ];
 
-// Folders to ignore when scanning top-level (common gitignore patterns + submodules)
+// Folders to always ignore - ONLY .git internals
+// Everything else should be controlled by .gitignore and .gitmodules
+// User will manually label features as submodules if needed
 const IGNORE_FOLDERS = new Set([
-  // Build outputs
-  'node_modules', 'dist', 'build', 'out', '.next', '.nuxt', '.output',
-  // Git and version control
-  '.git', 'submodules', '.worktrees',
-  // IDE and editor
-  '.vscode', '.idea', '.eclipse', '.settings',
-  // Test and coverage
-  'coverage', 'playwright-report', 'test-results', '.nyc_output',
-  // Cache and temp
-  '.cache', 'tmp', 'temp', '.temp', '.tmp',
-  // Documentation (usually not features)
-  'docs', 'Documentation', 'doc',
-  // DevOps/Kanvas specific
-  '.S9N_KIT_DevOpsAgent', 'local_deploy', 'backups',
-  // Vendor and third-party
-  'vendor', 'third_party', 'external', 'deps',
-  // Logs
-  'logs', 'log',
+  '.git', // Git internals - never a feature
 ]);
 
 /**
@@ -628,13 +631,13 @@ export class ContractGenerationService extends BaseService {
   }
 
   /**
-   * Parse .gitmodules file to get list of submodule paths
-   * Also checks for npm workspaces and symlinked packages
+   * Parse .gitmodules file to get list of declared git submodule paths
+   * Only trusts .gitmodules - other detection is left to user
    */
   private async getGitSubmodulePaths(repoPath: string): Promise<Set<string>> {
     const excludedPaths = new Set<string>();
 
-    // 1. Parse .gitmodules for git submodules
+    // Only parse .gitmodules for declared git submodules
     const gitmodulesPath = path.join(repoPath, '.gitmodules');
     try {
       const content = await fs.readFile(gitmodulesPath, 'utf-8');
@@ -643,53 +646,15 @@ export class ContractGenerationService extends BaseService {
         const submodulePath = match[1].trim();
         excludedPaths.add(submodulePath);
         // Also add just the folder name for top-level matching
-        const folderName = submodulePath.split('/')[0];
+        const folderName = path.basename(submodulePath);
         excludedPaths.add(folderName);
+        console.log(`[ContractGeneration] Registered git submodule from .gitmodules: ${submodulePath}`);
       }
-      console.log(`[ContractGeneration] Found ${excludedPaths.size} git submodule paths`);
-    } catch {
-      // No .gitmodules file - that's fine
-    }
-
-    // 2. Check for npm workspaces that might be shared packages
-    const packageJsonPath = path.join(repoPath, 'package.json');
-    try {
-      const content = await fs.readFile(packageJsonPath, 'utf-8');
-      const pkg = JSON.parse(content);
-      if (pkg.workspaces) {
-        // Workspaces can be array or object with packages key
-        const workspaces = Array.isArray(pkg.workspaces)
-          ? pkg.workspaces
-          : pkg.workspaces.packages || [];
-        for (const ws of workspaces) {
-          // Workspace patterns like "packages/*" - we want to exclude the container
-          if (ws.endsWith('/*')) {
-            const container = ws.slice(0, -2);
-            console.log(`[ContractGeneration] Found npm workspace container: ${container}`);
-            // Don't exclude individual packages, just note the container pattern
-          }
-        }
+      if (excludedPaths.size > 0) {
+        console.log(`[ContractGeneration] Found ${excludedPaths.size} git submodule paths from .gitmodules`);
       }
     } catch {
-      // No package.json or can't parse - that's fine
-    }
-
-    // 3. Check for symlinks in common package locations
-    const packageDirs = ['packages', 'libs', 'modules'];
-    for (const dir of packageDirs) {
-      const dirPath = path.join(repoPath, dir);
-      try {
-        const entries = await fs.readdir(dirPath, { withFileTypes: true });
-        for (const entry of entries) {
-          if (entry.isSymbolicLink()) {
-            const symPath = `${dir}/${entry.name}`;
-            excludedPaths.add(symPath);
-            console.log(`[ContractGeneration] Found symlinked package: ${symPath}`);
-          }
-        }
-      } catch {
-        // Directory doesn't exist - that's fine
-      }
+      // No .gitmodules file - that's fine, no submodules to exclude
     }
 
     return excludedPaths;
@@ -1011,7 +976,125 @@ export class ContractGenerationService extends BaseService {
         }
       }
 
-      // 3. If still no features found, treat root as single feature
+      // 3. Process AI-identified paths directly (for service-level features)
+      if (aiIdentifiedFeatures && aiIdentifiedFeatures.size > 0) {
+        console.log(`[ContractGeneration] Processing ${aiIdentifiedFeatures.size} AI-identified feature paths...`);
+
+        for (const aiPath of aiIdentifiedFeatures) {
+          // Skip if already processed
+          const fullAiPath = path.join(repoPath, aiPath);
+          if (processedPaths.has(fullAiPath)) {
+            console.log(`[ContractGeneration] AI path already processed: ${aiPath}`);
+            continue;
+          }
+
+          // Skip if it's exactly a submodule path or inside a submodule
+          const isSubmodulePath = submodulePaths.has(aiPath) ||
+            Array.from(submodulePaths).some(sp => aiPath.startsWith(sp + '/'));
+          if (isSubmodulePath) {
+            console.log(`[ContractGeneration] AI path is submodule, skipping: ${aiPath}`);
+            continue;
+          }
+
+          // Skip if gitignored
+          if (matchesGitignorePattern(aiPath, gitignorePatterns)) {
+            console.log(`[ContractGeneration] AI path is gitignored, skipping: ${aiPath}`);
+            continue;
+          }
+
+          try {
+            const stat = await fs.stat(fullAiPath).catch(() => null);
+
+            if (stat?.isDirectory()) {
+              // It's a directory - scan it as a feature
+              const files = await this.scanFeatureFiles(fullAiPath, repoPath);
+              const totalFiles = this.countFeatureFiles(files);
+
+              if (totalFiles > 0) {
+                processedPaths.add(fullAiPath);
+                const folderName = path.basename(fullAiPath);
+                const aiInfo = this.aiFeatureInfo.get(aiPath) || this.aiFeatureInfo.get(folderName);
+                const featureName = aiInfo?.name || await this.getFeatureName(fullAiPath, folderName);
+                features.push({
+                  name: featureName,
+                  description: aiInfo?.description,
+                  basePath: fullAiPath,
+                  files,
+                  contractPatternMatches: totalFiles,
+                });
+                console.log(`[ContractGeneration] Found AI feature (dir): ${featureName} (${totalFiles} files)`);
+              }
+            } else if (stat?.isFile()) {
+              // It's a file - use its parent directory as the feature
+              const parentDir = path.dirname(fullAiPath);
+              if (!processedPaths.has(parentDir)) {
+                const files = await this.scanFeatureFiles(parentDir, repoPath);
+                const totalFiles = this.countFeatureFiles(files);
+
+                if (totalFiles > 0) {
+                  processedPaths.add(parentDir);
+                  const folderName = path.basename(parentDir);
+                  const parentRelPath = path.relative(repoPath, parentDir);
+                  const aiInfo = this.aiFeatureInfo.get(aiPath) || this.aiFeatureInfo.get(parentRelPath) || this.aiFeatureInfo.get(folderName);
+                  const featureName = aiInfo?.name || await this.getFeatureName(parentDir, folderName);
+                  features.push({
+                    name: featureName,
+                    description: aiInfo?.description,
+                    basePath: parentDir,
+                    files,
+                    contractPatternMatches: totalFiles,
+                  });
+                  console.log(`[ContractGeneration] Found AI feature (file parent): ${featureName} (${totalFiles} files)`);
+                }
+              }
+            } else {
+              // Path doesn't exist - check if it's a partial path and try to resolve
+              console.log(`[ContractGeneration] AI path not found, trying partial match: ${aiPath}`);
+
+              // Try to find a matching directory by walking from repo root
+              const pathParts = aiPath.split('/');
+              let currentPath = repoPath;
+              let foundPath: string | null = null;
+
+              for (const part of pathParts) {
+                const nextPath = path.join(currentPath, part);
+                const nextStat = await fs.stat(nextPath).catch(() => null);
+                if (nextStat?.isDirectory()) {
+                  currentPath = nextPath;
+                  foundPath = currentPath;
+                } else {
+                  break;
+                }
+              }
+
+              if (foundPath && !processedPaths.has(foundPath)) {
+                const files = await this.scanFeatureFiles(foundPath, repoPath);
+                const totalFiles = this.countFeatureFiles(files);
+
+                if (totalFiles > 0) {
+                  processedPaths.add(foundPath);
+                  const folderName = path.basename(foundPath);
+                  const relPath = path.relative(repoPath, foundPath);
+                  const aiInfo = this.aiFeatureInfo.get(aiPath) || this.aiFeatureInfo.get(relPath) || this.aiFeatureInfo.get(folderName);
+                  const featureName = aiInfo?.name || await this.getFeatureName(foundPath, folderName);
+                  features.push({
+                    name: featureName,
+                    description: aiInfo?.description,
+                    basePath: foundPath,
+                    files,
+                    contractPatternMatches: totalFiles,
+                  });
+                  console.log(`[ContractGeneration] Found AI feature (partial): ${featureName} (${totalFiles} files)`);
+                }
+              }
+            }
+          } catch (err) {
+            console.warn(`[ContractGeneration] Error processing AI path ${aiPath}:`, err);
+          }
+        }
+      }
+
+      // 4. If still no features found, treat root as single feature
       if (features.length === 0) {
         console.log('[ContractGeneration] No feature folders found, analyzing root as single feature...');
         const rootFeature = await this.analyzeRootAsFeature(repoPath);
@@ -1020,9 +1103,56 @@ export class ContractGenerationService extends BaseService {
         }
       }
 
-      console.log(`[ContractGeneration] Discovered ${features.length} features`);
-      return features;
+      // 5. Deduplicate features by name (merge features with same name)
+      const deduplicatedFeatures = this.deduplicateFeatures(features);
+      console.log(`[ContractGeneration] Discovered ${features.length} features, deduplicated to ${deduplicatedFeatures.length}`);
+      return deduplicatedFeatures;
     }, 'DISCOVER_FEATURES_ERROR');
+  }
+
+  /**
+   * Deduplicate features by merging those with the same name
+   */
+  private deduplicateFeatures(features: DiscoveredFeature[]): DiscoveredFeature[] {
+    const featureMap = new Map<string, DiscoveredFeature>();
+
+    for (const feature of features) {
+      const normalizedName = feature.name.toLowerCase().trim();
+      const existing = featureMap.get(normalizedName);
+
+      if (existing) {
+        // Merge files from both features
+        console.log(`[ContractGeneration] Merging duplicate feature: ${feature.name} (${feature.basePath}) into existing (${existing.basePath})`);
+
+        // Merge file arrays
+        existing.files.api = [...new Set([...existing.files.api, ...feature.files.api])];
+        existing.files.schema = [...new Set([...existing.files.schema, ...feature.files.schema])];
+        existing.files.config = [...new Set([...existing.files.config, ...feature.files.config])];
+        existing.files.fixtures = [...new Set([...existing.files.fixtures, ...feature.files.fixtures])];
+        existing.files.other = [...new Set([...existing.files.other, ...feature.files.other])];
+        existing.files.tests.unit = [...new Set([...existing.files.tests.unit, ...feature.files.tests.unit])];
+        existing.files.tests.e2e = [...new Set([...existing.files.tests.e2e, ...feature.files.tests.e2e])];
+        existing.files.tests.integration = [...new Set([...existing.files.tests.integration, ...feature.files.tests.integration])];
+
+        // Update contract pattern matches
+        existing.contractPatternMatches = this.countFeatureFiles(existing.files);
+
+        // Keep the more specific basePath (longer path = more specific)
+        if (feature.basePath.length > existing.basePath.length) {
+          existing.basePath = feature.basePath;
+        }
+
+        // Keep the longer/better description
+        if (feature.description && (!existing.description || feature.description.length > existing.description.length)) {
+          existing.description = feature.description;
+        }
+      } else {
+        // Add new feature (use original casing for name)
+        featureMap.set(normalizedName, { ...feature });
+      }
+    }
+
+    return Array.from(featureMap.values());
   }
 
   /**

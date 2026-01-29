@@ -600,6 +600,18 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.contractGeneration.discoverFeatures(repoPath, useAI);
   });
 
+  ipcMain.handle(IPC.CONTRACT_SAVE_DISCOVERED_FEATURES, async (_, repoPath: string, features: unknown[]) => {
+    const key = `discovered_features:${repoPath}`;
+    services.database.setSetting(key, features);
+    return { success: true };
+  });
+
+  ipcMain.handle(IPC.CONTRACT_LOAD_DISCOVERED_FEATURES, async (_, repoPath: string) => {
+    const key = `discovered_features:${repoPath}`;
+    const features = services.database.getSetting<unknown[]>(key, []);
+    return { success: true, data: features };
+  });
+
   ipcMain.handle(IPC.CONTRACT_GENERATE_FEATURE, async (_, repoPath: string, feature: unknown) => {
     return services.contractGeneration.generateFeatureContract(repoPath, feature as any);
   });
