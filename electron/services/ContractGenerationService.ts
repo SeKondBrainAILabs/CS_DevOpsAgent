@@ -24,7 +24,9 @@ let _globSync: ((pattern: string, options?: object) => string[]) | null = null;
 async function getGlobSync() {
   if (!_globSync) {
     const glob = await import('glob');
-    _globSync = glob.globSync;
+    // Handle both glob v11 (named export) and v7/v8/v9 or CommonJS interop (default export with sync method)
+    // @ts-ignore - Dynamic import handling
+    _globSync = glob.globSync || (glob.default && glob.default.sync) || glob.sync;
   }
   return _globSync;
 }
