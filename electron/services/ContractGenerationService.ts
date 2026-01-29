@@ -629,30 +629,70 @@ export class ContractGenerationService extends BaseService {
 
   /**
    * Parse .gitmodules file to get list of submodule paths
+   * Also checks for npm workspaces and symlinked packages
    */
   private async getGitSubmodulePaths(repoPath: string): Promise<Set<string>> {
-    const submodulePaths = new Set<string>();
-    const gitmodulesPath = path.join(repoPath, '.gitmodules');
+    const excludedPaths = new Set<string>();
 
+    // 1. Parse .gitmodules for git submodules
+    const gitmodulesPath = path.join(repoPath, '.gitmodules');
     try {
       const content = await fs.readFile(gitmodulesPath, 'utf-8');
-      // Parse .gitmodules format:
-      // [submodule "name"]
-      //   path = some/path
       const pathMatches = content.matchAll(/^\s*path\s*=\s*(.+)$/gm);
       for (const match of pathMatches) {
         const submodulePath = match[1].trim();
-        submodulePaths.add(submodulePath);
+        excludedPaths.add(submodulePath);
         // Also add just the folder name for top-level matching
         const folderName = submodulePath.split('/')[0];
-        submodulePaths.add(folderName);
+        excludedPaths.add(folderName);
       }
-      console.log(`[ContractGeneration] Found ${submodulePaths.size} git submodule paths`);
+      console.log(`[ContractGeneration] Found ${excludedPaths.size} git submodule paths`);
     } catch {
-      // No .gitmodules file or can't read it - that's fine
+      // No .gitmodules file - that's fine
     }
 
-    return submodulePaths;
+    // 2. Check for npm workspaces that might be shared packages
+    const packageJsonPath = path.join(repoPath, 'package.json');
+    try {
+      const content = await fs.readFile(packageJsonPath, 'utf-8');
+      const pkg = JSON.parse(content);
+      if (pkg.workspaces) {
+        // Workspaces can be array or object with packages key
+        const workspaces = Array.isArray(pkg.workspaces)
+          ? pkg.workspaces
+          : pkg.workspaces.packages || [];
+        for (const ws of workspaces) {
+          // Workspace patterns like "packages/*" - we want to exclude the container
+          if (ws.endsWith('/*')) {
+            const container = ws.slice(0, -2);
+            console.log(`[ContractGeneration] Found npm workspace container: ${container}`);
+            // Don't exclude individual packages, just note the container pattern
+          }
+        }
+      }
+    } catch {
+      // No package.json or can't parse - that's fine
+    }
+
+    // 3. Check for symlinks in common package locations
+    const packageDirs = ['packages', 'libs', 'modules'];
+    for (const dir of packageDirs) {
+      const dirPath = path.join(repoPath, dir);
+      try {
+        const entries = await fs.readdir(dirPath, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isSymbolicLink()) {
+            const symPath = `${dir}/${entry.name}`;
+            excludedPaths.add(symPath);
+            console.log(`[ContractGeneration] Found symlinked package: ${symPath}`);
+          }
+        }
+      } catch {
+        // Directory doesn't exist - that's fine
+      }
+    }
+
+    return excludedPaths;
   }
 
   /**
@@ -677,16 +717,25 @@ export class ContractGenerationService extends BaseService {
   }
 
   /**
+   * AI feature info - stores name and description for each discovered feature path
+   */
+  private aiFeatureInfo: Map<string, { name: string; description?: string }> = new Map();
+
+  /**
    * Use AI to filter discovered folders into actual features
    * Returns a Set of folder names/paths that are actual features
+   * Also populates this.aiFeatureInfo with name/description for each path
    */
   private async filterFoldersToFeatures(
     repoPath: string,
     candidateFolders: string[]
   ): Promise<Set<string> | null> {
+    // Clear previous AI feature info
+    this.aiFeatureInfo.clear();
+
     try {
-      // Get directory tree for context
-      const directoryTree = await this.getDirectoryTree(repoPath, 2);
+      // Get directory tree for context - use depth 4 to see inside containers
+      const directoryTree = await this.getDirectoryTree(repoPath, 4);
 
       // Format folder list
       const folderList = candidateFolders.map(f => `- ${f}`).join('\n');
@@ -729,9 +778,27 @@ export class ContractGenerationService extends BaseService {
             for (const featurePath of paths) {
               const normalizedPath = featurePath.replace(/^\.?\//, '');
               featureSet.add(normalizedPath);
-              // Also add just the folder name for matching
-              const folderName = normalizedPath.split('/').pop() || normalizedPath;
-              featureSet.add(folderName);
+
+              // Extract all path segments for flexible matching
+              const pathSegments = normalizedPath.split('/');
+              const topLevelFolder = pathSegments[0];
+              const lastSegment = pathSegments[pathSegments.length - 1];
+
+              // Add various path forms for matching
+              featureSet.add(topLevelFolder);
+              if (lastSegment !== topLevelFolder) {
+                featureSet.add(lastSegment);
+              }
+
+              // Store AI-provided name and description
+              const featureInfo = {
+                name: f.name || lastSegment,
+                description: f.description,
+              };
+              this.aiFeatureInfo.set(normalizedPath, featureInfo);
+              this.aiFeatureInfo.set(topLevelFolder, featureInfo);
+              this.aiFeatureInfo.set(lastSegment, featureInfo);
+              console.log(`[ContractGeneration] Stored AI info for "${normalizedPath}": name="${featureInfo.name}"`);
             }
 
             const pathsStr = paths.join(', ');
@@ -756,9 +823,9 @@ export class ContractGenerationService extends BaseService {
   /**
    * Discover all features in a repository
    * @param repoPath - Path to the repository
-   * @param useAI - If true, uses LLM to intelligently identify actual features (default: false for backwards compatibility)
+   * @param useAI - If true, uses LLM to intelligently identify actual features (default: true)
    */
-  async discoverFeatures(repoPath: string, useAI = false): Promise<IpcResult<DiscoveredFeature[]>> {
+  async discoverFeatures(repoPath: string, useAI = true): Promise<IpcResult<DiscoveredFeature[]>> {
     return this.wrap(async () => {
       console.log(`[ContractGeneration] Discovering features in ${repoPath} (useAI: ${useAI})`);
       const features: DiscoveredFeature[] = [];
@@ -864,15 +931,18 @@ export class ContractGenerationService extends BaseService {
 
           if (totalFiles > 0) {
             processedPaths.add(featurePath);
-            // Get feature name from package.json if available
-            const featureName = await this.getFeatureName(featurePath, entry.name);
+            // Check if AI provided name/description for this feature
+            const aiInfo = this.aiFeatureInfo.get(entry.name);
+            // Get feature name: prefer AI-provided name, then package.json, then folder name
+            const featureName = aiInfo?.name || await this.getFeatureName(featurePath, entry.name);
             features.push({
               name: featureName,
+              description: aiInfo?.description,
               basePath: featurePath,
               files,
               contractPatternMatches: totalFiles,
             });
-            console.log(`[ContractGeneration] Found feature: ${featureName} (${totalFiles} files)`);
+            console.log(`[ContractGeneration] Found feature: ${featureName} (${totalFiles} files)${aiInfo?.description ? ` - ${aiInfo.description}` : ''}`);
           }
         }
       } catch (err) {
@@ -922,15 +992,18 @@ export class ContractGenerationService extends BaseService {
 
             if (totalFiles > 0) {
               processedPaths.add(featurePath);
-              // Get feature name from package.json if available
-              const featureName = await this.getFeatureName(featurePath, folderName);
+              // Check if AI provided name/description for this feature
+              const aiInfo = this.aiFeatureInfo.get(relativePath) || this.aiFeatureInfo.get(folderName);
+              // Get feature name: prefer AI-provided name, then package.json, then folder name
+              const featureName = aiInfo?.name || await this.getFeatureName(featurePath, folderName);
               features.push({
                 name: featureName,
+                description: aiInfo?.description,
                 basePath: featurePath,
                 files,
                 contractPatternMatches: totalFiles,
               });
-              console.log(`[ContractGeneration] Found feature: ${featureName} (${totalFiles} files)`);
+              console.log(`[ContractGeneration] Found feature: ${featureName} (${totalFiles} files)${aiInfo?.description ? ` - ${aiInfo.description}` : ''}`);
             }
           }
         } catch (err) {

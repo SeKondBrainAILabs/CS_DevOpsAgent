@@ -1357,6 +1357,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
   const [scanPathOption, setScanPathOption] = useState<'main' | 'worktree'>('main');
   const [discoveredFeatures, setDiscoveredFeatures] = useState<Array<{
     name: string;
+    description?: string;
     basePath: string;
     files: { api: string[]; schema: string[]; tests: { e2e: string[]; unit: string[]; integration: string[] }; fixtures: string[]; config: string[]; other: string[] };
     contractPatternMatches: number;
@@ -1761,10 +1762,10 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
         </div>
       )}
 
-      {/* Discovered Features */}
+      {/* Discovered Features - Table View */}
       {discoveredFeatures.length > 0 && !isGenerating && (
         <div className="mx-4 mt-4 p-3 bg-surface-secondary rounded-xl border border-border">
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between mb-3">
             <span className="text-sm font-medium text-text-primary">
               Discovered {discoveredFeatures.length} feature(s)
             </span>
@@ -1775,109 +1776,116 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
               Clear
             </button>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {discoveredFeatures.map(f => {
-              // Check if this feature has contract changes
-              const featureChanges = contractChanges.filter(c =>
-                c.file.toLowerCase().includes(f.name.toLowerCase()) ||
-                c.file.includes(f.basePath)
-              );
-              const hasChanges = featureChanges.length > 0;
-              const hasBreaking = featureChanges.some(c => c.impactLevel === 'breaking');
-              const isExpanded = expandedFeature === f.name;
 
-              return (
-                <div key={f.name} className="relative">
-                  <button
-                    onClick={() => setExpandedFeature(isExpanded ? null : f.name)}
-                    className={`px-2 py-1 rounded border text-xs transition-all flex items-center gap-1 ${
-                      hasBreaking
-                        ? 'bg-red-50 border-red-300 text-red-800'
-                        : hasChanges
-                          ? 'bg-yellow-50 border-yellow-300 text-yellow-800'
-                          : 'bg-surface border-border text-text-primary'
-                    } ${isExpanded ? 'ring-2 ring-kanvas-blue' : 'hover:border-kanvas-blue'}`}
-                    title={`${f.contractPatternMatches} files • Click to ${isExpanded ? 'collapse' : 'expand'}`}
-                  >
-                    📁 {f.name}
-                    <span className="text-text-secondary">({f.contractPatternMatches})</span>
-                    {hasChanges && (
-                      <span className={`ml-1 px-1 py-0.5 rounded text-[10px] font-medium ${
-                        hasBreaking ? 'bg-red-200 text-red-800' : 'bg-yellow-200 text-yellow-800'
-                      }`}>
-                        {featureChanges.length} {hasBreaking ? '⚠️' : '✏️'}
-                      </span>
-                    )}
-                    <span className={`ml-1 transition-transform ${isExpanded ? 'rotate-180' : ''}`}>▼</span>
-                  </button>
+          {/* Features Table */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border text-left text-text-secondary">
+                  <th className="pb-2 pr-4 font-medium">Feature</th>
+                  <th className="pb-2 pr-4 font-medium">Location</th>
+                  <th className="pb-2 pr-2 font-medium text-center" title="API files">🔌</th>
+                  <th className="pb-2 pr-2 font-medium text-center" title="Schema files">📐</th>
+                  <th className="pb-2 pr-2 font-medium text-center" title="Events/Config">⚡</th>
+                  <th className="pb-2 pr-2 font-medium text-center" title="Unit tests">🧪</th>
+                  <th className="pb-2 pr-2 font-medium text-center" title="E2E tests">🎭</th>
+                  <th className="pb-2 font-medium text-center">Files</th>
+                </tr>
+              </thead>
+              <tbody>
+                {discoveredFeatures.map(f => {
+                  // Check if this feature has contract changes
+                  const featureChanges = contractChanges.filter(c =>
+                    c.file.toLowerCase().includes(f.name.toLowerCase()) ||
+                    c.file.includes(f.basePath)
+                  );
+                  const hasChanges = featureChanges.length > 0;
+                  const hasBreaking = featureChanges.some(c => c.impactLevel === 'breaking');
 
-                  {/* Expanded Feature Details */}
-                  {isExpanded && (
-                    <div className="absolute left-0 top-full mt-1 z-10 w-72 p-3 bg-surface rounded-lg border border-border shadow-lg">
-                      <div className="text-xs space-y-2">
-                        <div className="font-medium text-text-primary border-b border-border pb-1">
-                          {f.name} Details
-                        </div>
+                  // Get relative path from repo root
+                  const relativePath = f.basePath.split('/').slice(-2).join('/');
 
-                        {/* File breakdown */}
-                        <div className="grid grid-cols-2 gap-1 text-text-secondary">
-                          {f.files.api.length > 0 && (
-                            <div>🔌 API: {f.files.api.length}</div>
-                          )}
-                          {f.files.schema.length > 0 && (
-                            <div>📐 Schema: {f.files.schema.length}</div>
-                          )}
-                          {f.files.tests.unit.length > 0 && (
-                            <div>🧪 Unit: {f.files.tests.unit.length}</div>
-                          )}
-                          {f.files.tests.e2e.length > 0 && (
-                            <div>🎭 E2E: {f.files.tests.e2e.length}</div>
-                          )}
-                          {f.files.config.length > 0 && (
-                            <div>⚙️ Config: {f.files.config.length}</div>
-                          )}
-                          {f.files.other.length > 0 && (
-                            <div>📄 Other: {f.files.other.length}</div>
+                  return (
+                    <tr
+                      key={f.name}
+                      className={`border-b border-border/50 hover:bg-surface transition-colors ${
+                        hasBreaking ? 'bg-red-50/50' : hasChanges ? 'bg-yellow-50/50' : ''
+                      }`}
+                    >
+                      <td className="py-2 pr-4">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-text-primary">{f.name}</span>
+                          {hasChanges && (
+                            <span className={`px-1 py-0.5 rounded text-[10px] font-medium ${
+                              hasBreaking ? 'bg-red-200 text-red-800' : 'bg-yellow-200 text-yellow-800'
+                            }`}>
+                              {hasBreaking ? '⚠️' : '✏️'}
+                            </span>
                           )}
                         </div>
-
-                        {/* Contract Changes for this feature */}
-                        {featureChanges.length > 0 && (
-                          <div className="mt-2 pt-2 border-t border-border">
-                            <div className="font-medium text-yellow-700 mb-1">
-                              Contract Changes:
-                            </div>
-                            <div className="space-y-1 max-h-32 overflow-auto">
-                              {featureChanges.map((change, idx) => (
-                                <div
-                                  key={idx}
-                                  className={`px-2 py-1 rounded text-[10px] ${
-                                    change.impactLevel === 'breaking'
-                                      ? 'bg-red-100 text-red-800'
-                                      : 'bg-yellow-100 text-yellow-800'
-                                  }`}
-                                >
-                                  <span className="font-medium">{change.changeType}</span>
-                                  <span className="mx-1">•</span>
-                                  <span>{change.type}</span>
-                                  <div className="text-text-secondary truncate">{change.file}</div>
-                                </div>
-                              ))}
-                            </div>
+                        {f.description && (
+                          <div className="text-text-secondary text-[10px] mt-0.5 truncate max-w-[200px]" title={f.description}>
+                            {f.description}
                           </div>
                         )}
-
-                        {featureChanges.length === 0 && (
-                          <div className="text-text-secondary italic">
-                            No recent contract changes
-                          </div>
+                      </td>
+                      <td className="py-2 pr-4">
+                        <code className="text-[10px] text-text-secondary bg-surface px-1 py-0.5 rounded">
+                          {relativePath}
+                        </code>
+                      </td>
+                      <td className="py-2 pr-2 text-center">
+                        {f.files.api.length > 0 ? (
+                          <span className="text-green-600" title={`${f.files.api.length} API files`}>✓</span>
+                        ) : (
+                          <span className="text-text-secondary/30">-</span>
                         )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                      </td>
+                      <td className="py-2 pr-2 text-center">
+                        {f.files.schema.length > 0 ? (
+                          <span className="text-blue-600" title={`${f.files.schema.length} Schema files`}>✓</span>
+                        ) : (
+                          <span className="text-text-secondary/30">-</span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-2 text-center">
+                        {f.files.config.length > 0 ? (
+                          <span className="text-purple-600" title={`${f.files.config.length} Config/Event files`}>✓</span>
+                        ) : (
+                          <span className="text-text-secondary/30">-</span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-2 text-center">
+                        {f.files.tests.unit.length > 0 ? (
+                          <span className="text-amber-600" title={`${f.files.tests.unit.length} Unit tests`}>✓</span>
+                        ) : (
+                          <span className="text-text-secondary/30">-</span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-2 text-center">
+                        {f.files.tests.e2e.length > 0 ? (
+                          <span className="text-cyan-600" title={`${f.files.tests.e2e.length} E2E tests`}>✓</span>
+                        ) : (
+                          <span className="text-text-secondary/30">-</span>
+                        )}
+                      </td>
+                      <td className="py-2 text-center text-text-secondary">
+                        {f.contractPatternMatches}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Legend */}
+          <div className="mt-3 pt-2 border-t border-border flex flex-wrap gap-3 text-[10px] text-text-secondary">
+            <span>🔌 API</span>
+            <span>📐 Schema</span>
+            <span>⚡ Events/Config</span>
+            <span>🧪 Unit Tests</span>
+            <span>🎭 E2E Tests</span>
           </div>
         </div>
       )}

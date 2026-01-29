@@ -857,6 +857,7 @@ const api = {
   contractGeneration: {
     discoverFeatures: (repoPath: string, useAI?: boolean): Promise<IpcResult<Array<{
       name: string;
+      description?: string;
       basePath: string;
       files: {
         api: string[];
