@@ -109,37 +109,43 @@ prompts:
     system: |
       {base_system}
 
-      You are identifying BUSINESS/DOMAIN FEATURES from a codebase - not just folders.
+      You are identifying GRANULAR BUSINESS FEATURES from a codebase - NOT top-level container folders.
 
-      A DOMAIN FEATURE is a distinct business capability or epic, such as:
+      CRITICAL: Look INSIDE container folders to find actual features:
+      - If you see backend/, look inside for auth/, users/, payments/, etc.
+      - If you see services/, look inside for individual services
+      - If you see packages/, look inside for individual packages
+      - NEVER return a container folder as a feature
+
+      A BUSINESS FEATURE is a distinct capability with its own code, such as:
       - Authentication (user login, registration, password reset)
       - User Management (CRUD operations on users)
       - Payments/Billing (transactions, subscriptions)
       - Notifications (email, push, in-app)
-      - Admin Panel (administrative functions)
-      - Frontend/UI (web or mobile user interface)
-      - API Gateway (request routing, rate limiting)
-      - Charity/Donations (charitable giving functionality)
+      - Content Processing (AI analysis, summarization)
+      - News Aggregation (fetching, parsing news feeds)
 
       Your task:
-      1. Identify ALL BUSINESS FEATURES this application implements
-      2. Give each feature a proper BUSINESS NAME (e.g., "Authentication" not "auth-service")
-      3. Map each feature to the code folder(s) that implement it
+      1. Look INSIDE folders like backend/, services/, packages/, src/ to find actual features
+      2. Give each feature a proper BUSINESS NAME (e.g., "User Authentication" not "auth")
+      3. Return the SPECIFIC path to the feature (e.g., "backend/src/auth" not just "backend")
       4. Briefly describe what the feature does
 
-      INCLUDE these as features:
-      - Frontend/UI applications (React, Vue, Angular apps in frontend/, web/, client/)
-      - API Gateway or routing services (api-gateway/, gateway/)
-      - Shared libraries that provide reusable business logic
+      INCLUDE as features:
+      - Individual services inside services/ or backend/
+      - Specific modules with business logic
+      - Frontend applications (but not the container folder)
+      - Individual packages that provide business functionality
 
-      EXCLUDE these from being features:
-      - Test directories (tests/, __tests__)
-      - Documentation (docs/)
-      - Database migrations only (database/, migrations/)
+      EXCLUDE from being features:
+      - Git submodules (typically in submodules/ or linked repos)
+      - Container folders that ONLY hold other features (services/, packages/, backend/ alone)
+      - Test directories (tests/, __tests__, pulse-tests/)
+      - Documentation (docs/, Documentation/)
       - Build artifacts (dist/, build/)
-      - Configuration-only folders (config/, scripts/)
+      - Configuration folders (config/, scripts/, infrastructure/)
       - Project management (pm_artefacts/, notes/)
-      - Container folders that ONLY hold other features (services/, packages/) - but DO include services within them
+      - DevOps/deployment folders (deploy/, ScriptCS_DevOpsAgent/)
 
     user_template: |
       Repository: {repo_name}
@@ -147,16 +153,18 @@ prompts:
       Discovered folders:
       {folder_list}
 
-      Directory structure:
+      Directory structure (look INSIDE containers to find features):
       ```
       {directory_tree}
       ```
 
-      Identify the BUSINESS/DOMAIN FEATURES this application implements.
+      Identify the GRANULAR BUSINESS FEATURES inside this codebase.
+      Look INSIDE folders like backend/, services/, packages/ to find actual features.
+      DO NOT return container folders as features.
 
       For each feature, provide:
-      - A proper business name (e.g., "Authentication", "Family Management", "Notifications")
-      - The code path(s) that implement it
+      - A descriptive business name (e.g., "User Authentication", "News Content Processing")
+      - The SPECIFIC path to the feature code (e.g., "backend/src/auth", NOT just "backend")
       - A brief description of what it does
 
       Return ONLY valid JSON (no explanations):
@@ -164,24 +172,24 @@ prompts:
       {
         "features": [
           {
-            "name": "Authentication",
-            "paths": ["services/auth-service"],
+            "name": "User Authentication",
+            "paths": ["backend/src/auth", "firebase/functions/src/auth"],
             "description": "User registration, login, password reset, and session management"
           },
           {
-            "name": "Notifications",
-            "paths": ["services/notification-service"],
-            "description": "Email, push, and in-app notification delivery"
+            "name": "News Content Processing",
+            "paths": ["ai-worker/src/processors"],
+            "description": "AI-powered news article analysis and summarization"
           }
         ]
       }
       ```
 
       IMPORTANT:
-      - Use BUSINESS names (Authentication, not auth-service)
-      - Group related functionality into single features
-      - A feature can map to multiple code paths
-      - Exclude utility folders (tests, docs, database, config, pm_artefacts)
+      - Return SPECIFIC paths (backend/src/users NOT backend)
+      - Use descriptive BUSINESS names
+      - Group related code across folders into single features
+      - EXCLUDE: tests, docs, config, scripts, devops, infrastructure folders
 
   # ==========================================================================
   # PHASE 2: GENERATE README / ARCHITECTURE DOC

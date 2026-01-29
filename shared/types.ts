@@ -567,6 +567,7 @@ export interface HeartbeatStatus {
  */
 export interface DiscoveredFeature {
   name: string;
+  description?: string; // AI-generated description of the feature
   basePath: string;
   files: {
     api: string[];      // API routes, OpenAPI, GraphQL, etc.
