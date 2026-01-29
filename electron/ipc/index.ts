@@ -556,8 +556,8 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   // CONTRACT GENERATION HANDLERS
   // Scan codebase and generate contract documentation
   // ==========================================================================
-  ipcMain.handle(IPC.CONTRACT_DISCOVER_FEATURES, async (_, repoPath: string) => {
-    return services.contractGeneration.discoverFeatures(repoPath);
+  ipcMain.handle(IPC.CONTRACT_DISCOVER_FEATURES, async (_, repoPath: string, useAI?: boolean) => {
+    return services.contractGeneration.discoverFeatures(repoPath, useAI);
   });
 
   ipcMain.handle(IPC.CONTRACT_GENERATE_FEATURE, async (_, repoPath: string, feature: unknown) => {

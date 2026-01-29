@@ -1594,7 +1594,8 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
     setGenerationResult(null);
 
     try {
-      const result = await window.api?.contractGeneration?.discoverFeatures(repoPath);
+      // Use AI to intelligently filter features (true = use LLM to identify actual features)
+      const result = await window.api?.contractGeneration?.discoverFeatures(repoPath, true);
       if (result?.success && result.data) {
         setDiscoveredFeatures(result.data);
       }

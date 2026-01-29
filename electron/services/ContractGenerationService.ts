@@ -236,6 +236,51 @@ const IGNORE_FOLDERS = new Set([
   'logs', 'log',
 ]);
 
+/**
+ * Parse .gitignore file and return patterns
+ */
+function parseGitignore(gitignoreContent: string): string[] {
+  return gitignoreContent
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith('#')) // Remove empty lines and comments
+    .map(pattern => {
+      // Remove leading slash (gitignore uses it for root-relative paths)
+      if (pattern.startsWith('/')) pattern = pattern.slice(1);
+      // Remove trailing slash (directories)
+      if (pattern.endsWith('/')) pattern = pattern.slice(0, -1);
+      return pattern;
+    });
+}
+
+/**
+ * Check if a path matches any gitignore pattern
+ */
+function matchesGitignorePattern(relativePath: string, patterns: string[]): boolean {
+  const pathParts = relativePath.split('/');
+  
+  for (const pattern of patterns) {
+    // Exact match
+    if (relativePath === pattern) return true;
+    
+    // Directory match (any part of path matches)
+    if (pathParts.includes(pattern)) return true;
+    
+    // Wildcard patterns
+    if (pattern.includes('*')) {
+      const regexPattern = pattern
+        .replace(/\./g, '\\.') // Escape dots
+        .replace(/\*/g, '.*');  // Convert * to .*
+      const regex = new RegExp(`^${regexPattern}$`);
+      if (regex.test(relativePath)) return true;
+      // Also check if any path component matches
+      if (pathParts.some(part => regex.test(part))) return true;
+    }
+  }
+  
+  return false;
+}
+
 export class ContractGenerationService extends BaseService {
   private aiService: AIService;
   private registryService: ContractRegistryService;
@@ -722,6 +767,17 @@ export class ContractGenerationService extends BaseService {
       // Get git submodule paths to exclude
       const submodulePaths = await this.getGitSubmodulePaths(repoPath);
 
+      // Get .gitignore patterns
+      let gitignorePatterns: string[] = [];
+      try {
+        const gitignorePath = path.join(repoPath, '.gitignore');
+        const content = await fs.readFile(gitignorePath, 'utf-8');
+        gitignorePatterns = parseGitignore(content);
+        console.log(`[ContractGeneration] Loaded ${gitignorePatterns.length} patterns from .gitignore`);
+      } catch {
+        // No .gitignore, that's fine
+      }
+
       // If useAI is true, use LLM to identify actual features first
       let aiIdentifiedFeatures: Set<string> | null = null;
       if (useAI) {
@@ -736,6 +792,7 @@ export class ContractGenerationService extends BaseService {
             if (entry.name.startsWith('.')) continue;
             if (IGNORE_FOLDERS.has(entry.name)) continue;
             if (submodulePaths.has(entry.name)) continue;
+            if (matchesGitignorePattern(entry.name, gitignorePatterns)) continue;
             candidateFolders.push(entry.name);
           }
         } catch {
@@ -770,6 +827,12 @@ export class ContractGenerationService extends BaseService {
           // Skip git submodules
           if (submodulePaths.has(entry.name)) {
             console.log(`[ContractGeneration] Skipping git submodule: ${entry.name}`);
+            continue;
+          }
+
+          // Skip gitignored paths
+          if (matchesGitignorePattern(entry.name, gitignorePatterns)) {
+            console.log(`[ContractGeneration] Skipping gitignored folder: ${entry.name}`);
             continue;
           }
 
@@ -839,6 +902,12 @@ export class ContractGenerationService extends BaseService {
             const relativePath = path.relative(repoPath, featurePath);
             if (submodulePaths.has(relativePath) || submodulePaths.has(folderName)) {
               console.log(`[ContractGeneration] Skipping git submodule: ${relativePath}`);
+              continue;
+            }
+
+            // Check gitignore
+            if (matchesGitignorePattern(folderName, gitignorePatterns) || matchesGitignorePattern(relativePath, gitignorePatterns)) {
+              console.log(`[ContractGeneration] Skipping gitignored path: ${relativePath}`);
               continue;
             }
 

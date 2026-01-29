@@ -855,7 +855,7 @@ const api = {
   // Scan codebase and generate contract documentation
   // ==========================================================================
   contractGeneration: {
-    discoverFeatures: (repoPath: string): Promise<IpcResult<Array<{
+    discoverFeatures: (repoPath: string, useAI?: boolean): Promise<IpcResult<Array<{
       name: string;
       basePath: string;
       files: {
@@ -868,7 +868,7 @@ const api = {
       };
       contractPatternMatches: number;
     }>>> =>
-      ipcRenderer.invoke(IPC.CONTRACT_DISCOVER_FEATURES, repoPath),
+      ipcRenderer.invoke(IPC.CONTRACT_DISCOVER_FEATURES, repoPath, useAI),
 
     generateFeature: (repoPath: string, feature: {
       name: string;
