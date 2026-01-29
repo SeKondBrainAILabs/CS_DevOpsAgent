@@ -215,13 +215,13 @@ echo ""
 echo -e "Options:"
 echo ""
 echo -e "    ${BOLD}1. npm run dev${NC}           - Start development mode (hot reload)"
-echo -e "    ${BOLD}2. ./scripts/install-app.sh${NC} - Build & install to Applications"
+echo -e "    ${BOLD}2. ./scripts/install-app.sh${NC} - Build release & install to Applications"
 echo ""
 
 # Ask what to do
 echo -e "What would you like to do?"
 echo -e "  ${BOLD}[d]${NC} Start development mode"
-echo -e "  ${BOLD}[i]${NC} Build & install to Applications folder"
+echo -e "  ${BOLD}[i]${NC} Build & install to Applications folder (Production)"
 echo -e "  ${BOLD}[n]${NC} Nothing (exit)"
 echo ""
 read -p "Choice (d/i/n): " -n 1 -r

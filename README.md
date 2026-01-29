@@ -22,43 +22,35 @@ Download the latest release for your platform:
 If you want to contribute or run from source:
 
 ```bash
-# Clone the repo
+# 1. Clone the repo
 git clone https://github.com/SeKondBrainAILabs/CS_DevOpsAgent.git
 cd CS_DevOpsAgent
 
-# Run the setup script (handles everything)
+# 2. Run the setup script
 ./setup.sh
 ```
 
-That's it! The setup script will:
-- Check Node.js v18+ and Python requirements
-- Initialize git submodules (requires GitHub access)
-- Install dependencies
-- Rebuild native modules for Electron
-- Offer to start the app
+The setup script will:
+- Install dependencies (including native modules like `better-sqlite3`)
+- Initialize git submodules
+- Configure your environment
 
-### Manual Setup
+**Options in setup script:**
+- **[d] Development Mode:** Starts the app with hot-reloading (`npm run dev`)
+- **[i] Build & Install:** Builds a release version and installs it to your Applications folder
 
-If you prefer to do it manually:
+### Manual Build
+To build the app manually without the setup script:
 
 ```bash
-# Switch to Electron branch
-git checkout dev_sdd_claude_rebuildUX
-
-# Initialize submodule (requires GitHub repo access)
-git submodule update --init --recursive
-
-# Install setuptools (required for Python 3.12+)
-pip3 install setuptools
-
 # Install dependencies
 npm install --legacy-peer-deps
 
-# Rebuild native modules
-npx electron-rebuild
+# Build source code
+npm run build
 
-# Start the app
-npm run dev
+# Package for your OS (generates DMG/Zip/AppImage in release/ folder)
+npx electron-builder --mac   # or --win, --linux
 ```
 
 ---
@@ -102,6 +94,17 @@ npm run dev
 ---
 
 ## Troubleshooting
+
+### Build Errors
+
+If you encounter build errors:
+
+```bash
+# Clean and rebuild
+rm -rf node_modules dist release
+npm install --legacy-peer-deps
+npm run build
+```
 
 ### "Authentication failed" for submodule
 
