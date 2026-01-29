@@ -40,6 +40,7 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
   const [hasGroqKey, setHasGroqKey] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [appVersion, setAppVersion] = useState<string>('');
 
   // Maintenance state
   const [orphanedSessions, setOrphanedSessions] = useState<OrphanedSession[]>([]);
@@ -66,6 +67,10 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
       if (result.success) {
         setHasGroqKey(result.data ?? false);
       }
+    });
+
+    window.api.app.getVersion().then((version) => {
+      setAppVersion(version);
     });
   }, []);
 
@@ -300,6 +305,24 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
         <div className="p-4 space-y-4">
           {activeTab === 'general' && config && (
             <>
+              {/* Version Info */}
+              <div className="bg-surface-tertiary rounded-lg p-3 mb-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs text-gray-500 uppercase tracking-wide">Kanvas Version</div>
+                    <div className="text-sm font-mono text-gray-300 mt-1">{appVersion || 'Loading...'}</div>
+                  </div>
+                  <span className="badge badge-primary">Dashboard</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs text-gray-500 uppercase tracking-wide">Agent Version</div>
+                    <div className="text-sm font-mono text-gray-300 mt-1">{appVersion || 'Loading...'}</div>
+                  </div>
+                  <span className="badge badge-success">CLI Agent</span>
+                </div>
+              </div>
+
               {/* Theme */}
               <div>
                 <label className="label">Theme</label>

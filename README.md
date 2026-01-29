@@ -4,9 +4,22 @@
 
 Kanvas monitors Claude, Cursor, Copilot, and other AI agents working on your codebase. It handles git operations, prevents conflicts, and tracks changes automatically.
 
+Version: **1.1.0**
+
 ---
 
-## Quick Start
+## Installation
+
+### Desktop App (Recommended)
+Download the latest release for your platform:
+- **macOS:** `.dmg` or `.zip`
+- **Windows:** `.exe` or `.zip`
+- **Linux:** `.AppImage` or `.deb`
+
+[Download Latest Release](https://github.com/SeKondBrainAILabs/CS_DevOpsAgent/releases)
+
+### CLI / Developer Setup
+If you want to contribute or run from source:
 
 ```bash
 # Clone the repo
