@@ -345,19 +345,77 @@ export class GitService extends BaseService {
 
   /**
    * Rebase current branch onto target branch
-   * Returns true if successful, false if conflicts occurred
+   * Returns detailed result including whether actual changes occurred
    */
-  async rebase(repoPath: string, targetBranch: string): Promise<IpcResult<{ success: boolean; message: string }>> {
+  async rebase(repoPath: string, targetBranch: string): Promise<IpcResult<{
+    success: boolean;
+    message: string;
+    commitsAdded: number;
+    beforeHead: string;
+    afterHead: string;
+  }>> {
     return this.wrap(async () => {
+      // Get HEAD before rebase to verify changes actually occurred
+      const beforeHead = await this.git(['rev-parse', 'HEAD'], repoPath);
+      const beforeCommitCount = await this.git(['rev-list', '--count', 'HEAD'], repoPath);
+
+      console.log(`[GitService] Rebase starting - HEAD before: ${beforeHead.substring(0, 8)}, commits: ${beforeCommitCount}`);
+
       try {
-        await this.git(['pull', '--rebase', 'origin', targetBranch], repoPath);
-        return { success: true, message: 'Rebase successful' };
+        // Check how many commits we're behind
+        let commitsBehind = 0;
+        try {
+          const tracking = await this.git(
+            ['rev-list', '--count', `HEAD..origin/${targetBranch}`],
+            repoPath
+          );
+          commitsBehind = parseInt(tracking, 10) || 0;
+          console.log(`[GitService] Commits behind origin/${targetBranch}: ${commitsBehind}`);
+        } catch {
+          console.log(`[GitService] Could not determine commits behind (branch might not track remote)`);
+        }
+
+        // Perform the rebase
+        const output = await this.git(['pull', '--rebase', 'origin', targetBranch], repoPath);
+        console.log(`[GitService] Git pull --rebase output: ${output}`);
+
+        // Get HEAD after rebase to verify changes
+        const afterHead = await this.git(['rev-parse', 'HEAD'], repoPath);
+        const afterCommitCount = await this.git(['rev-list', '--count', 'HEAD'], repoPath);
+
+        const commitsAdded = parseInt(afterCommitCount, 10) - parseInt(beforeCommitCount, 10);
+        const headChanged = beforeHead !== afterHead;
+
+        console.log(`[GitService] Rebase completed - HEAD after: ${afterHead.substring(0, 8)}, commits: ${afterCommitCount}, added: ${commitsAdded}`);
+
+        // Determine appropriate message based on what actually happened
+        let message: string;
+        if (!headChanged && commitsAdded === 0) {
+          message = 'Already up to date - no changes from remote';
+          console.log(`[GitService] WARNING: Rebase completed but no changes detected!`);
+        } else if (commitsAdded > 0) {
+          message = `Rebased successfully - added ${commitsAdded} commit(s) from ${targetBranch}`;
+        } else if (headChanged) {
+          message = `Rebased successfully onto ${targetBranch}`;
+        } else {
+          message = 'Rebase completed';
+        }
+
+        return {
+          success: true,
+          message,
+          commitsAdded,
+          beforeHead,
+          afterHead,
+        };
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error(`[GitService] Rebase failed:`, errorMsg);
 
         // Abort the rebase to clean up
         try {
           await this.git(['rebase', '--abort'], repoPath);
+          console.log(`[GitService] Rebase aborted successfully`);
         } catch {
           // Ignore abort errors
         }
@@ -375,6 +433,9 @@ export class GitService extends BaseService {
         return {
           success: false,
           message: userMessage,
+          commitsAdded: 0,
+          beforeHead: beforeHead,
+          afterHead: beforeHead, // Same as before since rebase failed
         };
       }
     }, 'GIT_REBASE_FAILED');
@@ -382,14 +443,20 @@ export class GitService extends BaseService {
 
   /**
    * Perform a full rebase operation with stash handling
+   * Returns detailed information about what actually changed
    */
   async performRebase(repoPath: string, baseBranch: string): Promise<IpcResult<{
     success: boolean;
     message: string;
     hadChanges: boolean;
+    commitsAdded?: number;
+    beforeHead?: string;
+    afterHead?: string;
   }>> {
     return this.wrap(async () => {
-      console.log(`[GitService] Starting rebase of ${repoPath} onto ${baseBranch}`);
+      console.log(`[GitService] ========== REBASE OPERATION START ==========`);
+      console.log(`[GitService] Repository: ${repoPath}`);
+      console.log(`[GitService] Base branch: ${baseBranch}`);
 
       // 1. Fetch latest - with better error handling
       try {
@@ -444,21 +511,35 @@ export class GitService extends BaseService {
       if (hadChanges) {
         try {
           await this.git(['stash', 'pop'], repoPath);
+          console.log(`[GitService] Stash pop successful`);
         } catch (error) {
           console.warn('[GitService] Stash pop had conflicts:', error);
+          console.log(`[GitService] ========== REBASE COMPLETED WITH STASH CONFLICTS ==========`);
           return {
             success: true,
-            message: 'Rebase successful but stash pop had conflicts',
+            message: 'Rebase successful but stash pop had conflicts. Please resolve manually.',
             hadChanges,
+            commitsAdded: rebaseResult.data?.commitsAdded,
+            beforeHead: rebaseResult.data?.beforeHead,
+            afterHead: rebaseResult.data?.afterHead,
           };
         }
       }
 
-      console.log(`[GitService] Rebase completed successfully`);
+      // Use detailed message from rebase result
+      const finalMessage = rebaseResult.data?.message || 'Rebase successful';
+
+      console.log(`[GitService] ========== REBASE OPERATION COMPLETE ==========`);
+      console.log(`[GitService] Result: ${finalMessage}`);
+      console.log(`[GitService] Commits added: ${rebaseResult.data?.commitsAdded || 0}`);
+
       return {
         success: true,
-        message: 'Rebase successful',
+        message: finalMessage,
         hadChanges,
+        commitsAdded: rebaseResult.data?.commitsAdded,
+        beforeHead: rebaseResult.data?.beforeHead,
+        afterHead: rebaseResult.data?.afterHead,
       };
     }, 'GIT_PERFORM_REBASE_FAILED');
   }
@@ -1083,11 +1164,16 @@ export class GitService extends BaseService {
             deletions: 0,
           };
 
-          // Next line might be stats
+          // Next lines might be stats (git adds blank line before stats)
           i++;
+          // Skip blank lines to find stats
+          while (i < lines.length && !lines[i].trim()) {
+            i++;
+          }
           if (i < lines.length) {
             const statsLine = lines[i].trim();
             // Parse: "3 files changed, 120 insertions(+), 30 deletions(-)"
+            // Also handles: "1 file changed, 22 insertions(+)"
             const filesMatch = statsLine.match(/(\d+) files? changed/);
             const addMatch = statsLine.match(/(\d+) insertions?\(\+\)/);
             const delMatch = statsLine.match(/(\d+) deletions?\(-\)/);

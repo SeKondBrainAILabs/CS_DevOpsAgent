@@ -154,6 +154,42 @@ export class MergeService extends BaseService {
     } = {}
   ): Promise<IpcResult<MergeResult>> {
     return this.wrap(async () => {
+      // CRITICAL: If worktreePath provided, commit any uncommitted changes first!
+      // This prevents data loss when user has uncommitted changes in the worktree.
+      if (options.worktreePath) {
+        console.log(`[MergeService] Checking for uncommitted changes in worktree: ${options.worktreePath}`);
+        try {
+          const { stdout: statusOutput } = await this.git(['status', '--porcelain'], options.worktreePath);
+          if (statusOutput.trim()) {
+            console.log(`[MergeService] Found uncommitted changes, committing before merge...`);
+
+            // Stage all changes
+            await this.git(['add', '-A'], options.worktreePath);
+
+            // Commit with auto-commit message
+            await this.git(
+              ['commit', '-m', '[Kanvas] Auto-commit uncommitted changes before merge'],
+              options.worktreePath
+            );
+
+            // Push to ensure source branch has all changes before merge
+            console.log(`[MergeService] Pushing committed changes to origin/${sourceBranch}...`);
+            await this.git(['push', 'origin', sourceBranch], options.worktreePath);
+
+            console.log(`[MergeService] Successfully committed and pushed uncommitted changes`);
+          } else {
+            console.log(`[MergeService] No uncommitted changes in worktree`);
+          }
+        } catch (commitError) {
+          const errorMsg = commitError instanceof Error ? commitError.message : String(commitError);
+          console.error(`[MergeService] Failed to commit uncommitted changes: ${errorMsg}`);
+          // Don't fail the merge - just warn. User may have already committed.
+          if (!errorMsg.includes('nothing to commit')) {
+            console.warn(`[MergeService] Proceeding with merge despite commit error`);
+          }
+        }
+      }
+
       // Get current branch
       const { stdout: currentBranch } = await this.git(['branch', '--show-current'], repoPath);
 

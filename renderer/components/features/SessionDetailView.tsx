@@ -27,6 +27,7 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
   const [restartError, setRestartError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [showErrorPopup, setShowErrorPopup] = useState(false);
 
   // Load instance data to get the prompt
   useEffect(() => {
@@ -93,12 +94,14 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
     if (syncing) return;
     setSyncing(true);
     setSyncResult(null);
+    setShowErrorPopup(false);
     try {
       const repoPath = session.worktreePath || session.repoPath;
       const baseBranch = session.baseBranch || 'main';
 
       if (!repoPath) {
-        setSyncResult({ success: false, message: 'No repository path' });
+        setSyncResult({ success: false, message: 'No repository path configured' });
+        setShowErrorPopup(true);
         return;
       }
 
@@ -107,34 +110,47 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
       // First fetch
       const fetchResult = await window.api?.git?.fetch?.(repoPath, 'origin');
       if (!fetchResult?.success) {
-        setSyncResult({ success: false, message: fetchResult?.error?.message || 'Failed to fetch' });
+        const errorMessage = fetchResult?.error?.message || 'Failed to fetch from remote';
+        setSyncResult({ success: false, message: errorMessage });
+        setShowErrorPopup(true);
         return;
       }
 
       // Then rebase
       const rebaseResult = await window.api?.git?.performRebase?.(repoPath, baseBranch);
+
       if (rebaseResult?.success && rebaseResult.data) {
+        const resultMessage = rebaseResult.data.message || (rebaseResult.data.success ? 'Synced successfully' : 'Rebase failed');
         setSyncResult({
           success: rebaseResult.data.success,
-          message: rebaseResult.data.message || (rebaseResult.data.success ? 'Synced successfully' : 'Rebase failed'),
+          message: resultMessage,
         });
+
+        // Show popup for failures or warnings
+        if (!rebaseResult.data.success) {
+          setShowErrorPopup(true);
+        } else if (resultMessage.toLowerCase().includes('warning') || resultMessage.toLowerCase().includes('conflict')) {
+          setShowErrorPopup(true);
+        } else {
+          // Clear success message after 5 seconds
+          setTimeout(() => setSyncResult(null), 5000);
+        }
       } else {
+        const errorMessage = rebaseResult?.error?.message || 'Rebase failed - check console for details';
         setSyncResult({
           success: false,
-          message: rebaseResult?.error?.message || 'Rebase failed',
+          message: errorMessage,
         });
-      }
-
-      // Clear success message after 5 seconds
-      if (rebaseResult?.data?.success) {
-        setTimeout(() => setSyncResult(null), 5000);
+        setShowErrorPopup(true);
       }
     } catch (error) {
       console.error('[SessionDetail] Sync error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Sync failed unexpectedly';
       setSyncResult({
         success: false,
-        message: error instanceof Error ? error.message : 'Sync failed',
+        message: errorMessage,
       });
+      setShowErrorPopup(true);
     } finally {
       setSyncing(false);
     }
@@ -151,6 +167,59 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
 
   return (
     <div className="h-full flex flex-col bg-surface">
+      {/* Error/Warning Popup */}
+      {showErrorPopup && syncResult && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className={`bg-surface border rounded-lg shadow-xl max-w-md w-full mx-4 p-6 ${
+            syncResult.success ? 'border-yellow-500' : 'border-red-500'
+          }`}>
+            <div className="flex items-start gap-3">
+              <div className="flex-shrink-0">
+                {syncResult.success ? (
+                  <svg className="w-6 h-6 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                ) : (
+                  <svg className="w-6 h-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                )}
+              </div>
+              <div className="flex-1">
+                <h3 className={`text-lg font-semibold mb-2 ${
+                  syncResult.success ? 'text-yellow-500' : 'text-red-500'
+                }`}>
+                  {syncResult.success ? 'Sync Warning' : 'Sync Failed'}
+                </h3>
+                <p className="text-text-secondary text-sm whitespace-pre-wrap">{syncResult.message}</p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => {
+                  setShowErrorPopup(false);
+                  setSyncResult(null);
+                }}
+                className="px-4 py-2 text-sm font-medium text-text-secondary hover:text-text-primary transition-colors"
+              >
+                Dismiss
+              </button>
+              {!syncResult.success && (
+                <button
+                  onClick={() => {
+                    setShowErrorPopup(false);
+                    handleSync();
+                  }}
+                  className="px-4 py-2 text-sm font-medium bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                >
+                  Retry
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="p-4 border-b border-border">
         <div className="flex items-center gap-3 mb-3">

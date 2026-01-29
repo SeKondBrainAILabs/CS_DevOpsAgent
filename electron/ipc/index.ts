@@ -449,7 +449,47 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   });
 
   ipcMain.handle(IPC.GIT_PERFORM_REBASE, async (_, repoPath: string, baseBranch: string) => {
-    return services.git.performRebase(repoPath, baseBranch);
+    const result = await services.git.performRebase(repoPath, baseBranch);
+
+    // Log activity for rebase operations
+    try {
+      // Find session by matching repoPath or worktreePath
+      const sessionsResult = await services.session.list();
+      if (sessionsResult.success && sessionsResult.data) {
+        const session = sessionsResult.data.find(
+          (s) => s.worktreePath === repoPath || s.repoPath === repoPath
+        );
+
+        if (session) {
+          const logType = result.success && result.data?.success ? 'git' : 'error';
+          const message = result.data?.message || (result.success ? 'Rebase completed' : 'Rebase failed');
+          const details: Record<string, unknown> = {
+            operation: 'rebase',
+            baseBranch,
+            repoPath,
+          };
+
+          if (result.data?.commitsAdded !== undefined) {
+            details.commitsAdded = result.data.commitsAdded;
+          }
+          if (result.data?.beforeHead) {
+            details.beforeHead = result.data.beforeHead.substring(0, 8);
+          }
+          if (result.data?.afterHead) {
+            details.afterHead = result.data.afterHead.substring(0, 8);
+          }
+
+          services.activity.log(session.id, logType, message, details);
+          console.log(`[IPC] Logged rebase activity for session ${session.id}: ${message}`);
+        } else {
+          console.log(`[IPC] Could not find session for repoPath: ${repoPath} - activity not logged`);
+        }
+      }
+    } catch (logError) {
+      console.warn('[IPC] Failed to log rebase activity:', logError);
+    }
+
+    return result;
   });
 
   ipcMain.handle(IPC.GIT_LIST_WORKTREES, async (_, repoPath: string) => {

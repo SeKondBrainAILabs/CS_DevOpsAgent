@@ -182,7 +182,10 @@ const api = {
     performRebase: (repoPath: string, baseBranch: string): Promise<IpcResult<{
       success: boolean;
       message: string;
-      hadStashedChanges?: boolean;
+      hadChanges: boolean;
+      commitsAdded?: number;
+      beforeHead?: string;
+      afterHead?: string;
     }>> =>
       ipcRenderer.invoke(IPC.GIT_PERFORM_REBASE, repoPath, baseBranch),
 
