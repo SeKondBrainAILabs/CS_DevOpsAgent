@@ -232,11 +232,20 @@ const FEATURE_FOLDER_PATTERNS = [
   '*',
 ];
 
-// Folders to always ignore - ONLY .git internals
-// Everything else should be controlled by .gitignore and .gitmodules
-// User will manually label features as submodules if needed
+// Folders to always ignore when scanning for features
+// Keep this minimal - most exclusions should come from .gitignore and .gitmodules
+// User will manually label other items as submodules if needed
 const IGNORE_FOLDERS = new Set([
-  '.git', // Git internals - never a feature
+  // Git internals
+  '.git',
+  // Test directories (never business features)
+  'tests', 'test', '__tests__', 'test-results', 'playwright-report', 'coverage', '.nyc_output',
+  // Build outputs (should also be in .gitignore, but commonly missed)
+  'node_modules', 'dist', 'build', 'out', '.next', '.nuxt', '.output',
+  // Documentation (not software features)
+  'docs', 'Documentation', 'doc',
+  // Infrastructure/DevOps (not software features)
+  'deploy', 'infra', 'infrastructure', 'scripts',
 ]);
 
 /**
@@ -682,30 +691,40 @@ export class ContractGenerationService extends BaseService {
   }
 
   /**
-   * AI feature info - stores name and description for each discovered feature path
+   * AI feature info - stores name, description, and category for each discovered feature
    */
-  private aiFeatureInfo: Map<string, { name: string; description?: string }> = new Map();
+  private aiFeatureInfo: Map<string, { name: string; description?: string; category?: string }> = new Map();
 
   /**
-   * Use AI to filter discovered folders into actual features
-   * Returns a Set of folder names/paths that are actual features
-   * Also populates this.aiFeatureInfo with name/description for each path
+   * Full AI-identified features - stores complete feature objects from AI
    */
-  private async filterFoldersToFeatures(
+  private aiIdentifiedFeaturesList: Array<{
+    name: string;
+    category?: string;
+    paths: string[];
+    description?: string;
+  }> = [];
+
+  /**
+   * Use AI to identify SERVICE-LEVEL features from the codebase (V3 approach)
+   * Returns the full list of AI-identified features, not just folder paths
+   */
+  private async identifyServiceLevelFeatures(
     repoPath: string,
     candidateFolders: string[]
-  ): Promise<Set<string> | null> {
+  ): Promise<Array<{ name: string; category?: string; paths: string[]; description?: string }> | null> {
     // Clear previous AI feature info
     this.aiFeatureInfo.clear();
+    this.aiIdentifiedFeaturesList = [];
 
     try {
-      // Get directory tree for context - use depth 4 to see inside containers
-      const directoryTree = await this.getDirectoryTree(repoPath, 4);
+      // Get directory tree for context - use depth 5 to see services inside folders
+      const directoryTree = await this.getDirectoryTree(repoPath, 5);
 
       // Format folder list
       const folderList = candidateFolders.map(f => `- ${f}`).join('\n');
 
-      // Use AI to filter
+      // Use AI to identify SERVICE-LEVEL features
       const result = await this.aiService.sendWithMode({
         modeId: 'contract_generator',
         promptKey: 'filter_features',
@@ -714,11 +733,11 @@ export class ContractGenerationService extends BaseService {
           folder_list: folderList,
           directory_tree: directoryTree,
         },
-        userMessage: 'Analyze the folders and return ONLY valid JSON with the features array. No explanations, just JSON.',
+        userMessage: 'Analyze the code structure and identify ALL SERVICE-LEVEL features. Return ONLY valid JSON with the features array. Each feature should have name, category, paths, and description.',
       });
 
       if (!result.success || !result.data) {
-        console.warn('[ContractGeneration] AI feature filter failed:', result.error?.message);
+        console.warn('[ContractGeneration] AI feature identification failed:', result.error?.message);
         return null;
       }
 
@@ -733,54 +752,45 @@ export class ContractGenerationService extends BaseService {
         }
 
         const parsed = JSON.parse(jsonStr);
-        const featureSet = new Set<string>();
 
         if (parsed.features && Array.isArray(parsed.features)) {
           for (const f of parsed.features) {
             // Handle both old format (path) and new format (paths array)
             const paths = f.paths || (f.path ? [f.path] : []);
+            const normalizedPaths = paths.map((p: string) => p.replace(/^\.?\//, ''));
 
-            for (const featurePath of paths) {
-              const normalizedPath = featurePath.replace(/^\.?\//, '');
-              featureSet.add(normalizedPath);
+            const feature = {
+              name: f.name,
+              category: f.category,
+              paths: normalizedPaths,
+              description: f.description,
+            };
 
-              // Extract all path segments for flexible matching
-              const pathSegments = normalizedPath.split('/');
-              const topLevelFolder = pathSegments[0];
-              const lastSegment = pathSegments[pathSegments.length - 1];
+            this.aiIdentifiedFeaturesList.push(feature);
 
-              // Add various path forms for matching
-              featureSet.add(topLevelFolder);
-              if (lastSegment !== topLevelFolder) {
-                featureSet.add(lastSegment);
-              }
-
-              // Store AI-provided name and description
-              const featureInfo = {
-                name: f.name || lastSegment,
+            // Store feature info for each path (for compatibility)
+            for (const featurePath of normalizedPaths) {
+              this.aiFeatureInfo.set(featurePath, {
+                name: f.name,
                 description: f.description,
-              };
-              this.aiFeatureInfo.set(normalizedPath, featureInfo);
-              this.aiFeatureInfo.set(topLevelFolder, featureInfo);
-              this.aiFeatureInfo.set(lastSegment, featureInfo);
-              console.log(`[ContractGeneration] Stored AI info for "${normalizedPath}": name="${featureInfo.name}"`);
+                category: f.category,
+              });
             }
 
-            const pathsStr = paths.join(', ');
-            console.log(`[ContractGeneration] AI identified feature: "${f.name}" at [${pathsStr}]`);
-            if (f.description) {
-              console.log(`[ContractGeneration]   Description: ${f.description}`);
-            }
+            console.log(`[ContractGeneration] AI identified service: "${f.name}" (${f.category || 'uncategorized'}) at [${normalizedPaths.join(', ')}]`);
           }
+
+          console.log(`[ContractGeneration] Total AI-identified services: ${this.aiIdentifiedFeaturesList.length}`);
+          return this.aiIdentifiedFeaturesList;
         }
 
-        return featureSet;
+        return null;
       } catch (parseErr) {
-        console.warn('[ContractGeneration] Failed to parse AI filter response:', parseErr);
+        console.warn('[ContractGeneration] Failed to parse AI response:', parseErr);
         return null;
       }
     } catch (err) {
-      console.error('[ContractGeneration] Error in filterFoldersToFeatures:', err);
+      console.error('[ContractGeneration] Error in identifyServiceLevelFeatures:', err);
       return null;
     }
   }
@@ -788,13 +798,13 @@ export class ContractGenerationService extends BaseService {
   /**
    * Discover all features in a repository
    * @param repoPath - Path to the repository
-   * @param useAI - If true, uses LLM to intelligently identify actual features (default: true)
+   * @param useAI - If true, uses LLM to identify SERVICE-LEVEL features (V3 approach, default: true)
    */
   async discoverFeatures(repoPath: string, useAI = true): Promise<IpcResult<DiscoveredFeature[]>> {
     return this.wrap(async () => {
       console.log(`[ContractGeneration] Discovering features in ${repoPath} (useAI: ${useAI})`);
       const features: DiscoveredFeature[] = [];
-      const processedPaths = new Set<string>();
+      const processedNames = new Set<string>();
 
       // Get git submodule paths to exclude
       const submodulePaths = await this.getGitSubmodulePaths(repoPath);
@@ -810,10 +820,9 @@ export class ContractGenerationService extends BaseService {
         // No .gitignore, that's fine
       }
 
-      // If useAI is true, use LLM to identify actual features first
-      let aiIdentifiedFeatures: Set<string> | null = null;
+      // V3 APPROACH: Use AI to identify SERVICE-LEVEL features directly
       if (useAI) {
-        console.log('[ContractGeneration] Using AI to identify actual features...');
+        console.log('[ContractGeneration] Using AI to identify SERVICE-LEVEL features (V3 approach)...');
 
         // First, collect all candidate folders (mechanical scan)
         const candidateFolders: string[] = [];
@@ -831,19 +840,59 @@ export class ContractGenerationService extends BaseService {
           // Ignore errors
         }
 
-        // Use AI to filter candidate folders into actual features
+        // Use AI to identify service-level features
         if (candidateFolders.length > 0) {
-          const filteredFeatures = await this.filterFoldersToFeatures(repoPath, candidateFolders);
-          if (filteredFeatures) {
-            aiIdentifiedFeatures = filteredFeatures;
-            console.log(`[ContractGeneration] AI identified ${aiIdentifiedFeatures.size} feature paths`);
+          const aiFeatures = await this.identifyServiceLevelFeatures(repoPath, candidateFolders);
+
+          if (aiFeatures && aiFeatures.length > 0) {
+            console.log(`[ContractGeneration] AI identified ${aiFeatures.length} service-level features`);
+
+            // Create DiscoveredFeature objects directly from AI results
+            for (const aiFeature of aiFeatures) {
+              if (processedNames.has(aiFeature.name)) continue;
+              processedNames.add(aiFeature.name);
+
+              // Determine base path from the first path in the feature
+              const firstPath = aiFeature.paths[0] || '';
+              const basePath = firstPath.includes('/')
+                ? path.join(repoPath, firstPath.split('/').slice(0, -1).join('/'))
+                : path.join(repoPath, firstPath);
+
+              // Scan files for this feature (use first path's directory)
+              let files: DiscoveredFeature['files'];
+              try {
+                const scanPath = path.join(repoPath, firstPath.split('/')[0]);
+                files = await this.scanFeatureFiles(scanPath, repoPath);
+              } catch {
+                files = { api: [], schema: [], tests: { unit: [], integration: [], e2e: [] }, fixtures: [], config: [], other: [] };
+              }
+
+              features.push({
+                name: aiFeature.name,
+                description: aiFeature.description,
+                basePath,
+                files,
+                contractPatternMatches: files.api.length + files.schema.length + files.other.length,
+              });
+
+              console.log(`[ContractGeneration] Created feature: ${aiFeature.name} (${aiFeature.category || 'uncategorized'})`);
+            }
+
+            // If we successfully identified features via AI, return them
+            if (features.length > 0) {
+              console.log(`[ContractGeneration] Total features discovered: ${features.length}`);
+              return features;
+            }
           } else {
-            console.warn('[ContractGeneration] AI feature filtering failed, falling back to mechanical scan');
+            console.warn('[ContractGeneration] AI feature identification failed, falling back to folder scan');
           }
         }
       }
 
-      // 1. Scan top-level directories first (most repos have this structure)
+      // FALLBACK: Folder-level scanning (when AI is disabled or fails)
+      console.log('[ContractGeneration] Using folder-level scanning (fallback)...');
+      const processedPaths = new Set<string>();
+
       try {
         const entries = await fs.readdir(repoPath, { withFileTypes: true });
         console.log(`[ContractGeneration] Found ${entries.length} entries in ${repoPath}`);
@@ -868,53 +917,31 @@ export class ContractGenerationService extends BaseService {
             continue;
           }
 
-          // If AI is enabled, check if this folder is a feature or contains features
-          if (aiIdentifiedFeatures) {
-            const isDirectFeature = aiIdentifiedFeatures.has(entry.name);
-            // Check if any AI-identified path starts with this folder (it's a parent of a feature)
-            const isParentOfFeature = Array.from(aiIdentifiedFeatures).some(p => p.startsWith(entry.name + '/'));
-
-            if (!isDirectFeature && !isParentOfFeature) {
-              console.log(`[ContractGeneration] Skipping non-feature folder (AI): ${entry.name}`);
-              continue;
-            }
-
-            // If it's only a parent folder (like "services"), we'll scan nested features later
-            if (!isDirectFeature && isParentOfFeature) {
-              console.log(`[ContractGeneration] ${entry.name} contains features - will scan nested`);
-              continue; // Don't add the parent as a feature, just scan children
-            }
-          }
-
           const featurePath = path.join(repoPath, entry.name);
           if (processedPaths.has(featurePath)) continue;
 
           console.log(`[ContractGeneration] Scanning folder: ${entry.name}`);
           const files = await this.scanFeatureFiles(featurePath, repoPath);
           const totalFiles = this.countFeatureFiles(files);
-          console.log(`[ContractGeneration] ${entry.name}: ${totalFiles} files (api:${files.api.length}, schema:${files.schema.length}, tests:${files.tests.unit.length}, other:${files.other.length})`);
+          console.log(`[ContractGeneration] ${entry.name}: ${totalFiles} files`);
 
           if (totalFiles > 0) {
             processedPaths.add(featurePath);
-            // Check if AI provided name/description for this feature
-            const aiInfo = this.aiFeatureInfo.get(entry.name);
-            // Get feature name: prefer AI-provided name, then package.json, then folder name
-            const featureName = aiInfo?.name || await this.getFeatureName(featurePath, entry.name);
+            const featureName = await this.getFeatureName(featurePath, entry.name);
             features.push({
               name: featureName,
-              description: aiInfo?.description,
               basePath: featurePath,
               files,
               contractPatternMatches: totalFiles,
             });
-            console.log(`[ContractGeneration] Found feature: ${featureName} (${totalFiles} files)${aiInfo?.description ? ` - ${aiInfo.description}` : ''}`);
+            console.log(`[ContractGeneration] Found feature (fallback): ${featureName} (${totalFiles} files)`);
           }
         }
       } catch (err) {
         console.error('[ContractGeneration] Error scanning top-level:', err);
       }
 
-      // 2. Also scan nested feature folders (src/features/*, packages/*, etc)
+      // 2. Also scan nested feature folders in fallback mode (src/features/*, packages/*, etc)
       for (const pattern of FEATURE_FOLDER_PATTERNS) {
         if (pattern === '*') continue; // Already handled above
         const fullPattern = path.join(repoPath, pattern);
@@ -946,155 +973,27 @@ export class ContractGenerationService extends BaseService {
               continue;
             }
 
-            // If AI is enabled, skip paths not identified as features
-            if (aiIdentifiedFeatures && !aiIdentifiedFeatures.has(relativePath) && !aiIdentifiedFeatures.has(folderName)) {
-              console.log(`[ContractGeneration] Skipping non-feature path (AI): ${relativePath}`);
-              continue;
-            }
-
             const files = await this.scanFeatureFiles(featurePath, repoPath);
             const totalFiles = this.countFeatureFiles(files);
 
             if (totalFiles > 0) {
               processedPaths.add(featurePath);
-              // Check if AI provided name/description for this feature
-              const aiInfo = this.aiFeatureInfo.get(relativePath) || this.aiFeatureInfo.get(folderName);
-              // Get feature name: prefer AI-provided name, then package.json, then folder name
-              const featureName = aiInfo?.name || await this.getFeatureName(featurePath, folderName);
+              const featureName = await this.getFeatureName(featurePath, folderName);
               features.push({
                 name: featureName,
-                description: aiInfo?.description,
                 basePath: featurePath,
                 files,
                 contractPatternMatches: totalFiles,
               });
-              console.log(`[ContractGeneration] Found feature: ${featureName} (${totalFiles} files)${aiInfo?.description ? ` - ${aiInfo.description}` : ''}`);
+              console.log(`[ContractGeneration] Found feature (fallback nested): ${featureName} (${totalFiles} files)`);
             }
           }
-        } catch (err) {
+        } catch {
           // Pattern didn't match anything, continue
         }
       }
 
-      // 3. Process AI-identified paths directly (for service-level features)
-      if (aiIdentifiedFeatures && aiIdentifiedFeatures.size > 0) {
-        console.log(`[ContractGeneration] Processing ${aiIdentifiedFeatures.size} AI-identified feature paths...`);
-
-        for (const aiPath of aiIdentifiedFeatures) {
-          // Skip if already processed
-          const fullAiPath = path.join(repoPath, aiPath);
-          if (processedPaths.has(fullAiPath)) {
-            console.log(`[ContractGeneration] AI path already processed: ${aiPath}`);
-            continue;
-          }
-
-          // Skip if it's exactly a submodule path or inside a submodule
-          const isSubmodulePath = submodulePaths.has(aiPath) ||
-            Array.from(submodulePaths).some(sp => aiPath.startsWith(sp + '/'));
-          if (isSubmodulePath) {
-            console.log(`[ContractGeneration] AI path is submodule, skipping: ${aiPath}`);
-            continue;
-          }
-
-          // Skip if gitignored
-          if (matchesGitignorePattern(aiPath, gitignorePatterns)) {
-            console.log(`[ContractGeneration] AI path is gitignored, skipping: ${aiPath}`);
-            continue;
-          }
-
-          try {
-            const stat = await fs.stat(fullAiPath).catch(() => null);
-
-            if (stat?.isDirectory()) {
-              // It's a directory - scan it as a feature
-              const files = await this.scanFeatureFiles(fullAiPath, repoPath);
-              const totalFiles = this.countFeatureFiles(files);
-
-              if (totalFiles > 0) {
-                processedPaths.add(fullAiPath);
-                const folderName = path.basename(fullAiPath);
-                const aiInfo = this.aiFeatureInfo.get(aiPath) || this.aiFeatureInfo.get(folderName);
-                const featureName = aiInfo?.name || await this.getFeatureName(fullAiPath, folderName);
-                features.push({
-                  name: featureName,
-                  description: aiInfo?.description,
-                  basePath: fullAiPath,
-                  files,
-                  contractPatternMatches: totalFiles,
-                });
-                console.log(`[ContractGeneration] Found AI feature (dir): ${featureName} (${totalFiles} files)`);
-              }
-            } else if (stat?.isFile()) {
-              // It's a file - use its parent directory as the feature
-              const parentDir = path.dirname(fullAiPath);
-              if (!processedPaths.has(parentDir)) {
-                const files = await this.scanFeatureFiles(parentDir, repoPath);
-                const totalFiles = this.countFeatureFiles(files);
-
-                if (totalFiles > 0) {
-                  processedPaths.add(parentDir);
-                  const folderName = path.basename(parentDir);
-                  const parentRelPath = path.relative(repoPath, parentDir);
-                  const aiInfo = this.aiFeatureInfo.get(aiPath) || this.aiFeatureInfo.get(parentRelPath) || this.aiFeatureInfo.get(folderName);
-                  const featureName = aiInfo?.name || await this.getFeatureName(parentDir, folderName);
-                  features.push({
-                    name: featureName,
-                    description: aiInfo?.description,
-                    basePath: parentDir,
-                    files,
-                    contractPatternMatches: totalFiles,
-                  });
-                  console.log(`[ContractGeneration] Found AI feature (file parent): ${featureName} (${totalFiles} files)`);
-                }
-              }
-            } else {
-              // Path doesn't exist - check if it's a partial path and try to resolve
-              console.log(`[ContractGeneration] AI path not found, trying partial match: ${aiPath}`);
-
-              // Try to find a matching directory by walking from repo root
-              const pathParts = aiPath.split('/');
-              let currentPath = repoPath;
-              let foundPath: string | null = null;
-
-              for (const part of pathParts) {
-                const nextPath = path.join(currentPath, part);
-                const nextStat = await fs.stat(nextPath).catch(() => null);
-                if (nextStat?.isDirectory()) {
-                  currentPath = nextPath;
-                  foundPath = currentPath;
-                } else {
-                  break;
-                }
-              }
-
-              if (foundPath && !processedPaths.has(foundPath)) {
-                const files = await this.scanFeatureFiles(foundPath, repoPath);
-                const totalFiles = this.countFeatureFiles(files);
-
-                if (totalFiles > 0) {
-                  processedPaths.add(foundPath);
-                  const folderName = path.basename(foundPath);
-                  const relPath = path.relative(repoPath, foundPath);
-                  const aiInfo = this.aiFeatureInfo.get(aiPath) || this.aiFeatureInfo.get(relPath) || this.aiFeatureInfo.get(folderName);
-                  const featureName = aiInfo?.name || await this.getFeatureName(foundPath, folderName);
-                  features.push({
-                    name: featureName,
-                    description: aiInfo?.description,
-                    basePath: foundPath,
-                    files,
-                    contractPatternMatches: totalFiles,
-                  });
-                  console.log(`[ContractGeneration] Found AI feature (partial): ${featureName} (${totalFiles} files)`);
-                }
-              }
-            }
-          } catch (err) {
-            console.warn(`[ContractGeneration] Error processing AI path ${aiPath}:`, err);
-          }
-        }
-      }
-
-      // 4. If still no features found, treat root as single feature
+      // 3. If still no features found in fallback mode, treat root as single feature
       if (features.length === 0) {
         console.log('[ContractGeneration] No feature folders found, analyzing root as single feature...');
         const rootFeature = await this.analyzeRootAsFeature(repoPath);
@@ -1103,7 +1002,7 @@ export class ContractGenerationService extends BaseService {
         }
       }
 
-      // 5. Deduplicate features by name (merge features with same name)
+      // 4. Deduplicate features by name (merge features with same name)
       const deduplicatedFeatures = this.deduplicateFeatures(features);
       console.log(`[ContractGeneration] Discovered ${features.length} features, deduplicated to ${deduplicatedFeatures.length}`);
       return deduplicatedFeatures;

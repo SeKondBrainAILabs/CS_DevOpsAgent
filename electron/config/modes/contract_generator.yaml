@@ -187,10 +187,11 @@ prompts:
       - Rate limiting
 
       ## Rule 5: Quality Descriptions
-      - Each description MUST be 20-60 words
+      - Each description MUST be 30-80 words
       - Explain WHAT the feature does
       - Mention key capabilities or algorithms
       - Include technical details (e.g., "uses PageRank algorithm", "JWT-based")
+      - Note any configurable aspects or supported modes
 
       ## Feature Completeness Checklist
       Before returning, verify you've identified:
@@ -206,9 +207,10 @@ prompts:
       EXCLUDE from being features:
       - Git submodules (paths defined in .gitmodules only)
       - Paths matching .gitignore patterns
-
-      NOTE: Include everything else as potential features - the user will manually label
-      what should be excluded. Do NOT exclude tests, docs, or other directories automatically.
+      - Test directories (tests/, test/, __tests__/, test-results/, playwright-report/, coverage/)
+      - Build outputs (node_modules/, dist/, build/, out/, .next/, .nuxt/, .output/)
+      - Documentation folders (docs/, Documentation/, doc/)
+      - Infrastructure/DevOps folders (deploy/, infra/, infrastructure/, scripts/)
 
     user_template: |
       Repository: {repo_name}
@@ -233,8 +235,9 @@ prompts:
       1. Identify SERVICES and MODULES, not just folders
       2. NO DUPLICATES - each feature name must be unique
       3. Give each feature a descriptive BUSINESS NAME
-      4. Return paths to the relevant code
-      5. Write a 20-60 word description with technical details
+      4. Include a CATEGORY for each feature
+      5. Return paths to the relevant code
+      6. Write a 30-80 word description with technical details (algorithms, TTLs, thresholds)
 
       Feature Categories to look for:
       - **Core Services**: Authentication, User Management, primary domain operations
@@ -251,28 +254,21 @@ prompts:
         "features": [
           {
             "name": "Authentication System",
+            "category": "Core Business Services",
             "paths": ["backend/src/routes/auth.ts", "backend/src/services/AuthService.ts"],
-            "description": "JWT-based authentication with access tokens (1h) and refresh tokens (7d). Handles user registration, login, logout, password reset, and role-based access control (RBAC) with super_admin, org_admin, and user roles."
+            "description": "JWT-based authentication with access tokens (1h TTL) and refresh tokens (7d TTL). Handles user registration with email verification, login with rate limiting, logout with token invalidation, and password reset via email. Supports RBAC with super_admin, org_admin, and user roles. Implements bcrypt password hashing with 10 salt rounds."
           },
           {
             "name": "Lead Scoring Service",
+            "category": "Algorithm & Scoring",
             "paths": ["backend/src/services/lead-scoring.ts", "backend/src/routes/leads.ts"],
-            "description": "Multi-factor scoring system for profile prioritization. Calculates engagement, velocity, authority (PageRank), expertise, and recency scores. Supports multiple scoring profiles: Rising Stars, Influencers, Domain Experts, Active Contributors."
+            "description": "Multi-factor scoring system for profile prioritization. Calculates engagement (reactions + comments), velocity (weekly growth), authority (PageRank algorithm with damping=0.85), expertise (domain relevance), and recency (activity freshness). Supports 5 scoring profiles: Rising Stars, Influencers, Domain Experts, Active Contributors, Balanced. Includes CSV export for CRM integration."
           },
           {
             "name": "Concept Extraction Service",
+            "category": "AI/ML Services",
             "paths": ["ai-worker/src/services/concept-extractor.ts"],
-            "description": "AI-powered concept extraction using Groq LLM. Processes post content to identify key topics, themes, and entities. Links concepts to posts with relevance scoring. Runs as background job every 5 minutes."
-          },
-          {
-            "name": "Summary Generation Service",
-            "paths": ["backend/src/routes/summaries.ts", "ai-worker/src/services/summary-enhancer.ts"],
-            "description": "Multi-style summary generation supporting 6 styles: Professional, Hot Takes, Snapshot, Technical, Community, and Executive. Includes theme detection, WhatsApp formatting, and AI enhancement via Core_Ai_Backend integration."
-          },
-          {
-            "name": "Event Bus System",
-            "paths": ["backend/src/lib/featureBus.ts", "ai-worker/src/lib/featureBus.ts"],
-            "description": "Event-driven inter-service communication system. Publishes events: concept.extracted, digest.generated, lead.discovered, trend.detected, post.created, post.synced, author.discovered. Enables decoupled microservices architecture."
+            "description": "AI-powered concept extraction using Groq LLM. Processes post content to identify key topics, themes, and entities. Links concepts to posts with relevance scoring (0-1 scale). Runs as background job every 5 minutes. Supports batch processing for historical content. Publishes concept.extracted events to feature bus."
           }
         ]
       }
@@ -280,11 +276,11 @@ prompts:
 
       CRITICAL REMINDERS:
       - Identify SERVICES, not just folders
-      - Include technical details in descriptions
+      - Include technical details in descriptions (algorithms, TTLs, thresholds)
       - NO DUPLICATES - merge related code into single features
       - Use descriptive BUSINESS names
-      - Write 20-60 word descriptions with specifics
-      - ONLY EXCLUDE: git submodules (from .gitmodules) and gitignored paths
+      - Write 30-80 word descriptions with specifics
+      - EXCLUDE: submodules, gitignored, tests, builds, docs, deploy/infra/scripts
 
   # ==========================================================================
   # PHASE 2: GENERATE README / ARCHITECTURE DOC
