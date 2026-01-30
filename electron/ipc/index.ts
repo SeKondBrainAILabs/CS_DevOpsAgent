@@ -6,6 +6,7 @@
 import { ipcMain, BrowserWindow, dialog, app } from 'electron';
 import { IPC } from '../../shared/ipc-channels';
 import type { Services } from '../services';
+import { databaseService } from '../services/DatabaseService';
 
 /**
  * Register all IPC handlers
@@ -602,13 +603,13 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
 
   ipcMain.handle(IPC.CONTRACT_SAVE_DISCOVERED_FEATURES, async (_, repoPath: string, features: unknown[]) => {
     const key = `discovered_features:${repoPath}`;
-    services.database.setSetting(key, features);
+    databaseService.setSetting(key, features);
     return { success: true };
   });
 
   ipcMain.handle(IPC.CONTRACT_LOAD_DISCOVERED_FEATURES, async (_, repoPath: string) => {
     const key = `discovered_features:${repoPath}`;
-    const features = services.database.getSetting<unknown[]>(key, []);
+    const features = databaseService.getSetting<unknown[]>(key, []);
     return { success: true, data: features };
   });
 

@@ -1268,6 +1268,34 @@ export class ContractGenerationService extends BaseService {
         jsonContract = await this.createFallbackJSON(feature, repoPath);
       }
 
+      // Generate Admin contract using AI
+      console.log(`[ContractGeneration] Generating admin contract for: ${feature.name}`);
+      const adminResult = await this.aiService.sendWithMode({
+        modeId: 'contract_generator',
+        promptKey: 'generate_admin_contract',
+        variables: {
+          feature_name: feature.name,
+          feature_path: path.relative(repoPath, feature.basePath),
+          analysis_json: JSON.stringify(jsonContract, null, 2),
+        },
+      });
+
+      let adminContract: Record<string, unknown> | null = null;
+      if (adminResult.success && adminResult.data) {
+        try {
+          let adminStr = adminResult.data.trim();
+          if (adminStr.startsWith('```')) {
+            adminStr = adminStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+          }
+          adminContract = JSON.parse(adminStr);
+          // Add admin contract to the main JSON contract
+          (jsonContract as Record<string, unknown>).adminContract = adminContract;
+          console.log(`[ContractGeneration] Admin contract generated for: ${feature.name}`);
+        } catch (err) {
+          console.warn(`[ContractGeneration] Failed to parse admin contract:`, err);
+        }
+      }
+
       // Save contracts
       const savedPaths = await this.saveContract(
         repoPath,

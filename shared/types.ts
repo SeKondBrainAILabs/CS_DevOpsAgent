@@ -347,8 +347,9 @@ export interface KanvasConfig {
  * - features: Feature flags and toggles
  * - infra: Infrastructure contracts
  * - integrations: Third-party service integrations
+ * - admin: Admin capabilities - what can be administered for this feature
  */
-export type ContractType = 'api' | 'schema' | 'events' | 'css' | 'features' | 'infra' | 'integrations' | 'e2e' | 'unit' | 'integration' | 'fixtures';
+export type ContractType = 'api' | 'schema' | 'events' | 'css' | 'features' | 'infra' | 'integrations' | 'e2e' | 'unit' | 'integration' | 'fixtures' | 'admin';
 
 export type ContractStatus = 'active' | 'modified' | 'deprecated' | 'breaking' | 'beta';
 
@@ -472,6 +473,37 @@ export interface IntegrationsContract extends Contract {
   sdkVersion?: string;
 }
 
+/**
+ * Admin Contract - defines what can be administered for this feature
+ * Used for building admin panels and management interfaces
+ */
+export interface AdminContract extends Contract {
+  type: 'admin';
+  adminCapabilities?: AdminCapability[];
+  requiredPermissions?: string[];
+  adminRoutes?: APIEndpoint[];
+}
+
+export interface AdminCapability {
+  name: string;
+  description?: string;
+  entityType: string; // e.g., 'user', 'post', 'organization'
+  operations: ('create' | 'read' | 'update' | 'delete' | 'list' | 'search' | 'export' | 'import' | 'bulk_update' | 'archive')[];
+  permissions?: string[];
+  fields?: AdminField[];
+}
+
+export interface AdminField {
+  name: string;
+  type: 'string' | 'number' | 'boolean' | 'date' | 'enum' | 'relation' | 'json';
+  editable: boolean;
+  searchable?: boolean;
+  filterable?: boolean;
+  sortable?: boolean;
+  required?: boolean;
+  validation?: string;
+}
+
 export type AnyContract =
   | APIContract
   | SchemaContract
@@ -479,7 +511,8 @@ export type AnyContract =
   | CSSContract
   | FeaturesContract
   | InfraContract
-  | IntegrationsContract;
+  | IntegrationsContract
+  | AdminContract;
 
 /**
  * Contract file change detection result

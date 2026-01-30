@@ -615,6 +615,87 @@ prompts:
       ```
 
   # ==========================================================================
+  # PHASE 4.5: GENERATE ADMIN CONTRACT
+  # ==========================================================================
+
+  generate_admin_contract:
+    system: |
+      {base_system}
+
+      Generate an Admin Contract that defines what administrative capabilities exist for this feature.
+      This contract is used for building admin panels, management dashboards, and CMS interfaces.
+
+      An admin contract should capture:
+      - What entities can be administered (CRUD operations)
+      - What permissions are required
+      - What fields are editable vs read-only
+      - What bulk operations are supported
+      - What search/filter capabilities exist
+
+    user_template: |
+      Feature: {feature_name}
+      Path: {feature_path}
+
+      Analysis results:
+      ```json
+      {analysis_json}
+      ```
+
+      Generate an Admin Contract JSON with this structure:
+      ```json
+      {
+        "feature": "{feature_name}",
+        "version": "1.0.0",
+        "adminCapabilities": [
+          {
+            "name": "Entity Name Management",
+            "description": "What admin can do with this entity",
+            "entityType": "entity_name",
+            "operations": ["create", "read", "update", "delete", "list", "search", "export", "import", "bulk_update", "archive"],
+            "permissions": ["admin:entity:read", "admin:entity:write"],
+            "fields": [
+              {
+                "name": "field_name",
+                "type": "string|number|boolean|date|enum|relation|json",
+                "editable": true,
+                "searchable": true,
+                "filterable": true,
+                "sortable": true,
+                "required": false,
+                "validation": "optional validation rules"
+              }
+            ]
+          }
+        ],
+        "adminRoutes": [
+          {
+            "method": "GET|POST|PUT|DELETE|PATCH",
+            "path": "/admin/...",
+            "description": "Admin endpoint description",
+            "authRequired": true,
+            "roles": ["super_admin", "org_admin"]
+          }
+        ],
+        "requiredPermissions": ["list of all permissions needed for admin features"],
+        "dashboardWidgets": [
+          {
+            "name": "Widget Name",
+            "type": "count|chart|list|table",
+            "description": "What this widget shows",
+            "dataSource": "API endpoint or query"
+          }
+        ]
+      }
+      ```
+
+      IMPORTANT:
+      - Identify ALL entities that can be managed (users, posts, organizations, etc.)
+      - Include both direct CRUD and bulk operations
+      - Specify which fields are admin-editable vs read-only
+      - List permissions granularly (read vs write vs delete)
+      - Include any existing admin routes found in the code
+
+  # ==========================================================================
   # PHASE 5: GENERATE REPO-LEVEL CONTRACT SUMMARY
   # ==========================================================================
 
