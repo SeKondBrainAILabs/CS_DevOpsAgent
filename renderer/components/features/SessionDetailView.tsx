@@ -1445,6 +1445,12 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
     failed: number;
     duration: number;
   } | null>(null);
+  const [activityLogs, setActivityLogs] = useState<Array<{
+    time: string;
+    message: string;
+    type: 'info' | 'success' | 'error';
+  }>>([]);
+  const [showActivityLog, setShowActivityLog] = useState(true);
   const [expandedFeature, setExpandedFeature] = useState<string | null>(null);
 
   // Contract categories - both API and Test contracts
@@ -1628,10 +1634,37 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
   useEffect(() => {
     const unsubProgress = window.api?.contractGeneration?.onProgress((progress) => {
       setGenerationProgress(progress);
+      // Add activity log entry
+      const time = new Date().toLocaleTimeString();
+      const stepLabels: Record<string, string> = {
+        discovering: 'Discovering features',
+        analyzing: 'Analyzing code',
+        generating: 'Generating contract',
+        saving: 'Saving contract',
+      };
+      const contractTypeLabels: Record<string, string> = {
+        markdown: '📄 Markdown',
+        json: '📋 JSON',
+        admin: '👤 Admin',
+      };
+      const stepLabel = stepLabels[progress.currentStep] || progress.currentStep;
+      const contractTypeLabel = progress.contractType ? ` [${contractTypeLabels[progress.contractType] || progress.contractType}]` : '';
+      setActivityLogs(prev => {
+        const newLog = { time, message: `${stepLabel}${contractTypeLabel}: ${progress.currentFeature}`, type: 'info' as const };
+        // Keep only last 50 logs
+        return [...prev.slice(-49), newLog];
+      });
     });
     const unsubComplete = window.api?.contractGeneration?.onComplete((result) => {
       setIsGenerating(false);
       setGenerationProgress(null);
+      // Add completion log
+      const time = new Date().toLocaleTimeString();
+      setActivityLogs(prev => [...prev.slice(-49), {
+        time,
+        message: `Completed: ${result.generated} contracts generated, ${result.failed} failed (${(result.duration / 1000).toFixed(1)}s)`,
+        type: result.failed > 0 ? 'error' as const : 'success' as const,
+      }]);
       setGenerationResult({
         generated: result.generated,
         failed: result.failed,
@@ -1709,6 +1742,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
       await window.api?.contractGeneration?.generateAll(repoPath, {
         includeCodeSamples: true,
         maxFilesPerFeature: 10,
+        preDiscoveredFeatures: discoveredFeatures.length > 0 ? discoveredFeatures : undefined,
       });
       // Result comes via onComplete event
     } catch (err) {
@@ -1826,6 +1860,16 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
             <span className="text-sm font-medium text-blue-800">
               Generating: {generationProgress.currentFeature}
             </span>
+            {generationProgress.contractType && (
+              <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                generationProgress.contractType === 'markdown' ? 'bg-purple-100 text-purple-700' :
+                generationProgress.contractType === 'json' ? 'bg-green-100 text-green-700' :
+                'bg-orange-100 text-orange-700'
+              }`}>
+                {generationProgress.contractType === 'markdown' ? '📄 Markdown' :
+                 generationProgress.contractType === 'json' ? '📋 JSON' : '👤 Admin'}
+              </span>
+            )}
             <span className="text-xs text-blue-600">
               ({generationProgress.completed}/{generationProgress.total})
             </span>
@@ -1835,6 +1879,25 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
               className="h-full bg-blue-500 transition-all duration-300"
               style={{ width: `${generationProgress.total > 0 ? (generationProgress.completed / generationProgress.total) * 100 : 0}%` }}
             />
+          </div>
+          {/* Activity Log */}
+          <div className="mt-3">
+            <button
+              onClick={() => setShowActivityLog(!showActivityLog)}
+              className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+            >
+              <span>{showActivityLog ? '▼' : '▶'}</span>
+              Activity Log ({activityLogs.length})
+            </button>
+            {showActivityLog && activityLogs.length > 0 && (
+              <div className="mt-2 max-h-32 overflow-y-auto bg-white/50 rounded p-2 text-xs font-mono">
+                {activityLogs.slice(-10).map((log, i) => (
+                  <div key={i} className={`py-0.5 ${log.type === 'error' ? 'text-red-600' : log.type === 'success' ? 'text-green-600' : 'text-gray-600'}`}>
+                    <span className="text-gray-400">[{log.time}]</span> {log.message}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

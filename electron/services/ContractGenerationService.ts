@@ -1208,28 +1208,43 @@ export class ContractGenerationService extends BaseService {
         ? await this.extractCodeSamples(repoPath, feature, options.maxFilesPerFeature || 10)
         : '';
 
-      // Build file lists for prompt
-      const apiFiles = feature.files.api.join('\n- ') || 'None';
-      const schemaFiles = feature.files.schema.join('\n- ') || 'None';
-      const testFiles = [
-        ...feature.files.tests.e2e.map(f => `[E2E] ${f}`),
-        ...feature.files.tests.unit.map(f => `[Unit] ${f}`),
-        ...feature.files.tests.integration.map(f => `[Integration] ${f}`),
-      ].join('\n- ') || 'None';
-      const otherFiles = [...feature.files.fixtures, ...feature.files.config].join('\n- ') || 'None';
+      // Build analysis JSON for prompt (combines file lists and code samples)
+      const analysisJson = {
+        feature: feature.name,
+        description: feature.description || 'No description available',
+        basePath: path.relative(repoPath, feature.basePath),
+        files: {
+          api: feature.files.api,
+          schema: feature.files.schema,
+          tests: {
+            e2e: feature.files.tests.e2e,
+            unit: feature.files.tests.unit,
+            integration: feature.files.tests.integration,
+          },
+          fixtures: feature.files.fixtures,
+          config: feature.files.config,
+          other: feature.files.other,
+        },
+        codeSamples: codeSamples || 'No code samples available',
+        totalFiles: feature.contractPatternMatches,
+      };
 
       // Generate Markdown contract using AI
+      this.emitProgress({
+        total: this.currentProgress?.total || 0,
+        completed: this.currentProgress?.completed || 0,
+        currentFeature: feature.name,
+        currentStep: 'generating',
+        contractType: 'markdown',
+        errors: this.currentProgress?.errors || [],
+      });
       const markdownResult = await this.aiService.sendWithMode({
         modeId: 'contract_generator',
         promptKey: 'generate_feature_contract',
         variables: {
           feature_name: feature.name,
           feature_path: path.relative(repoPath, feature.basePath),
-          api_files: apiFiles,
-          schema_files: schemaFiles,
-          test_files: testFiles,
-          other_files: otherFiles,
-          code_samples: codeSamples || 'No code samples available',
+          analysis_json: JSON.stringify(analysisJson, null, 2),
         },
       });
 
@@ -1238,16 +1253,21 @@ export class ContractGenerationService extends BaseService {
       }
 
       // Generate JSON contract using AI
+      this.emitProgress({
+        total: this.currentProgress?.total || 0,
+        completed: this.currentProgress?.completed || 0,
+        currentFeature: feature.name,
+        currentStep: 'generating',
+        contractType: 'json',
+        errors: this.currentProgress?.errors || [],
+      });
       const jsonResult = await this.aiService.sendWithMode({
         modeId: 'contract_generator',
         promptKey: 'generate_json_contract',
         variables: {
           feature_name: feature.name,
           feature_path: path.relative(repoPath, feature.basePath),
-          api_files: apiFiles,
-          schema_files: schemaFiles,
-          test_files: testFiles,
-          code_samples: codeSamples || 'No code samples available',
+          analysis_json: JSON.stringify(analysisJson, null, 2),
         },
       });
 
@@ -1269,6 +1289,14 @@ export class ContractGenerationService extends BaseService {
       }
 
       // Generate Admin contract using AI
+      this.emitProgress({
+        total: this.currentProgress?.total || 0,
+        completed: this.currentProgress?.completed || 0,
+        currentFeature: feature.name,
+        currentStep: 'generating',
+        contractType: 'admin',
+        errors: this.currentProgress?.errors || [],
+      });
       console.log(`[ContractGeneration] Generating admin contract for: ${feature.name}`);
       const adminResult = await this.aiService.sendWithMode({
         modeId: 'contract_generator',
@@ -1553,21 +1581,27 @@ export class ContractGenerationService extends BaseService {
       const startTime = Date.now();
       const results: GeneratedContractResult[] = [];
 
-      // Discover features
-      this.emitProgress({
-        total: 0,
-        completed: 0,
-        currentFeature: 'Discovering features...',
-        currentStep: 'discovering',
-        errors: [],
-      });
+      // Use pre-discovered features if provided, otherwise discover
+      let features: DiscoveredFeature[];
 
-      const discoverResult = await this.discoverFeatures(repoPath, options.useAI);
-      if (!discoverResult.success || !discoverResult.data) {
-        throw new Error(`Failed to discover features: ${discoverResult.error?.message}`);
+      if (options.preDiscoveredFeatures && options.preDiscoveredFeatures.length > 0) {
+        console.log(`[ContractGeneration] Using ${options.preDiscoveredFeatures.length} pre-discovered features`);
+        features = options.preDiscoveredFeatures;
+      } else {
+        this.emitProgress({
+          total: 0,
+          completed: 0,
+          currentFeature: 'Discovering features...',
+          currentStep: 'discovering',
+          errors: [],
+        });
+
+        const discoverResult = await this.discoverFeatures(repoPath, options.useAI);
+        if (!discoverResult.success || !discoverResult.data) {
+          throw new Error(`Failed to discover features: ${discoverResult.error?.message}`);
+        }
+        features = discoverResult.data;
       }
-
-      let features = discoverResult.data;
 
       // Filter to specific features if requested
       if (options.features && options.features.length > 0) {

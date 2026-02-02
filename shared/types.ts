@@ -624,8 +624,9 @@ export interface ContractGenerationOptions {
   includeCodeSamples?: boolean;
   maxFilesPerFeature?: number;
   skipExisting?: boolean;
-  features?: string[]; // Generate only specific features (empty = all)
+  features?: string[]; // Generate only specific features by name (empty = all)
   useAI?: boolean; // Use LLM to intelligently identify actual features (not just folders)
+  preDiscoveredFeatures?: DiscoveredFeature[]; // Use pre-discovered features instead of re-discovering
 }
 
 /**
@@ -636,6 +637,7 @@ export interface ContractGenerationProgress {
   completed: number;
   currentFeature: string;
   currentStep: 'discovering' | 'analyzing' | 'generating' | 'saving';
+  contractType?: 'markdown' | 'json' | 'admin'; // Which contract type is being generated
   errors: string[];
 }
 
