@@ -1677,6 +1677,130 @@ export class ContractGenerationService extends BaseService {
   }
 
   /**
+   * Generate repo-level contracts (API, Infra, Third-Party, etc.)
+   * These are aggregate contracts that cover the entire repository
+   */
+  async generateRepoContracts(
+    repoPath: string,
+    options: ContractGenerationOptions = {}
+  ): Promise<IpcResult<{ generated: string[]; skipped: string[]; errors: string[] }>> {
+    return this.wrap(async () => {
+      const generated: string[] = [];
+      const skipped: string[] = [];
+      const errors: string[] = [];
+
+      // Repo-level contract definitions
+      const repoContracts = [
+        { type: 'api', file: 'API_CONTRACT.md', promptKey: 'generate_repo_api_contract', description: 'Aggregated API endpoints across all features' },
+        { type: 'infra', file: 'INFRA_CONTRACT.md', promptKey: 'generate_infra_contract', description: 'Infrastructure, environment variables, and deployment config' },
+        { type: 'integrations', file: 'THIRD_PARTY_INTEGRATIONS.md', promptKey: 'generate_third_party_contract', description: 'External service integrations and SDKs' },
+        { type: 'schema', file: 'DATABASE_SCHEMA_CONTRACT.md', promptKey: 'generate_database_schema_contract', description: 'Database tables, schemas, and migrations' },
+        { type: 'events', file: 'EVENTS_CONTRACT.md', promptKey: 'generate_events_contract', description: 'Event bus, WebSocket, and pub/sub events' },
+        { type: 'admin', file: 'ADMIN_CONTRACT.md', promptKey: 'generate_admin_contract', description: 'Admin panel capabilities and permissions' },
+        { type: 'sql', file: 'SQL_CONTRACT.md', promptKey: 'generate_sql_contract', description: 'Reusable SQL queries and stored procedures' },
+      ];
+
+      // Target directory for repo contracts
+      const contractsDir = path.join(repoPath, 'House_Rules_Contracts');
+      await fs.mkdir(contractsDir, { recursive: true });
+
+      // Get repo structure for context
+      const structureResult = await this.analyzeRepoStructure(repoPath);
+      const repoStructure = structureResult.success ? structureResult.data : null;
+
+      // Get discovered features for aggregation
+      const featuresResult = await this.discoverFeatures(repoPath, options.useAI);
+      const features = featuresResult.success ? featuresResult.data || [] : [];
+
+      for (const contract of repoContracts) {
+        const contractPath = path.join(contractsDir, contract.file);
+
+        // Check if contract already exists
+        if (options.skipExisting) {
+          try {
+            await fs.access(contractPath);
+            skipped.push(contract.file);
+            console.log(`[ContractGeneration] Skipped existing repo contract: ${contract.file}`);
+            continue;
+          } catch {
+            // File doesn't exist, proceed with generation
+          }
+        }
+
+        try {
+          console.log(`[ContractGeneration] Generating repo contract: ${contract.file}`);
+
+          // Build context from all features
+          const featuresSummary = features.map(f => ({
+            name: f.name,
+            description: f.description || '',
+            apiFiles: f.files.api.length,
+            schemaFiles: f.files.schema.length,
+            testFiles: f.files.tests.e2e.length + f.files.tests.unit.length + f.files.tests.integration.length,
+          }));
+
+          // Generate using AI
+          const result = await this.aiService.sendWithMode({
+            modeId: 'contract_generator',
+            promptKey: contract.promptKey,
+            variables: {
+              repo_name: path.basename(repoPath),
+              repo_structure: repoStructure ? JSON.stringify(repoStructure, null, 2) : 'Not available',
+              features_summary: JSON.stringify(featuresSummary, null, 2),
+              feature_count: features.length.toString(),
+            },
+            userMessage: `Generate a comprehensive ${contract.description} for this repository.`,
+          });
+
+          if (result.success && result.data) {
+            await fs.writeFile(contractPath, result.data, 'utf-8');
+            generated.push(contract.file);
+            console.log(`[ContractGeneration] Generated repo contract: ${contract.file}`);
+          } else {
+            errors.push(`Failed to generate ${contract.file}: ${result.error?.message || 'Unknown error'}`);
+          }
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          errors.push(`Error generating ${contract.file}: ${errorMsg}`);
+          console.error(`[ContractGeneration] Error generating ${contract.file}:`, err);
+        }
+      }
+
+      return { generated, skipped, errors };
+    }, 'GENERATE_REPO_CONTRACTS_ERROR');
+  }
+
+  /**
+   * Generate all contracts (both repo-level and feature-level)
+   * Convenience method that runs both repo and feature contract generation
+   */
+  async generateAllContractsComplete(
+    repoPath: string,
+    options: ContractGenerationOptions = {}
+  ): Promise<IpcResult<{ repoContracts: { generated: string[]; skipped: string[]; errors: string[] }; featureContracts: BatchContractGenerationResult }>> {
+    return this.wrap(async () => {
+      // First generate repo-level contracts
+      console.log('[ContractGeneration] Starting complete contract generation...');
+
+      const repoResult = await this.generateRepoContracts(repoPath, options);
+      const repoContracts = repoResult.success ? repoResult.data! : { generated: [], skipped: [], errors: [repoResult.error?.message || 'Unknown error'] };
+
+      // Then generate feature-level contracts
+      const featureResult = await this.generateAllContracts(repoPath, options);
+      const featureContracts = featureResult.success ? featureResult.data! : {
+        totalFeatures: 0,
+        generated: 0,
+        skipped: 0,
+        failed: 1,
+        results: [],
+        duration: 0,
+      };
+
+      return { repoContracts, featureContracts };
+    }, 'GENERATE_ALL_COMPLETE_ERROR');
+  }
+
+  /**
    * Emit progress event to renderer
    */
   private emitProgress(progress: ContractGenerationProgress): void {

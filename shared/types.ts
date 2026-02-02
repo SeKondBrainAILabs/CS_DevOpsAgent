@@ -348,8 +348,9 @@ export interface KanvasConfig {
  * - infra: Infrastructure contracts
  * - integrations: Third-party service integrations
  * - admin: Admin capabilities - what can be administered for this feature
+ * - sql: Reusable SQL queries, stored procedures, performance hints
  */
-export type ContractType = 'api' | 'schema' | 'events' | 'css' | 'features' | 'infra' | 'integrations' | 'e2e' | 'unit' | 'integration' | 'fixtures' | 'admin';
+export type ContractType = 'api' | 'schema' | 'events' | 'css' | 'features' | 'infra' | 'integrations' | 'e2e' | 'unit' | 'integration' | 'fixtures' | 'admin' | 'sql';
 
 export type ContractStatus = 'active' | 'modified' | 'deprecated' | 'breaking' | 'beta';
 

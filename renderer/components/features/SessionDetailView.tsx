@@ -1452,6 +1452,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
   }>>([]);
   const [showActivityLog, setShowActivityLog] = useState(true);
   const [expandedFeature, setExpandedFeature] = useState<string | null>(null);
+  const [featuresCollapsed, setFeaturesCollapsed] = useState(false);
 
   // Contract categories - both API and Test contracts
   const contractTypes: { type: ContractType | 'all'; label: string; icon: string; file?: string; isTest?: boolean }[] = [
@@ -1463,6 +1464,10 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
     { type: 'features', label: 'Features', icon: '✨', file: 'FEATURES_CONTRACT.md' },
     { type: 'infra', label: 'Infra', icon: '🏗️', file: 'INFRA_CONTRACT.md' },
     { type: 'integrations', label: '3rd Party', icon: '🔗', file: 'THIRD_PARTY_INTEGRATIONS.md' },
+    // Additional Contracts
+    { type: 'admin', label: 'Admin', icon: '👤', file: 'ADMIN_CONTRACT.md' },
+    { type: 'sql', label: 'SQL', icon: '🗃️', file: 'SQL_CONTRACT.md' },
+    { type: 'css', label: 'CSS', icon: '🎨', file: 'CSS_CONTRACT.md' },
     // Test Contracts (Quality Contracts)
     { type: 'e2e', label: 'E2E Tests', icon: '🎭', isTest: true },
     { type: 'unit', label: 'Unit Tests', icon: '🧪', isTest: true },
@@ -1544,6 +1549,37 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
             name: 'Third-Party Integrations',
             description: 'External service integrations and SDKs',
             filePath: `${repoPath}/House_Rules_Contracts/THIRD_PARTY_INTEGRATIONS.md`,
+            status: 'active',
+            version: '1.0.0',
+            lastUpdated: new Date().toISOString(),
+          },
+          // Additional Contracts
+          {
+            id: 'admin-contract',
+            type: 'admin',
+            name: 'Admin Contract',
+            description: 'Admin panel capabilities, CRUD operations, and permissions',
+            filePath: `${repoPath}/House_Rules_Contracts/ADMIN_CONTRACT.md`,
+            status: 'active',
+            version: '1.0.0',
+            lastUpdated: new Date().toISOString(),
+          },
+          {
+            id: 'sql-contract',
+            type: 'sql',
+            name: 'SQL Contract',
+            description: 'Reusable SQL queries, stored procedures, and performance hints',
+            filePath: `${repoPath}/House_Rules_Contracts/SQL_CONTRACT.md`,
+            status: 'active',
+            version: '1.0.0',
+            lastUpdated: new Date().toISOString(),
+          },
+          {
+            id: 'css-contract',
+            type: 'css',
+            name: 'CSS Contract',
+            description: 'Design tokens, themes, and style guidelines',
+            filePath: `${repoPath}/House_Rules_Contracts/CSS_CONTRACT.md`,
             status: 'active',
             version: '1.0.0',
             lastUpdated: new Date().toISOString(),
@@ -1917,11 +1953,22 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
 
       {/* Discovered Features - Table View */}
       {discoveredFeatures.length > 0 && !isGenerating && (
-        <div className="mx-4 mt-4 p-3 bg-surface-secondary rounded-xl border border-border max-h-[400px] flex flex-col">
-          <div className="flex items-center justify-between mb-3 flex-shrink-0">
-            <span className="text-sm font-medium text-text-primary">
+        <div className="mx-4 mt-4 p-3 bg-surface-secondary rounded-xl border border-border flex flex-col">
+          <div className="flex items-center justify-between flex-shrink-0">
+            <button
+              onClick={() => setFeaturesCollapsed(!featuresCollapsed)}
+              className="flex items-center gap-2 text-sm font-medium text-text-primary hover:text-kanvas-blue transition-colors"
+            >
+              <svg
+                className={`w-4 h-4 transition-transform ${featuresCollapsed ? '' : 'rotate-90'}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
               Discovered {discoveredFeatures.length} feature(s)
-            </span>
+            </button>
             <button
               onClick={() => setDiscoveredFeatures([])}
               className="text-xs text-text-secondary hover:text-text-primary"
@@ -1930,8 +1977,10 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
             </button>
           </div>
 
-          {/* Features Table */}
-          <div className="overflow-auto flex-1 min-h-0">
+          {/* Features Table - Collapsible */}
+          {!featuresCollapsed && (
+          <>
+          <div className="overflow-auto flex-1 min-h-0 max-h-[350px] mt-3">
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-border text-left text-text-secondary">
@@ -2040,6 +2089,8 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
             <span>🧪 Unit Tests</span>
             <span>🎭 E2E Tests</span>
           </div>
+          </>
+          )}
         </div>
       )}
 
@@ -2108,6 +2159,12 @@ function ContractCard({ contract }: { contract: Contract }): React.ReactElement 
     features: '✨',
     infra: '🏗️',
     integrations: '🔗',
+    admin: '👤',
+    sql: '🗃️',
+    e2e: '🎭',
+    unit: '🧪',
+    integration: '🔗',
+    fixtures: '📦',
   };
 
   const typeLabels: Record<string, string> = {
@@ -2118,6 +2175,12 @@ function ContractCard({ contract }: { contract: Contract }): React.ReactElement 
     features: 'Feature Flags',
     infra: 'Infrastructure',
     integrations: '3rd Party',
+    admin: 'Admin Panel',
+    sql: 'SQL Queries',
+    e2e: 'E2E Tests',
+    unit: 'Unit Tests',
+    integration: 'Integration Tests',
+    fixtures: 'Test Fixtures',
   };
 
   const handleOpenFile = async () => {

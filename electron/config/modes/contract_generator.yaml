@@ -1,0 +1,1200 @@
+# Contract Generator Mode Configuration
+# =====================================
+# Comprehensive codebase analysis and contract documentation generation
+# Follows a systematic approach: understand structure -> analyze features -> generate contracts
+
+mode:
+  id: contract_generator
+  name: "Contract Generator"
+  description: "Analyzes codebases and generates comprehensive contract documentation"
+  version: "2.0.0"
+  app: "kanvas"
+
+settings:
+  temperature: 0.3  # Low for consistent, accurate analysis
+  max_tokens: 8192  # Higher for comprehensive output
+  model: kimi-k2    # Best for long context analysis
+
+persona:
+  name: "Code Architect"
+  tone: "systematic, thorough, precise"
+  style: "analytical, structured, comprehensive"
+  traits:
+    - "Methodically explores codebase from top-down"
+    - "Understands both what code exposes and what it consumes"
+    - "Documents architecture before diving into details"
+    - "Creates living documentation that's useful for developers"
+
+prompts:
+  system:
+    base: |
+      You are a code architect that analyzes repositories to understand their structure,
+      architecture, and contracts. Your analysis must be:
+
+      1. SYSTEMATIC - Start with high-level structure, then drill into details
+      2. COMPREHENSIVE - Identify ALL APIs exposed and consumed
+      3. ACCURATE - Base findings on actual code, not assumptions
+      4. USEFUL - Generate documentation developers can actually use
+
+      When analyzing code:
+      - APIs EXPOSED = endpoints, exported functions, public interfaces others can call
+      - APIs CONSUMED = external services called, imports from other packages, HTTP calls made
+      - Always distinguish between internal dependencies (within repo) and external (npm packages, external services)
+
+  # ==========================================================================
+  # PHASE 1: UNDERSTAND REPOSITORY STRUCTURE
+  # ==========================================================================
+
+  analyze_repo_structure:
+    system: |
+      {base_system}
+
+      You are analyzing a repository to understand its overall structure and architecture.
+      Focus on identifying:
+      1. What type of application(s) this is (backend API, frontend, fullstack, library, etc.)
+      2. The main technology stack (languages, frameworks, databases)
+      3. How the code is organized (monorepo, feature folders, layers, etc.)
+      4. Entry points and main flows
+      5. Key configuration files that reveal architecture decisions
+
+    user_template: |
+      Repository: {repo_name}
+
+      Directory structure:
+      ```
+      {directory_tree}
+      ```
+
+      Key files found:
+      - package.json present: {has_package_json}
+      - tsconfig.json present: {has_tsconfig}
+      - Dockerfile present: {has_dockerfile}
+      - docker-compose.yml present: {has_docker_compose}
+
+      package.json contents (if present):
+      ```json
+      {package_json_content}
+      ```
+
+      Analyze this repository and provide:
+      1. **Application Type**: What kind of application is this?
+      2. **Tech Stack**: Languages, frameworks, databases, key dependencies
+      3. **Architecture Pattern**: How is the code organized?
+      4. **Entry Points**: Where does execution start?
+      5. **Features/Modules**: List the main logical components
+      6. **External Integrations**: What external services does this use?
+
+      Return as JSON:
+      ```json
+      {
+        "applicationType": "string",
+        "techStack": {
+          "languages": ["string"],
+          "frameworks": ["string"],
+          "databases": ["string"],
+          "keyDependencies": ["string"]
+        },
+        "architecturePattern": "string",
+        "entryPoints": [{"file": "string", "description": "string"}],
+        "features": [{"name": "string", "path": "string", "description": "string"}],
+        "externalIntegrations": [{"name": "string", "type": "string", "purpose": "string"}]
+      }
+      ```
+
+  # ==========================================================================
+  # PHASE 1.5: DISCOVER DOMAIN FEATURES (Business-Level)
+  # ==========================================================================
+
+  filter_features:
+    system: |
+      {base_system}
+
+      You are identifying GRANULAR BUSINESS FEATURES from a codebase - NOT top-level container folders.
+
+      CRITICAL: Look INSIDE container folders to find actual features:
+      - If you see backend/, look inside for auth/, users/, payments/, etc.
+      - If you see services/, look inside for individual services
+      - If you see packages/, look inside for individual packages
+      - NEVER return a container folder as a feature
+
+      A BUSINESS FEATURE is a distinct capability with its own code, such as:
+      - Authentication (user login, registration, password reset)
+      - User Management (CRUD operations on users)
+      - Payments/Billing (transactions, subscriptions)
+      - Notifications (email, push, in-app)
+      - Content Processing (AI analysis, summarization)
+      - News Aggregation (fetching, parsing news feeds)
+
+      Your task:
+      1. Look INSIDE folders like backend/, services/, packages/, src/ to find actual features
+      2. Give each feature a proper BUSINESS NAME (e.g., "User Authentication" not "auth")
+      3. Return the SPECIFIC path to the feature (e.g., "backend/src/auth" not just "backend")
+      4. Briefly describe what the feature does
+
+      INCLUDE as features:
+      - Individual services inside services/ or backend/
+      - Specific modules with business logic
+      - Frontend applications (but not the container folder)
+      - Individual packages that provide business functionality
+
+      EXCLUDE from being features:
+      - Git submodules (typically in submodules/ or linked repos)
+      - Container folders that ONLY hold other features (services/, packages/, backend/ alone)
+      - Test directories (tests/, __tests__, pulse-tests/)
+      - Documentation (docs/, Documentation/)
+      - Build artifacts (dist/, build/)
+      - Configuration folders (config/, scripts/, infrastructure/)
+      - Project management (pm_artefacts/, notes/)
+      - DevOps/deployment folders (deploy/, ScriptCS_DevOpsAgent/)
+
+    user_template: |
+      Repository: {repo_name}
+
+      Discovered folders:
+      {folder_list}
+
+      Directory structure (look INSIDE containers to find features):
+      ```
+      {directory_tree}
+      ```
+
+      Identify the GRANULAR BUSINESS FEATURES inside this codebase.
+      Look INSIDE folders like backend/, services/, packages/ to find actual features.
+      DO NOT return container folders as features.
+
+      For each feature, provide:
+      - A descriptive business name (e.g., "User Authentication", "News Content Processing")
+      - The SPECIFIC path to the feature code (e.g., "backend/src/auth", NOT just "backend")
+      - A brief description of what it does
+
+      Return ONLY valid JSON (no explanations):
+      ```json
+      {
+        "features": [
+          {
+            "name": "User Authentication",
+            "paths": ["backend/src/auth", "firebase/functions/src/auth"],
+            "description": "User registration, login, password reset, and session management"
+          },
+          {
+            "name": "News Content Processing",
+            "paths": ["ai-worker/src/processors"],
+            "description": "AI-powered news article analysis and summarization"
+          }
+        ]
+      }
+      ```
+
+      IMPORTANT:
+      - Return SPECIFIC paths (backend/src/users NOT backend)
+      - Use descriptive BUSINESS names
+      - Group related code across folders into single features
+      - EXCLUDE: tests, docs, config, scripts, devops, infrastructure folders
+
+  # ==========================================================================
+  # PHASE 2: GENERATE README / ARCHITECTURE DOC
+  # ==========================================================================
+
+  generate_readme:
+    system: |
+      {base_system}
+
+      Generate a comprehensive README.md that helps developers understand this codebase.
+      The README should be practical and actionable, not just descriptive.
+
+    user_template: |
+      Repository: {repo_name}
+
+      Analysis results:
+      ```json
+      {analysis_json}
+      ```
+
+      Directory structure:
+      ```
+      {directory_tree}
+      ```
+
+      Generate a README.md with these sections:
+
+      # {repo_name}
+
+      ## Overview
+      Brief description of what this application does
+
+      ## Architecture
+      - System diagram (describe in text/ascii if helpful)
+      - How components interact
+      - Key design decisions
+
+      ## Tech Stack
+      - Languages and frameworks
+      - Key dependencies and why they're used
+
+      ## Project Structure
+      ```
+      [folder tree with descriptions]
+      ```
+
+      ## Features/Modules
+      For each feature:
+      - Name and purpose
+      - Location in codebase
+      - Key files
+
+      ## Getting Started
+      - Prerequisites
+      - Installation
+      - Running locally
+
+      ## API Overview
+      High-level summary of APIs exposed (detailed in contracts)
+
+      ## External Dependencies
+      Services and APIs this application depends on
+
+  # ==========================================================================
+  # PHASE 3: ANALYZE INDIVIDUAL FEATURES
+  # ==========================================================================
+
+  analyze_feature:
+    system: |
+      {base_system}
+
+      You are performing deep analysis of a single feature/module.
+      You must identify:
+
+      **APIs EXPOSED (what this feature provides to others):**
+      - HTTP endpoints (routes, handlers)
+      - Exported functions and classes
+      - Exported types and interfaces
+      - Events emitted
+      - WebSocket events sent
+
+      **APIs CONSUMED (what this feature depends on):**
+      - HTTP calls to external services
+      - Imports from other internal features/modules
+      - Database queries and operations
+      - Message queue subscriptions
+      - Events listened to
+
+      Be specific about method signatures, parameters, and return types.
+
+    user_template: |
+      Feature: {feature_name}
+      Path: {feature_path}
+      Repository: {repo_name}
+
+      Files in this feature:
+      ```
+      {file_list}
+      ```
+
+      Code samples from key files:
+      {code_samples}
+
+      Analyze this feature and return JSON:
+      ```json
+      {
+        "feature": "{feature_name}",
+        "purpose": "string - what this feature does",
+        "apisExposed": {
+          "httpEndpoints": [
+            {
+              "method": "GET|POST|PUT|DELETE|PATCH",
+              "path": "/api/...",
+              "handler": "functionName",
+              "file": "relative/path.ts",
+              "line": 123,
+              "parameters": [{"name": "string", "type": "string", "in": "path|query|body", "required": true}],
+              "responseType": "string",
+              "authentication": "none|bearer|api-key|session",
+              "description": "string"
+            }
+          ],
+          "exportedFunctions": [
+            {
+              "name": "functionName",
+              "file": "relative/path.ts",
+              "line": 45,
+              "signature": "functionName(param: Type): ReturnType",
+              "description": "string",
+              "isAsync": true
+            }
+          ],
+          "exportedTypes": [
+            {
+              "name": "TypeName",
+              "kind": "interface|type|class|enum",
+              "file": "relative/path.ts",
+              "line": 10,
+              "properties": [{"name": "string", "type": "string", "optional": false}]
+            }
+          ],
+          "eventsEmitted": [
+            {
+              "eventName": "string",
+              "payload": "TypeName or description",
+              "emittedFrom": "file:line"
+            }
+          ]
+        },
+        "apisConsumed": {
+          "httpCalls": [
+            {
+              "method": "GET|POST|etc",
+              "url": "string or pattern",
+              "purpose": "what this call does",
+              "calledFrom": "file:line"
+            }
+          ],
+          "internalImports": [
+            {
+              "from": "module/path",
+              "imports": ["functionA", "TypeB"],
+              "usedIn": "file.ts"
+            }
+          ],
+          "externalPackages": [
+            {
+              "package": "package-name",
+              "imports": ["function", "Type"],
+              "purpose": "why it's used"
+            }
+          ],
+          "databaseOperations": [
+            {
+              "type": "query|insert|update|delete",
+              "table": "tableName",
+              "file": "relative/path.ts",
+              "line": 67
+            }
+          ],
+          "eventsConsumed": [
+            {
+              "eventName": "string",
+              "handler": "functionName",
+              "file": "relative/path.ts"
+            }
+          ]
+        },
+        "dataModels": [
+          {
+            "name": "ModelName",
+            "type": "entity|dto|interface|schema",
+            "file": "relative/path.ts",
+            "fields": [{"name": "string", "type": "string", "constraints": "string"}]
+          }
+        ],
+        "dependencies": {
+          "internal": ["feature1", "feature2"],
+          "external": ["express", "prisma", "axios"]
+        }
+      }
+      ```
+
+  # ==========================================================================
+  # PHASE 4: GENERATE FEATURE CONTRACT
+  # ==========================================================================
+
+  generate_feature_contract:
+    system: |
+      {base_system}
+
+      Generate a comprehensive contract document for this feature.
+      The contract should serve as the definitive reference for:
+      - Other developers who want to use this feature's APIs
+      - Other developers who need to understand this feature's dependencies
+      - CI/CD systems checking for breaking changes
+
+      Focus on PRACTICAL documentation - include examples where helpful.
+
+    user_template: |
+      Feature: {feature_name}
+      Path: {feature_path}
+
+      Analysis results:
+      ```json
+      {analysis_json}
+      ```
+
+      Generate a Markdown contract document:
+
+      # {feature_name} Contract
+
+      ## Overview
+      What this feature does and its role in the application
+
+      ## APIs Exposed
+
+      ### HTTP Endpoints
+      For each endpoint:
+      - Method + Path
+      - Parameters (path, query, body)
+      - Response format
+      - Authentication required
+      - Example request/response
+
+      ### Exported Functions
+      Functions other modules can import and use
+
+      ### Exported Types
+      Interfaces and types other modules should use
+
+      ### Events Emitted
+      Events this feature publishes
+
+      ## APIs Consumed
+
+      ### External Services
+      HTTP APIs this feature calls
+
+      ### Internal Dependencies
+      Other features/modules this depends on
+
+      ### Database Operations
+      Tables and operations performed
+
+      ### Events Subscribed
+      Events this feature listens to
+
+      ## Data Models
+      Key data structures with field definitions
+
+      ## Breaking Change Policy
+      What changes would break consumers of this feature
+
+      ## Version History
+      (placeholder for tracking changes)
+
+  generate_json_contract:
+    system: |
+      {base_system}
+
+      Generate a machine-readable JSON contract that can be used for:
+      - Breaking change detection
+      - API documentation generation
+      - Dependency graph building
+      - Contract testing
+
+    user_template: |
+      Feature: {feature_name}
+      Path: {feature_path}
+
+      Analysis results:
+      ```json
+      {analysis_json}
+      ```
+
+      Generate a JSON contract with this structure:
+      ```json
+      {
+        "feature": "{feature_name}",
+        "version": "1.0.0",
+        "lastGenerated": "ISO8601 timestamp",
+        "generatorVersion": "2.0.0",
+        "overview": "string description",
+        "apisExposed": {
+          "httpEndpoints": [...],
+          "exportedFunctions": [...],
+          "exportedTypes": [...],
+          "eventsEmitted": [...]
+        },
+        "apisConsumed": {
+          "httpCalls": [...],
+          "internalImports": [...],
+          "externalPackages": [...],
+          "databaseOperations": [...],
+          "eventsConsumed": [...]
+        },
+        "dataModels": [...],
+        "dependencies": {
+          "internal": [],
+          "external": []
+        },
+        "breakingChangeIndicators": [
+          "files or patterns that if changed would be breaking"
+        ],
+        "testCoverage": {
+          "e2e": {"count": 0, "files": []},
+          "unit": {"count": 0, "files": []},
+          "integration": {"count": 0, "files": []}
+        }
+      }
+      ```
+
+  # ==========================================================================
+  # PHASE 5: GENERATE REPO-LEVEL CONTRACT SUMMARY
+  # ==========================================================================
+
+  generate_repo_contract:
+    system: |
+      {base_system}
+
+      Generate a repository-level contract that summarizes all features
+      and their interactions. This is the "master contract" for the repo.
+
+    user_template: |
+      Repository: {repo_name}
+
+      Features analyzed:
+      {features_summary}
+
+      Feature contracts:
+      {feature_contracts_json}
+
+      Generate a repository contract:
+
+      # {repo_name} - Repository Contract
+
+      ## Architecture Overview
+      How features relate to each other (dependency diagram in text)
+
+      ## Feature Index
+      | Feature | Purpose | APIs Exposed | Dependencies |
+      |---------|---------|--------------|--------------|
+
+      ## Cross-Feature Dependencies
+      Which features depend on which
+
+      ## External Service Dependencies
+      All external services the repo depends on
+
+      ## API Surface
+      Summary of all HTTP endpoints across features
+
+      ## Shared Types
+      Types used across multiple features
+
+      ## Breaking Change Impact Map
+      If feature X changes, what else is affected
+
+  # ==========================================================================
+  # PHASE 5.5: GENERATE REPO-LEVEL API CONTRACT
+  # ==========================================================================
+
+  generate_repo_api_contract:
+    system: |
+      {base_system}
+
+      Generate a comprehensive API Contract that aggregates all API endpoints
+      from all features in the repository. This serves as the master API reference.
+
+    user_template: |
+      Repository: {repo_name}
+
+      Repository Structure:
+      ```json
+      {repo_structure}
+      ```
+
+      Features ({feature_count} total):
+      ```json
+      {features_summary}
+      ```
+
+      Generate a complete API Contract for the entire repository:
+
+      # {repo_name} - API Contract
+
+      ## Overview
+      Brief description of the API architecture and design principles.
+
+      ## Base URLs
+      | Environment | URL | Description |
+      |-------------|-----|-------------|
+      | Development | localhost:PORT | Local development |
+      | Staging | staging.example.com | Testing environment |
+      | Production | api.example.com | Production |
+
+      ## Authentication
+      - **Method**: Bearer Token / API Key / OAuth2
+      - **Header**: Authorization: Bearer <token>
+      - **Rate Limits**: Requests per minute/hour
+
+      ## API Endpoints by Feature
+
+      ### Feature: [Feature Name]
+      | Method | Path | Description | Auth Required |
+      |--------|------|-------------|---------------|
+      | GET    | /api/resource | List all resources | Yes |
+      | POST   | /api/resource | Create new resource | Yes |
+
+      (Repeat for each feature)
+
+      ## Common Response Formats
+
+      ### Success Response
+      ```json
+      {
+        "success": true,
+        "data": {},
+        "message": "Operation successful"
+      }
+      ```
+
+      ### Error Response
+      ```json
+      {
+        "success": false,
+        "error": {
+          "code": "ERROR_CODE",
+          "message": "Human readable message"
+        }
+      }
+      ```
+
+      ## Shared Types
+      Common TypeScript/JSON types used across endpoints
+
+      ## Versioning Policy
+      How API versions are managed
+
+  # ==========================================================================
+  # PHASE 4.5: GENERATE ADMIN CONTRACT
+  # ==========================================================================
+
+  generate_admin_contract:
+    system: |
+      {base_system}
+
+      Generate an Admin Contract that defines what administrative capabilities exist for this feature.
+      This contract is used for building admin panels, management dashboards, and CMS interfaces.
+
+      An admin contract should capture:
+      - What entities can be administered (CRUD operations)
+      - What permissions are required
+      - What fields are editable vs read-only
+      - What bulk operations are supported
+      - What search/filter capabilities exist
+
+    user_template: |
+      Feature: {feature_name}
+      Path: {feature_path}
+
+      Analysis results:
+      ```json
+      {analysis_json}
+      ```
+
+      Generate an Admin Contract JSON with this structure:
+      ```json
+      {
+        "feature": "{feature_name}",
+        "version": "1.0.0",
+        "adminCapabilities": [
+          {
+            "name": "Entity Name Management",
+            "description": "What admin can do with this entity",
+            "entityType": "entity_name",
+            "operations": ["create", "read", "update", "delete", "list", "search", "export", "import", "bulk_update", "archive"],
+            "permissions": ["admin:entity:read", "admin:entity:write"],
+            "fields": [
+              {
+                "name": "field_name",
+                "type": "string|number|boolean|date|enum|relation|json",
+                "editable": true,
+                "searchable": true,
+                "filterable": true,
+                "sortable": true,
+                "required": false,
+                "validation": "optional validation rules"
+              }
+            ]
+          }
+        ],
+        "adminRoutes": [
+          {
+            "method": "GET|POST|PUT|DELETE|PATCH",
+            "path": "/admin/...",
+            "description": "Admin endpoint description",
+            "authRequired": true,
+            "roles": ["super_admin", "org_admin"]
+          }
+        ],
+        "requiredPermissions": ["list of all permissions needed for admin features"],
+        "dashboardWidgets": [
+          {
+            "name": "Widget Name",
+            "type": "count|chart|list|table",
+            "description": "What this widget shows",
+            "dataSource": "API endpoint or query"
+          }
+        ]
+      }
+      ```
+
+      IMPORTANT:
+      - Identify ALL entities that can be managed (users, posts, organizations, etc.)
+      - Include both direct CRUD and bulk operations
+      - Specify which fields are admin-editable vs read-only
+      - List permissions granularly (read vs write vs delete)
+      - Include any existing admin routes found in the code
+
+  # ==========================================================================
+  # PHASE 6: GENERATE SQL CONTRACT
+  # ==========================================================================
+
+  generate_sql_contract:
+    system: |
+      {base_system}
+
+      Generate a SQL Contract that documents reusable SQL patterns and queries.
+      This contract enables:
+      - Query reuse across features
+      - Performance optimization tracking
+      - Breaking change detection for database queries
+
+    user_template: |
+      Feature: {feature_name}
+      Path: {feature_path}
+
+      Analysis results:
+      ```json
+      {analysis_json}
+      ```
+
+      Generate a SQL Contract JSON:
+      ```json
+      {
+        "feature": "{feature_name}",
+        "version": "1.0.0",
+        "queries": [
+          {
+            "id": "unique_query_id",
+            "name": "Human readable name",
+            "description": "What this query does",
+            "sql": "SELECT * FROM table WHERE condition = $1",
+            "parameters": [
+              {
+                "name": "$1",
+                "type": "string|number|uuid|timestamp",
+                "description": "Parameter description"
+              }
+            ],
+            "returnType": "single|multiple|void|count",
+            "tables": ["table1", "table2"],
+            "usedBy": ["module1.ts", "service.ts"],
+            "performance": {
+              "indexed": true,
+              "estimatedRows": "low|medium|high",
+              "notes": "Performance considerations"
+            }
+          }
+        ],
+        "storedProcedures": [
+          {
+            "name": "procedure_name",
+            "description": "What it does",
+            "parameters": [],
+            "usedBy": []
+          }
+        ],
+        "views": [
+          {
+            "name": "view_name",
+            "description": "What it shows",
+            "baseTables": []
+          }
+        ]
+      }
+      ```
+
+  # ==========================================================================
+  # PHASE 7: GENERATE INFRA CONTRACT
+  # ==========================================================================
+
+  generate_infra_contract:
+    system: |
+      {base_system}
+
+      Generate an Infrastructure Contract that documents all infrastructure requirements.
+      This contract is essential for:
+      - Environment setup
+      - Deployment configuration
+      - DevOps automation
+
+    user_template: |
+      Feature: {feature_name}
+      Path: {feature_path}
+
+      Analysis results:
+      ```json
+      {analysis_json}
+      ```
+
+      Generate an Infrastructure Contract:
+
+      # {feature_name} Infrastructure Contract
+
+      ## Environment Variables
+      | Variable | Type | Required | Default | Description |
+      |----------|------|----------|---------|-------------|
+      | VAR_NAME | string/number/boolean | Yes/No | value | Purpose |
+
+      ## Port Allocations
+      | Service | Port | Protocol | Purpose |
+      |---------|------|----------|---------|
+
+      ## External Service URLs
+      | Service | Env Var | Default URL | Purpose |
+      |---------|---------|-------------|---------|
+
+      ## Docker/Container Requirements
+      - Base image requirements
+      - Volume mounts needed
+      - Network configuration
+
+      ## Resource Requirements
+      - Memory: minimum/recommended
+      - CPU: minimum/recommended
+      - Storage: minimum/recommended
+
+      ## Secrets Management
+      - Required secrets (without values)
+      - Secret rotation requirements
+      - Encryption requirements
+
+      ## Health Checks
+      - Endpoint: path and expected response
+      - Liveness check
+      - Readiness check
+
+  # ==========================================================================
+  # PHASE 8: GENERATE THIRD PARTY INTEGRATIONS CONTRACT
+  # ==========================================================================
+
+  generate_third_party_contract:
+    system: |
+      {base_system}
+
+      Generate a Third Party Integrations Contract documenting all external service dependencies.
+      This contract helps:
+      - Track API key requirements
+      - Document rate limits and quotas
+      - Plan for service outages
+
+    user_template: |
+      Feature: {feature_name}
+      Path: {feature_path}
+
+      Analysis results:
+      ```json
+      {analysis_json}
+      ```
+
+      Generate a Third Party Integrations Contract:
+
+      # {feature_name} Third Party Integrations
+
+      ## Service: [Service Name]
+
+      ### Overview
+      - **Purpose**: Why we use this service
+      - **SDK/Package**: npm package or API client used
+      - **Documentation**: Link to official docs
+
+      ### Authentication
+      - **Method**: API Key / OAuth / Bearer Token
+      - **Env Variable**: VARIABLE_NAME
+      - **Scopes Required**: list of permissions needed
+
+      ### Rate Limits
+      - **Requests per minute**: X
+      - **Daily quota**: Y
+      - **Burst limit**: Z
+
+      ### Endpoints Used
+      | Endpoint | Method | Purpose | Rate Limited |
+      |----------|--------|---------|--------------|
+
+      ### Error Handling
+      - **Retry Strategy**: exponential backoff / fixed delay
+      - **Circuit Breaker**: yes/no, threshold
+      - **Fallback Behavior**: what happens when service is down
+
+      ### Webhook Configuration (if applicable)
+      - **Endpoint**: /webhook/service
+      - **Events**: list of subscribed events
+      - **Signature Verification**: yes/no
+
+      ### Cost Considerations
+      - Pricing model (per request, monthly, etc.)
+      - Estimated monthly cost
+
+  # ==========================================================================
+  # PHASE 9: GENERATE DATABASE SCHEMA CONTRACT
+  # ==========================================================================
+
+  generate_database_schema_contract:
+    system: |
+      {base_system}
+
+      Generate a Database Schema Contract documenting all database tables and relationships.
+      This contract enables:
+      - Schema validation
+      - Migration planning
+      - Breaking change detection
+
+    user_template: |
+      Feature: {feature_name}
+      Path: {feature_path}
+
+      Analysis results:
+      ```json
+      {analysis_json}
+      ```
+
+      Generate a Database Schema Contract:
+      ```json
+      {
+        "feature": "{feature_name}",
+        "version": "1.0.0",
+        "database": "postgresql|mysql|mongodb|sqlite",
+        "tables": [
+          {
+            "name": "table_name",
+            "description": "What this table stores",
+            "columns": [
+              {
+                "name": "column_name",
+                "type": "varchar(255)|integer|uuid|timestamp|jsonb|boolean",
+                "nullable": false,
+                "default": "default_value or null",
+                "description": "Column purpose"
+              }
+            ],
+            "primaryKey": ["id"],
+            "indexes": [
+              {
+                "name": "idx_name",
+                "columns": ["col1", "col2"],
+                "unique": false,
+                "type": "btree|hash|gin"
+              }
+            ],
+            "foreignKeys": [
+              {
+                "column": "user_id",
+                "references": "users.id",
+                "onDelete": "CASCADE|SET NULL|RESTRICT",
+                "onUpdate": "CASCADE|NO ACTION"
+              }
+            ],
+            "constraints": [
+              {
+                "name": "constraint_name",
+                "type": "check|unique",
+                "definition": "SQL expression"
+              }
+            ]
+          }
+        ],
+        "enums": [
+          {
+            "name": "enum_name",
+            "values": ["value1", "value2"],
+            "usedIn": ["table.column"]
+          }
+        ],
+        "migrations": [
+          {
+            "version": "001",
+            "name": "create_initial_tables",
+            "date": "2024-01-01",
+            "changes": "Description of changes"
+          }
+        ]
+      }
+      ```
+
+  # ==========================================================================
+  # PHASE 10: GENERATE EVENTS CONTRACT
+  # ==========================================================================
+
+  generate_events_contract:
+    system: |
+      {base_system}
+
+      Generate an Events Contract documenting all event-driven communication.
+      This contract covers:
+      - WebSocket events
+      - Message queue topics
+      - Pub/sub patterns
+      - Server-sent events
+
+    user_template: |
+      Feature: {feature_name}
+      Path: {feature_path}
+
+      Analysis results:
+      ```json
+      {analysis_json}
+      ```
+
+      Generate an Events Contract:
+      ```json
+      {
+        "feature": "{feature_name}",
+        "version": "1.0.0",
+        "websocketEvents": {
+          "emitted": [
+            {
+              "event": "event_name",
+              "description": "What this event signals",
+              "payload": {
+                "type": "object",
+                "properties": {}
+              },
+              "emittedFrom": "file:line",
+              "frequency": "on_action|periodic|rare"
+            }
+          ],
+          "consumed": [
+            {
+              "event": "event_name",
+              "handler": "function_name",
+              "file": "handler_file.ts"
+            }
+          ]
+        },
+        "messageQueue": {
+          "provider": "rabbitmq|kafka|redis|sqs",
+          "topics": [
+            {
+              "name": "topic.name",
+              "description": "Purpose of this topic",
+              "messageSchema": {},
+              "publishers": ["service1"],
+              "subscribers": ["service2", "service3"],
+              "retention": "7d",
+              "partitions": 1
+            }
+          ]
+        },
+        "serverSentEvents": [
+          {
+            "endpoint": "/events/stream",
+            "events": ["event1", "event2"],
+            "description": "SSE stream purpose"
+          }
+        ],
+        "eventOrdering": {
+          "guarantees": "at-least-once|exactly-once|at-most-once",
+          "ordering": "strict|eventual|none"
+        }
+      }
+      ```
+
+  # ==========================================================================
+  # PHASE 11: GENERATE TEST CONTRACT
+  # ==========================================================================
+
+  generate_test_contract:
+    system: |
+      {base_system}
+
+      Generate a Test Contract documenting testing requirements and coverage.
+      This contract defines:
+      - Required test scenarios
+      - Mocking requirements
+      - Fixture specifications
+      - Coverage targets
+
+    user_template: |
+      Feature: {feature_name}
+      Path: {feature_path}
+
+      Analysis results:
+      ```json
+      {analysis_json}
+      ```
+
+      Generate a Test Contract:
+      ```json
+      {
+        "feature": "{feature_name}",
+        "version": "1.0.0",
+        "testRequirements": {
+          "unit": {
+            "coverage": {
+              "target": 80,
+              "current": 0
+            },
+            "scenarios": [
+              {
+                "name": "Scenario description",
+                "file": "test_file.test.ts",
+                "priority": "critical|high|medium|low",
+                "status": "implemented|pending|skipped"
+              }
+            ],
+            "mocking": [
+              {
+                "dependency": "ExternalService",
+                "mockType": "jest.mock|sinon|manual",
+                "reason": "Why this needs mocking"
+              }
+            ]
+          },
+          "integration": {
+            "scenarios": [],
+            "fixtures": [
+              {
+                "name": "fixture_name",
+                "description": "Test data description",
+                "file": "fixtures/data.json"
+              }
+            ],
+            "dependencies": ["database", "redis"]
+          },
+          "e2e": {
+            "scenarios": [
+              {
+                "name": "User flow description",
+                "steps": ["step1", "step2"],
+                "expectedOutcome": "What should happen"
+              }
+            ],
+            "environment": "staging|local|dedicated"
+          }
+        },
+        "criticalPaths": [
+          {
+            "name": "Critical user journey",
+            "description": "Why this is critical",
+            "testCoverage": "full|partial|none"
+          }
+        ],
+        "regressionTests": [
+          {
+            "bug": "BUG-123",
+            "test": "regression_test.test.ts",
+            "description": "What bug this prevents"
+          }
+        ]
+      }
+      ```
+
+flow:
+  type: "analysis"
+  output_format: "structured"
+  phases:
+    - name: "understand"
+      prompts: ["analyze_repo_structure"]
+    - name: "document"
+      prompts: ["generate_readme"]
+    - name: "analyze"
+      prompts: ["analyze_feature"]
+    - name: "contract"
+      prompts: ["generate_feature_contract", "generate_json_contract", "generate_admin_contract"]
+    - name: "database"
+      prompts: ["generate_sql_contract", "generate_database_schema_contract"]
+    - name: "infrastructure"
+      prompts: ["generate_infra_contract", "generate_third_party_contract"]
+    - name: "events"
+      prompts: ["generate_events_contract"]
+    - name: "testing"
+      prompts: ["generate_test_contract"]
+    - name: "summarize"
+      prompts: ["generate_repo_contract"]
