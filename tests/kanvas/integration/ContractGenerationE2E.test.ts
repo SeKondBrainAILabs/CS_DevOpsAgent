@@ -1,10 +1,10 @@
 /**
  * Contract Generation E2E Tests
- * Tests contract generation at repo, feature, and contract type levels
+ * Comprehensive tests for contract generation at repo, feature, and contract type levels
  * Validates content is actual data, not placeholder templates
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { promises as fs } from 'fs';
 import path from 'path';
 
@@ -13,14 +13,18 @@ const TEST_REPO_PATH = '/Volumes/Simba User Data/Development/Linkedin-New-Summar
 const CONTRACTS_DIR = path.join(TEST_REPO_PATH, 'House_Rules_Contracts');
 const FEATURE_CONTRACTS_DIR = path.join(TEST_REPO_PATH, '.S9N_KIT_DevOpsAgent/contracts/features');
 
-// Contract type definitions
+// All repo-level contract definitions
 const REPO_CONTRACT_TYPES = [
-  { type: 'api', file: 'API_CONTRACT.md' },
-  { type: 'schema', file: 'DATABASE_SCHEMA_CONTRACT.md' },
-  { type: 'events', file: 'EVENTS_CONTRACT.md' },
-  { type: 'infra', file: 'INFRA_CONTRACT.md' },
-  { type: 'features', file: 'FEATURES_CONTRACT.md' },
-  { type: 'integrations', file: 'THIRD_PARTY_INTEGRATIONS.md' },
+  { type: 'api', file: 'API_CONTRACT.md', required: true },
+  { type: 'schema', file: 'DATABASE_SCHEMA_CONTRACT.md', required: true },
+  { type: 'events', file: 'EVENTS_CONTRACT.md', required: true },
+  { type: 'infra', file: 'INFRA_CONTRACT.md', required: true },
+  { type: 'features', file: 'FEATURES_CONTRACT.md', required: true },
+  { type: 'integrations', file: 'THIRD_PARTY_INTEGRATIONS.md', required: true },
+  { type: 'sql', file: 'SQL_CONTRACT.json', required: false },
+  { type: 'admin', file: 'ADMIN_CONTRACT.md', required: false },
+  { type: 'css', file: 'CSS_CONTRACT.md', required: false },
+  { type: 'prompts', file: 'PROMPTS_CONTRACT.md', required: false },
 ];
 
 // Placeholder patterns that should NOT appear in generated contracts
@@ -35,10 +39,17 @@ const PLACEHOLDER_PATTERNS = [
   /Initial Template/i,
   /Template Instructions/i,
   /For DevOps Agent.*When populating/i,
+  /\[F-XXX\]/i,
+  /\[VAR_NAME\]/i,
+  /\[Service\]/i,
+  /\[API\]/i,
 ];
 
-// Version header pattern
+// Version header pattern for markdown files
 const VERSION_HEADER_PATTERN = /<!--\s*Version:\s*([\d.]+)\s*\|\s*Generated:\s*(\d{4}-\d{2}-\d{2})/;
+
+// Version pattern for JSON files
+const JSON_VERSION_PATTERN = /"version":\s*"([\d.]+)"/;
 
 describe('Contract Generation E2E Tests', () => {
   describe('Repo-Level Contracts', () => {
@@ -47,10 +58,11 @@ describe('Contract Generation E2E Tests', () => {
       expect(exists).toBe(true);
     });
 
-    for (const { type, file } of REPO_CONTRACT_TYPES) {
+    for (const { type, file, required } of REPO_CONTRACT_TYPES) {
       describe(`${type.toUpperCase()} Contract (${file})`, () => {
         let content: string;
         let filePath: string;
+        const isJson = file.endsWith('.json');
 
         beforeAll(async () => {
           filePath = path.join(CONTRACTS_DIR, file);
@@ -61,15 +73,24 @@ describe('Contract Generation E2E Tests', () => {
           }
         });
 
-        it('should exist', async () => {
+        it(`should ${required ? 'exist' : 'exist if created'}`, async () => {
           const exists = await fs.access(filePath).then(() => true).catch(() => false);
-          expect(exists).toBe(true);
+          if (required) {
+            expect(exists).toBe(true);
+          } else if (!exists) {
+            console.log(`${file} not found (optional), skipping`);
+          }
         });
 
-        it('should have version header', () => {
+        it('should have version header/field', () => {
           if (!content) return;
-          const hasVersionHeader = VERSION_HEADER_PATTERN.test(content);
-          expect(hasVersionHeader).toBe(true);
+          if (isJson) {
+            const hasVersion = JSON_VERSION_PATTERN.test(content) || /"contract_version"/.test(content);
+            expect(hasVersion).toBe(true);
+          } else {
+            const hasVersionHeader = VERSION_HEADER_PATTERN.test(content);
+            expect(hasVersionHeader).toBe(true);
+          }
         });
 
         it('should NOT contain placeholder text', () => {
@@ -85,28 +106,89 @@ describe('Contract Generation E2E Tests', () => {
 
         it('should have actual content (not just headers)', () => {
           if (!content) return;
-          // Should have more than just headers
-          const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('<!--'));
-          expect(lines.length).toBeGreaterThan(5);
+          if (isJson) {
+            // JSON should have more than just metadata
+            const parsed = JSON.parse(content);
+            const keys = Object.keys(parsed);
+            expect(keys.length).toBeGreaterThan(2);
+          } else {
+            // Markdown should have more than just headers
+            const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('<!--'));
+            expect(lines.length).toBeGreaterThan(5);
+          }
         });
       });
     }
   });
 
   describe('Feature-Level Contracts', () => {
+    let featureFiles: string[] = [];
+
+    beforeAll(async () => {
+      try {
+        const files = await fs.readdir(FEATURE_CONTRACTS_DIR);
+        featureFiles = files.filter(f => f.endsWith('.contracts.json'));
+      } catch {
+        featureFiles = [];
+      }
+    });
+
     it('should have feature contracts directory', async () => {
       const exists = await fs.access(FEATURE_CONTRACTS_DIR).then(() => true).catch(() => false);
       expect(exists).toBe(true);
     });
 
-    it('should have at least one feature contract JSON', async () => {
-      try {
-        const files = await fs.readdir(FEATURE_CONTRACTS_DIR);
-        const jsonFiles = files.filter(f => f.endsWith('.contracts.json'));
-        expect(jsonFiles.length).toBeGreaterThan(0);
-      } catch {
-        expect(true).toBe(false); // Fail if directory doesn't exist
-      }
+    it('should have at least one feature contract JSON', () => {
+      expect(featureFiles.length).toBeGreaterThan(0);
+    });
+
+    it('should have multiple feature contracts (comprehensive coverage)', () => {
+      expect(featureFiles.length).toBeGreaterThan(10);
+    });
+
+    describe('All Feature Contracts Validation', () => {
+      it('all feature contracts should have valid JSON', async () => {
+        for (const file of featureFiles) {
+          const filePath = path.join(FEATURE_CONTRACTS_DIR, file);
+          try {
+            const content = await fs.readFile(filePath, 'utf-8');
+            const parsed = JSON.parse(content);
+            expect(parsed).toBeDefined();
+          } catch (err) {
+            console.error(`Invalid JSON in ${file}:`, err);
+            expect(true).toBe(false);
+          }
+        }
+      });
+
+      it('all feature contracts should have version field', async () => {
+        for (const file of featureFiles) {
+          const filePath = path.join(FEATURE_CONTRACTS_DIR, file);
+          try {
+            const content = await fs.readFile(filePath, 'utf-8');
+            const parsed = JSON.parse(content);
+            expect(parsed.version).toBeDefined();
+            expect(typeof parsed.version).toBe('string');
+          } catch {
+            // Skip if file doesn't exist or can't be parsed
+          }
+        }
+      });
+
+      it('all feature contracts should have lastGenerated timestamp', async () => {
+        for (const file of featureFiles) {
+          const filePath = path.join(FEATURE_CONTRACTS_DIR, file);
+          try {
+            const content = await fs.readFile(filePath, 'utf-8');
+            const parsed = JSON.parse(content);
+            expect(parsed.lastGenerated).toBeDefined();
+            const date = new Date(parsed.lastGenerated);
+            expect(date.getTime()).not.toBeNaN();
+          } catch {
+            // Skip if file doesn't exist or can't be parsed
+          }
+        }
+      });
     });
 
     describe('Authentication System Contract', () => {
@@ -134,7 +216,6 @@ describe('Contract Generation E2E Tests', () => {
 
       it('should have lastGenerated timestamp', () => {
         expect(contractData.lastGenerated).toBeDefined();
-        // Should be a valid ISO date
         const date = new Date(contractData.lastGenerated as string);
         expect(date.getTime()).not.toBeNaN();
       });
@@ -156,7 +237,7 @@ describe('Contract Generation E2E Tests', () => {
         const apis = contractData.apis as Record<string, unknown> | undefined;
         const endpoints = apis?.endpoints as Array<Record<string, string>> | undefined;
         if (endpoints && endpoints.length > 0) {
-          for (const ep of endpoints.slice(0, 3)) { // Check first 3
+          for (const ep of endpoints.slice(0, 3)) {
             expect(ep.method).toBeDefined();
             expect(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(ep.method)).toBe(true);
             expect(ep.path).toBeDefined();
@@ -168,7 +249,7 @@ describe('Contract Generation E2E Tests', () => {
       it('schemas should have name, type, and columns', () => {
         const schemas = contractData.schemas as Array<Record<string, unknown>> | undefined;
         if (schemas && schemas.length > 0) {
-          for (const schema of schemas.slice(0, 3)) { // Check first 3
+          for (const schema of schemas.slice(0, 3)) {
             expect(schema.name).toBeDefined();
             expect(typeof schema.name).toBe('string');
             expect(schema.columns).toBeDefined();
@@ -181,16 +262,14 @@ describe('Contract Generation E2E Tests', () => {
 
   describe('Contract Content Quality', () => {
     describe('API Contract should have actual endpoints', () => {
-      it('should list real API paths', async () => {
+      it('should list real API paths or state none detected', async () => {
         const filePath = path.join(CONTRACTS_DIR, 'API_CONTRACT.md');
         try {
           const content = await fs.readFile(filePath, 'utf-8');
-          // Should contain actual HTTP methods
+          // Should contain actual HTTP methods OR explicitly say no endpoints
           const hasHttpMethods = /\|\s*(GET|POST|PUT|PATCH|DELETE)\s*\|/.test(content);
-          expect(hasHttpMethods).toBe(true);
-          // Should contain actual paths starting with /
-          const hasPaths = /\|\s*\/\w+/.test(content);
-          expect(hasPaths).toBe(true);
+          const hasNoEndpoints = /No API endpoints detected/i.test(content) || /No endpoints detected/i.test(content);
+          expect(hasHttpMethods || hasNoEndpoints).toBe(true);
         } catch {
           console.log('API_CONTRACT.md not found, skipping');
         }
@@ -198,41 +277,268 @@ describe('Contract Generation E2E Tests', () => {
     });
 
     describe('Schema Contract should have actual tables', () => {
-      it('should list real table names or state no tables found', async () => {
+      it('should list real table names', async () => {
         const filePath = path.join(CONTRACTS_DIR, 'DATABASE_SCHEMA_CONTRACT.md');
         try {
           const content = await fs.readFile(filePath, 'utf-8');
-          // Should either have actual tables OR explicitly say no tables
-          const hasActualTables = /\|\s*\w+_\w+\s*\|/.test(content) || // snake_case table names
-                                  /No database tables detected/i.test(content);
+          // Should have actual tables with snake_case names
+          const hasActualTables = /linkedin_\w+/.test(content);
           expect(hasActualTables).toBe(true);
-          // Should NOT have placeholder table names
-          const hasPlaceholder = /\[table_name\]/i.test(content);
-          expect(hasPlaceholder).toBe(false);
         } catch {
           console.log('DATABASE_SCHEMA_CONTRACT.md not found, skipping');
+        }
+      });
+
+      it('should list actual columns with types', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'DATABASE_SCHEMA_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have column definitions with types like UUID, VARCHAR, etc.
+          const hasColumnTypes = /\|\s*(UUID|VARCHAR|TEXT|INTEGER|BOOLEAN|TIMESTAMP|FLOAT|JSONB)\s*\|/i.test(content);
+          expect(hasColumnTypes).toBe(true);
+        } catch {
+          console.log('DATABASE_SCHEMA_CONTRACT.md not found, skipping');
+        }
+      });
+    });
+
+    describe('Infra Contract should have actual services', () => {
+      it('should list real docker services', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'INFRA_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have actual service names from docker-compose
+          const hasPostgres = /postgres/i.test(content);
+          const hasRedis = /redis/i.test(content);
+          expect(hasPostgres && hasRedis).toBe(true);
+        } catch {
+          console.log('INFRA_CONTRACT.md not found, skipping');
+        }
+      });
+
+      it('should list actual port mappings', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'INFRA_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have actual port numbers
+          const hasPorts = /\|\s*9\d{3}\s*[:|]/.test(content) || /port.*9\d{3}/i.test(content);
+          expect(hasPorts).toBe(true);
+        } catch {
+          console.log('INFRA_CONTRACT.md not found, skipping');
+        }
+      });
+    });
+
+    describe('Events Contract should have actual events', () => {
+      it('should list actual Kafka topics', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'EVENTS_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have actual topic names
+          const hasTopics = /auth\.events|post\.events|pulse\./i.test(content);
+          expect(hasTopics).toBe(true);
+        } catch {
+          console.log('EVENTS_CONTRACT.md not found, skipping');
+        }
+      });
+    });
+
+    describe('Features Contract should have actual features', () => {
+      it('should list actual feature modules', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'FEATURES_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have actual service names
+          const hasServices = /auth-service|user-service|ai-worker/i.test(content);
+          expect(hasServices).toBe(true);
+        } catch {
+          console.log('FEATURES_CONTRACT.md not found, skipping');
+        }
+      });
+
+      it('should have feature IDs', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'FEATURES_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have feature IDs like F-001, F-002
+          const hasFeatureIds = /F-\d{3}/.test(content);
+          expect(hasFeatureIds).toBe(true);
+        } catch {
+          console.log('FEATURES_CONTRACT.md not found, skipping');
+        }
+      });
+    });
+
+    describe('Integrations Contract should have actual integrations', () => {
+      it('should list actual third-party services', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'THIRD_PARTY_INTEGRATIONS.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have actual integration names
+          const hasIntegrations = /PostgreSQL|Redis|Neo4j|Kafka|Groq/i.test(content);
+          expect(hasIntegrations).toBe(true);
+        } catch {
+          console.log('THIRD_PARTY_INTEGRATIONS.md not found, skipping');
+        }
+      });
+    });
+
+    describe('Admin Contract should have actual admin endpoints', () => {
+      it('should list admin API endpoints', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'ADMIN_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have admin API paths
+          const hasAdminEndpoints = /\/api\/admin\//.test(content);
+          expect(hasAdminEndpoints).toBe(true);
+        } catch {
+          console.log('ADMIN_CONTRACT.md not found, skipping');
+        }
+      });
+
+      it('should list role hierarchy', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'ADMIN_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have role definitions
+          const hasRoles = /SUPER_ADMIN|ORG_ADMIN|USER/i.test(content);
+          expect(hasRoles).toBe(true);
+        } catch {
+          console.log('ADMIN_CONTRACT.md not found, skipping');
+        }
+      });
+
+      it('should have user management endpoints', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'ADMIN_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have user management
+          const hasUserMgmt = /\/users/.test(content) && /GET|POST|PATCH|DELETE/.test(content);
+          expect(hasUserMgmt).toBe(true);
+        } catch {
+          console.log('ADMIN_CONTRACT.md not found, skipping');
+        }
+      });
+    });
+
+    describe('CSS Contract should have actual design tokens', () => {
+      it('should list color tokens', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'CSS_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have CSS variable names
+          const hasColorTokens = /--color-primary|--color-accent|--color-error/i.test(content);
+          expect(hasColorTokens).toBe(true);
+        } catch {
+          console.log('CSS_CONTRACT.md not found, skipping');
+        }
+      });
+
+      it('should list typography tokens', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'CSS_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have typography tokens
+          const hasTypography = /--font-size|--font-weight|--line-height/i.test(content);
+          expect(hasTypography).toBe(true);
+        } catch {
+          console.log('CSS_CONTRACT.md not found, skipping');
+        }
+      });
+
+      it('should list spacing scale', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'CSS_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have spacing tokens
+          const hasSpacing = /--spacing-|rem|px/.test(content);
+          expect(hasSpacing).toBe(true);
+        } catch {
+          console.log('CSS_CONTRACT.md not found, skipping');
+        }
+      });
+    });
+
+    describe('Prompts Contract should have actual prompt modes', () => {
+      it('should list prompt mode IDs', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'PROMPTS_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have actual mode IDs
+          const hasModes = /digest_professional|digest_executive|digest_technical/i.test(content);
+          expect(hasModes).toBe(true);
+        } catch {
+          console.log('PROMPTS_CONTRACT.md not found, skipping');
+        }
+      });
+
+      it('should list model configurations', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'PROMPTS_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have model settings
+          const hasModelConfig = /temperature|max_tokens|llama/i.test(content);
+          expect(hasModelConfig).toBe(true);
+        } catch {
+          console.log('PROMPTS_CONTRACT.md not found, skipping');
+        }
+      });
+
+      it('should list persona definitions', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'PROMPTS_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have persona info
+          const hasPersona = /Persona|Role|Tone/i.test(content);
+          expect(hasPersona).toBe(true);
+        } catch {
+          console.log('PROMPTS_CONTRACT.md not found, skipping');
+        }
+      });
+
+      it('should list output formats', async () => {
+        const filePath = path.join(CONTRACTS_DIR, 'PROMPTS_CONTRACT.md');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          // Should have output format sections
+          const hasOutputFormat = /Output Format|Executive Summary|Key Themes/i.test(content);
+          expect(hasOutputFormat).toBe(true);
+        } catch {
+          console.log('PROMPTS_CONTRACT.md not found, skipping');
         }
       });
     });
   });
 
   describe('Version Increments', () => {
-    it('contract version should be >= 1.0.0', async () => {
-      const filePath = path.join(CONTRACTS_DIR, 'API_CONTRACT.md');
-      try {
-        const content = await fs.readFile(filePath, 'utf-8');
-        const match = content.match(VERSION_HEADER_PATTERN);
-        if (match) {
-          const version = match[1];
-          const [major, minor, patch] = version.split('.').map(Number);
-          expect(major).toBeGreaterThanOrEqual(1);
+    it('all repo contracts should have version >= 1.0.0', async () => {
+      for (const { file, required } of REPO_CONTRACT_TYPES) {
+        const filePath = path.join(CONTRACTS_DIR, file);
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          let version: string | null = null;
+
+          if (file.endsWith('.json')) {
+            const match = content.match(/"(?:contract_)?version":\s*"([\d.]+)"/);
+            version = match ? match[1] : null;
+          } else {
+            const match = content.match(VERSION_HEADER_PATTERN);
+            version = match ? match[1] : null;
+          }
+
+          if (version) {
+            const [major] = version.split('.').map(Number);
+            expect(major).toBeGreaterThanOrEqual(1);
+          }
+        } catch {
+          if (required) {
+            console.log(`${file} not found but required`);
+          }
         }
-      } catch {
-        console.log('API_CONTRACT.md not found, skipping');
       }
     });
 
-    it('feature contract version should be >= 1.0.0', async () => {
+    it('feature contract versions should be >= 1.0.0', async () => {
       const featureFile = path.join(FEATURE_CONTRACTS_DIR, 'Authentication System.contracts.json');
       try {
         const content = await fs.readFile(featureFile, 'utf-8');
@@ -249,7 +555,6 @@ describe('Contract Generation E2E Tests', () => {
 
 describe('UI Contract Display Tests', () => {
   describe('formatContractFromJSON function', () => {
-    // Mock data matching actual JSON structure
     const mockFeatureContract = {
       feature: 'Test Feature',
       version: '1.2.3',

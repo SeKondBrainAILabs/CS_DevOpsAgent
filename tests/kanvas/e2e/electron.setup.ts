@@ -5,6 +5,11 @@
 
 import { _electron as electron, ElectronApplication, Page } from '@playwright/test';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
+
+// ESM-compatible __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export interface ElectronTestContext {
   app: ElectronApplication;
@@ -13,18 +18,36 @@ export interface ElectronTestContext {
 
 /**
  * Launch the Electron app for testing
+ * @param useRealData - If true, uses the real app database for integration tests
  */
-export async function launchElectronApp(): Promise<ElectronTestContext> {
+export async function launchElectronApp(useRealData = false): Promise<ElectronTestContext> {
   // Build the app first if needed
   const appPath = path.resolve(__dirname, '../../../');
 
+  const env: Record<string, string> = {
+    ...process.env as Record<string, string>,
+  };
+
+  // Args for Electron
+  const args = [path.join(appPath, 'dist/electron/index.js')];
+
+  // For integration tests, use the real app data by specifying userData path
+  // For unit-style E2E tests, use test mode
+  if (useRealData) {
+    // Point to the real Kanvas app data directory
+    const realUserDataPath = path.join(
+      process.env.HOME || '',
+      'Library/Application Support/sekondbrain-kanvas'
+    );
+    args.push(`--user-data-dir=${realUserDataPath}`);
+  } else {
+    env.NODE_ENV = 'test';
+    env.KANVAS_TEST_MODE = 'true';
+  }
+
   const app = await electron.launch({
-    args: [path.join(appPath, 'dist/electron/index.js')],
-    env: {
-      ...process.env,
-      NODE_ENV: 'test',
-      KANVAS_TEST_MODE: 'true',
-    },
+    args,
+    env,
   });
 
   // Wait for the first window
@@ -32,6 +55,11 @@ export async function launchElectronApp(): Promise<ElectronTestContext> {
 
   // Wait for the app to be ready
   await page.waitForLoadState('domcontentloaded');
+
+  // Give more time for real data mode to load sessions
+  if (useRealData) {
+    await page.waitForTimeout(3000);
+  }
 
   return { app, page };
 }
