@@ -11,9 +11,9 @@ mode:
   app: "kanvas"
 
 settings:
-  temperature: 0.3  # Low for consistent, accurate analysis
+  temperature: 0.2  # Very low for consistent, accurate analysis
   max_tokens: 8192  # Higher for comprehensive output
-  model: kimi-k2    # Best for long context analysis
+  model: llama-3.3-70b  # Better instruction following
 
 persona:
   name: "Code Architect"
@@ -401,81 +401,53 @@ prompts:
     system: |
       {base_system}
 
-      Generate a comprehensive contract document for this feature.
-      The contract should serve as the definitive reference for:
-      - Other developers who want to use this feature's APIs
-      - Other developers who need to understand this feature's dependencies
-      - CI/CD systems checking for breaking changes
+      You output markdown. For tables, you MUST use this exact syntax:
 
-      Focus on PRACTICAL documentation - include examples where helpful.
+      | Column1 | Column2 | Column3 |
+      |---------|---------|---------|
+      | data1   | data2   | data3   |
+
+      Every table row MUST start and end with | character.
 
     user_template: |
       Feature: {feature_name}
       Path: {feature_path}
+      Analysis: {analysis_json}
 
-      Analysis results:
-      ```json
-      {analysis_json}
-      ```
-
-      Generate a Markdown contract document:
+      Output markdown using EXACTLY this format:
 
       # {feature_name} Contract
 
-      ## Overview
-      What this feature does and its role in the application
+      ## Purpose
 
-      ## APIs Exposed
+      [One sentence describing this feature]
 
-      ### HTTP Endpoints
-      For each endpoint:
-      - Method + Path
-      - Parameters (path, query, body)
-      - Response format
-      - Authentication required
-      - Example request/response
+      ## Files
 
-      ### Exported Functions
-      Functions other modules can import and use
+      | File | Type | Purpose |
+      |------|------|---------|
+      | example.ts | API | Example purpose |
 
-      ### Exported Types
-      Interfaces and types other modules should use
+      ## API Endpoints
 
-      ### Events Emitted
-      Events this feature publishes
+      | Method | Path | Handler |
+      |--------|------|---------|
+      | GET | /example | handler.ts |
 
-      ## APIs Consumed
+      ## Dependencies
 
-      ### External Services
-      HTTP APIs this feature calls
+      | Package | Purpose |
+      |---------|---------|
+      | express | Web framework |
 
-      ### Internal Dependencies
-      Other features/modules this depends on
-
-      ### Database Operations
-      Tables and operations performed
-
-      ### Events Subscribed
-      Events this feature listens to
-
-      ## Data Models
-      Key data structures with field definitions
-
-      ## Breaking Change Policy
-      What changes would break consumers of this feature
-
-      ## Version History
-      (placeholder for tracking changes)
+      CRITICAL: Tables MUST use | pipe characters like shown above. Do not use spaces or tabs for alignment.
 
   generate_json_contract:
     system: |
       {base_system}
 
-      Generate a machine-readable JSON contract that can be used for:
-      - Breaking change detection
-      - API documentation generation
-      - Dependency graph building
-      - Contract testing
+      Generate a machine-readable JSON contract for breaking change detection.
+      Include only actual data found - no placeholder examples.
 
     user_template: |
       Feature: {feature_name}
@@ -486,42 +458,27 @@ prompts:
       {analysis_json}
       ```
 
-      Generate a JSON contract with this structure:
+      Generate a JSON contract with actual data found:
       ```json
       {
         "feature": "{feature_name}",
         "version": "1.0.0",
         "lastGenerated": "ISO8601 timestamp",
-        "generatorVersion": "2.0.0",
-        "overview": "string description",
+        "overview": "brief description",
         "apisExposed": {
-          "httpEndpoints": [...],
-          "exportedFunctions": [...],
-          "exportedTypes": [...],
-          "eventsEmitted": [...]
+          "httpEndpoints": [{"method": "GET", "path": "/...", "handler": "fn"}],
+          "exportedFunctions": [{"name": "fn", "signature": "..."}],
+          "exportedTypes": [{"name": "Type", "kind": "interface|type"}]
         },
         "apisConsumed": {
-          "httpCalls": [...],
-          "internalImports": [...],
-          "externalPackages": [...],
-          "databaseOperations": [...],
-          "eventsConsumed": [...]
+          "httpCalls": [{"method": "GET", "url": "..."}],
+          "externalPackages": ["pkg1", "pkg2"]
         },
-        "dataModels": [...],
-        "dependencies": {
-          "internal": [],
-          "external": []
-        },
-        "breakingChangeIndicators": [
-          "files or patterns that if changed would be breaking"
-        ],
-        "testCoverage": {
-          "e2e": {"count": 0, "files": []},
-          "unit": {"count": 0, "files": []},
-          "integration": {"count": 0, "files": []}
-        }
+        "dependencies": {"internal": [], "external": []},
+        "testCoverage": {"e2e": 0, "unit": 0, "integration": 0}
       }
       ```
+      Populate with actual data from analysis.
 
   # ==========================================================================
   # PHASE 5: GENERATE REPO-LEVEL CONTRACT SUMMARY
@@ -577,8 +534,10 @@ prompts:
     system: |
       {base_system}
 
-      Generate a comprehensive API Contract that aggregates all API endpoints
-      from all features in the repository. This serves as the master API reference.
+      Generate an API Contract based on ACTUAL endpoints found in the repository structure.
+      IMPORTANT: Do NOT output placeholder text like "[Feature Name]" or "(list actual endpoints)".
+      Extract real endpoint paths, methods, and handlers from the repository structure.
+      If no endpoints are found, say "No API endpoints detected".
 
     user_template: |
       Repository: {repo_name}
@@ -593,62 +552,431 @@ prompts:
       {features_summary}
       ```
 
-      Generate a complete API Contract for the entire repository:
+      Based on the repository structure above, generate an API Contract with ACTUAL endpoints found.
+      Look for route files, controller files, and API handlers in the structure.
+
+      Output format (fill with REAL data from the structure, not placeholders):
 
       # {repo_name} - API Contract
 
-      ## Overview
-      Brief description of the API architecture and design principles.
-
-      ## Base URLs
-      | Environment | URL | Description |
-      |-------------|-----|-------------|
-      | Development | localhost:PORT | Local development |
-      | Staging | staging.example.com | Testing environment |
-      | Production | api.example.com | Production |
+      > [Write actual description based on what you see in the repo structure]
 
       ## Authentication
-      - **Method**: Bearer Token / API Key / OAuth2
-      - **Header**: Authorization: Bearer <token>
-      - **Rate Limits**: Requests per minute/hour
+      | Method | Header | Notes |
+      |--------|--------|-------|
+      [Fill with actual auth methods found, or write "None detected"]
 
-      ## API Endpoints by Feature
-
-      ### Feature: [Feature Name]
-      | Method | Path | Description | Auth Required |
-      |--------|------|-------------|---------------|
-      | GET    | /api/resource | List all resources | Yes |
-      | POST   | /api/resource | Create new resource | Yes |
-
-      (Repeat for each feature)
-
-      ## Common Response Formats
-
-      ### Success Response
-      ```json
-      {
-        "success": true,
-        "data": {},
-        "message": "Operation successful"
-      }
-      ```
-
-      ### Error Response
-      ```json
-      {
-        "success": false,
-        "error": {
-          "code": "ERROR_CODE",
-          "message": "Human readable message"
-        }
-      }
-      ```
+      ## Endpoints
+      | Method | Path | Handler | Description |
+      |--------|------|---------|-------------|
+      [Fill each row with ACTUAL endpoints from routes/controllers/api folders]
 
       ## Shared Types
-      Common TypeScript/JSON types used across endpoints
+      | Type | Location | Description |
+      |------|----------|-------------|
+      [Fill with actual types from types/interfaces folders]
 
-      ## Versioning Policy
-      How API versions are managed
+      CRITICAL: Replace all bracketed placeholders with real data. Never output "[Feature Name]" or similar.
+
+  # ==========================================================================
+  # REPO-LEVEL EVENTS CONTRACT
+  # ==========================================================================
+
+  generate_repo_events_contract:
+    system: |
+      {base_system}
+
+      Generate a CONCISE Events Contract aggregating all events across the repository.
+      List only actual events found in the code.
+
+    user_template: |
+      Repository: {repo_name}
+
+      Repository Structure:
+      ```json
+      {repo_structure}
+      ```
+
+      Features ({feature_count} total):
+      ```json
+      {features_summary}
+      ```
+
+      Generate a CONCISE Events Contract:
+
+      # {repo_name} - Events Contract
+
+      > Brief description of the event architecture
+
+      ## Event Bus / Message Queue
+      | Provider | Topics/Channels | Notes |
+      |----------|-----------------|-------|
+
+      ## Events by Feature
+
+      ### [Feature Name]
+      | Event | Direction | Payload | Handler |
+      |-------|-----------|---------|---------|
+      (list actual events found)
+
+      ## Cross-Feature Communication
+      | Publisher | Event | Subscribers |
+      |-----------|-------|-------------|
+
+      Only include events actually found in the code.
+
+  # ==========================================================================
+  # REPO-LEVEL INFRA CONTRACT
+  # ==========================================================================
+
+  generate_repo_infra_contract:
+    system: |
+      {base_system}
+
+      Generate a CONCISE Infrastructure Contract aggregating all infra across the repository.
+      List actual env vars, ports, and services found.
+
+    user_template: |
+      Repository: {repo_name}
+
+      Repository Structure:
+      ```json
+      {repo_structure}
+      ```
+
+      Features ({feature_count} total):
+      ```json
+      {features_summary}
+      ```
+
+      Generate a CONCISE Infrastructure Contract:
+
+      # {repo_name} - Infrastructure Contract
+
+      ## Environment Variables
+      | Variable | Required | Default | Description |
+      |----------|----------|---------|-------------|
+      (list actual env vars found in .env.example, config files)
+
+      ## Services & Ports
+      | Service | Port | Protocol | Description |
+      |---------|------|----------|-------------|
+
+      ## External Dependencies
+      | Service | Purpose | Config Location |
+      |---------|---------|-----------------|
+
+      ## Deployment
+      | Platform | Config File | Notes |
+      |----------|-------------|-------|
+
+      Only include actual infrastructure found in the code.
+
+  # ==========================================================================
+  # REPO-LEVEL ADMIN CONTRACT
+  # ==========================================================================
+
+  generate_repo_admin_contract:
+    system: |
+      {base_system}
+
+      Generate a CONCISE Admin Contract aggregating all admin capabilities.
+      List actual admin features found in the code.
+
+    user_template: |
+      Repository: {repo_name}
+
+      Repository Structure:
+      ```json
+      {repo_structure}
+      ```
+
+      Features ({feature_count} total):
+      ```json
+      {features_summary}
+      ```
+
+      Generate a CONCISE Admin Contract:
+
+      # {repo_name} - Admin Contract
+
+      ## Admin Routes
+      | Method | Path | Roles | Description |
+      |--------|------|-------|-------------|
+
+      ## CRUD Operations
+      | Entity | Operations | Permissions |
+      |--------|------------|-------------|
+
+      ## Permissions
+      | Permission | Description | Roles |
+      |------------|-------------|-------|
+
+      Only include actual admin capabilities found in the code.
+
+  # ==========================================================================
+  # REPO-LEVEL SQL CONTRACT
+  # ==========================================================================
+
+  generate_repo_sql_contract:
+    system: |
+      {base_system}
+
+      Generate a CONCISE SQL Contract aggregating all database operations.
+      List actual queries and tables found in the code.
+
+    user_template: |
+      Repository: {repo_name}
+
+      Repository Structure:
+      ```json
+      {repo_structure}
+      ```
+
+      Features ({feature_count} total):
+      ```json
+      {features_summary}
+      ```
+
+      Generate a CONCISE SQL Contract:
+
+      # {repo_name} - SQL Contract
+
+      ## Tables
+      | Table | Feature | Description |
+      |-------|---------|-------------|
+
+      ## Common Queries
+      | Query | Tables | Type | Description |
+      |-------|--------|------|-------------|
+
+      ## Stored Procedures
+      | Name | Parameters | Purpose |
+      |------|------------|---------|
+
+      ## Views
+      | Name | Base Tables | Purpose |
+      |------|-------------|---------|
+
+      Only include actual SQL found in the code.
+
+  # ==========================================================================
+  # REPO-LEVEL THIRD PARTY CONTRACT
+  # ==========================================================================
+
+  generate_repo_third_party_contract:
+    system: |
+      {base_system}
+
+      Generate a CONCISE Third Party Integrations Contract aggregating all external services.
+      List actual external services/APIs used in the code.
+
+    user_template: |
+      Repository: {repo_name}
+
+      Repository Structure:
+      ```json
+      {repo_structure}
+      ```
+
+      Features ({feature_count} total):
+      ```json
+      {features_summary}
+      ```
+
+      Generate a CONCISE Third Party Integrations Contract:
+
+      # {repo_name} - Third Party Integrations
+
+      ## Services
+      | Service | Purpose | Config Location |
+      |---------|---------|-----------------|
+
+      ## APIs
+      | API | Base URL | Auth | Endpoints Used |
+      |-----|----------|------|----------------|
+
+      ## SDKs
+      | SDK | Version | Purpose |
+      |-----|---------|---------|
+
+      Only include actual integrations found in the code.
+
+  # ==========================================================================
+  # REPO-LEVEL DATABASE SCHEMA CONTRACT
+  # ==========================================================================
+
+  generate_repo_database_schema_contract:
+    system: |
+      {base_system}
+
+      Generate a CONCISE Database Schema Contract aggregating all tables.
+      List actual tables found - no placeholder examples.
+
+    user_template: |
+      Repository: {repo_name}
+
+      Repository Structure:
+      ```json
+      {repo_structure}
+      ```
+
+      Features ({feature_count} total):
+      ```json
+      {features_summary}
+      ```
+
+      Generate a CONCISE Database Schema Contract:
+
+      # {repo_name} - Database Schema Contract
+
+      ## Tables
+      | Table | Feature | Description |
+      |-------|---------|-------------|
+
+      ## Relationships
+      | From | To | Type | Foreign Key |
+      |------|------|------|-------------|
+
+      ## Indexes
+      | Table | Index | Columns | Type |
+      |-------|-------|---------|------|
+
+      ## Migrations
+      | File | Description |
+      |------|-------------|
+
+      Only include actual database schema found in the code.
+
+  # ==========================================================================
+  # REPO-LEVEL FEATURES CONTRACT
+  # ==========================================================================
+
+  generate_repo_features_contract:
+    system: |
+      {base_system}
+
+      Generate a CONCISE Features Contract listing feature flags and toggles.
+      List actual feature flags found in the code.
+
+    user_template: |
+      Repository: {repo_name}
+
+      Repository Structure:
+      ```json
+      {repo_structure}
+      ```
+
+      Features ({feature_count} total):
+      ```json
+      {features_summary}
+      ```
+
+      Generate a CONCISE Features Contract:
+
+      # {repo_name} - Features Contract
+
+      ## Feature Flags
+      | Flag | Default | Description |
+      |------|---------|-------------|
+
+      ## Configuration
+      | Config | Type | Location |
+      |--------|------|----------|
+
+      Only include actual feature flags found in the code.
+
+  # ==========================================================================
+  # REPO-LEVEL CSS CONTRACT
+  # ==========================================================================
+
+  generate_repo_css_contract:
+    system: |
+      {base_system}
+
+      Generate a CONCISE CSS/Design Contract listing design tokens and variables.
+      List actual CSS variables and design tokens found.
+
+    user_template: |
+      Repository: {repo_name}
+
+      Repository Structure:
+      ```json
+      {repo_structure}
+      ```
+
+      Features ({feature_count} total):
+      ```json
+      {features_summary}
+      ```
+
+      Generate a CONCISE CSS Contract:
+
+      # {repo_name} - CSS/Design Contract
+
+      ## Design Tokens
+      | Token | Value | Usage |
+      |-------|-------|-------|
+
+      ## CSS Variables
+      | Variable | Default | Description |
+      |----------|---------|-------------|
+
+      ## Breakpoints
+      | Name | Value | Description |
+      |------|-------|-------------|
+
+      Only include actual design tokens found in the code.
+
+  # ==========================================================================
+  # REPO-LEVEL PROMPTS/SKILLS CONTRACT
+  # ==========================================================================
+
+  generate_repo_prompts_contract:
+    system: |
+      {base_system}
+
+      Generate a CONCISE Prompts/Skills Contract documenting AI prompts, skills, and agent configurations.
+      List actual prompt files, YAML configurations, and skill definitions found.
+
+    user_template: |
+      Repository: {repo_name}
+
+      Repository Structure:
+      ```json
+      {repo_structure}
+      ```
+
+      Features ({feature_count} total):
+      ```json
+      {features_summary}
+      ```
+
+      Generate a CONCISE Prompts/Skills Contract:
+
+      # {repo_name} - Prompts & Skills Contract
+
+      ## AI Modes
+      | Mode ID | Name | Description | Model |
+      |---------|------|-------------|-------|
+
+      ## Prompts
+      | Prompt Key | Purpose | Variables |
+      |------------|---------|-----------|
+
+      ## Skills
+      | Skill ID | Name | Trigger | Description |
+      |----------|------|---------|-------------|
+
+      ## Agent Configurations
+      | Agent | Type | Purpose |
+      |-------|------|---------|
+
+      ## System Prompts
+      | Context | File | Purpose |
+      |---------|------|---------|
+
+      Only include actual prompts and skills found in config/modes, prompts, or similar directories.
 
   # ==========================================================================
   # PHASE 4.5: GENERATE ADMIN CONTRACT
@@ -658,15 +986,8 @@ prompts:
     system: |
       {base_system}
 
-      Generate an Admin Contract that defines what administrative capabilities exist for this feature.
-      This contract is used for building admin panels, management dashboards, and CMS interfaces.
-
-      An admin contract should capture:
-      - What entities can be administered (CRUD operations)
-      - What permissions are required
-      - What fields are editable vs read-only
-      - What bulk operations are supported
-      - What search/filter capabilities exist
+      Generate a CONCISE Admin Contract.
+      List actual admin capabilities found in the code.
 
     user_template: |
       Feature: {feature_name}
@@ -677,59 +998,21 @@ prompts:
       {analysis_json}
       ```
 
-      Generate an Admin Contract JSON with this structure:
+      Generate a CONCISE Admin Contract JSON:
       ```json
       {
         "feature": "{feature_name}",
         "version": "1.0.0",
-        "adminCapabilities": [
-          {
-            "name": "Entity Name Management",
-            "description": "What admin can do with this entity",
-            "entityType": "entity_name",
-            "operations": ["create", "read", "update", "delete", "list", "search", "export", "import", "bulk_update", "archive"],
-            "permissions": ["admin:entity:read", "admin:entity:write"],
-            "fields": [
-              {
-                "name": "field_name",
-                "type": "string|number|boolean|date|enum|relation|json",
-                "editable": true,
-                "searchable": true,
-                "filterable": true,
-                "sortable": true,
-                "required": false,
-                "validation": "optional validation rules"
-              }
-            ]
-          }
+        "entities": [
+          {"name": "Entity", "operations": ["create", "read", "update", "delete"]}
         ],
         "adminRoutes": [
-          {
-            "method": "GET|POST|PUT|DELETE|PATCH",
-            "path": "/admin/...",
-            "description": "Admin endpoint description",
-            "authRequired": true,
-            "roles": ["super_admin", "org_admin"]
-          }
+          {"method": "GET", "path": "/admin/...", "roles": ["admin"]}
         ],
-        "requiredPermissions": ["list of all permissions needed for admin features"],
-        "dashboardWidgets": [
-          {
-            "name": "Widget Name",
-            "type": "count|chart|list|table",
-            "description": "What this widget shows",
-            "dataSource": "API endpoint or query"
-          }
-        ]
+        "permissions": ["admin:read", "admin:write"]
       }
       ```
-
-      IMPORTANT:
-      - Identify ALL entities that can be managed (users, posts, organizations, etc.)
-      - Include both direct CRUD and bulk operations
-      - Specify which fields are admin-editable vs read-only
-      - List permissions granularly (read vs write vs delete)
-      - Include any existing admin routes found in the code
+      Only include actual admin capabilities found.
 
   # ==========================================================================
   # PHASE 6: GENERATE SQL CONTRACT
@@ -739,11 +1022,8 @@ prompts:
     system: |
       {base_system}
 
-      Generate a SQL Contract that documents reusable SQL patterns and queries.
-      This contract enables:
-      - Query reuse across features
-      - Performance optimization tracking
-      - Breaking change detection for database queries
+      Generate a CONCISE SQL Contract.
+      List actual queries and tables found in the code.
 
     user_template: |
       Feature: {feature_name}
@@ -754,51 +1034,20 @@ prompts:
       {analysis_json}
       ```
 
-      Generate a SQL Contract JSON:
+      Generate a CONCISE SQL Contract JSON:
       ```json
       {
         "feature": "{feature_name}",
         "version": "1.0.0",
+        "tables": ["table1", "table2"],
         "queries": [
-          {
-            "id": "unique_query_id",
-            "name": "Human readable name",
-            "description": "What this query does",
-            "sql": "SELECT * FROM table WHERE condition = $1",
-            "parameters": [
-              {
-                "name": "$1",
-                "type": "string|number|uuid|timestamp",
-                "description": "Parameter description"
-              }
-            ],
-            "returnType": "single|multiple|void|count",
-            "tables": ["table1", "table2"],
-            "usedBy": ["module1.ts", "service.ts"],
-            "performance": {
-              "indexed": true,
-              "estimatedRows": "low|medium|high",
-              "notes": "Performance considerations"
-            }
-          }
+          {"name": "query_name", "tables": ["t1"], "type": "select|insert|update|delete"}
         ],
-        "storedProcedures": [
-          {
-            "name": "procedure_name",
-            "description": "What it does",
-            "parameters": [],
-            "usedBy": []
-          }
-        ],
-        "views": [
-          {
-            "name": "view_name",
-            "description": "What it shows",
-            "baseTables": []
-          }
-        ]
+        "storedProcedures": [{"name": "proc"}],
+        "views": [{"name": "view", "baseTables": []}]
       }
       ```
+      Only include actual SQL found in the code.
 
   # ==========================================================================
   # PHASE 7: GENERATE INFRA CONTRACT
@@ -808,11 +1057,8 @@ prompts:
     system: |
       {base_system}
 
-      Generate an Infrastructure Contract that documents all infrastructure requirements.
-      This contract is essential for:
-      - Environment setup
-      - Deployment configuration
-      - DevOps automation
+      Generate a CONCISE Infrastructure Contract.
+      List actual env vars, ports, and services found in the code.
 
     user_template: |
       Feature: {feature_name}
@@ -823,42 +1069,28 @@ prompts:
       {analysis_json}
       ```
 
-      Generate an Infrastructure Contract:
+      Generate a CONCISE Infrastructure Contract:
 
       # {feature_name} Infrastructure Contract
 
       ## Environment Variables
-      | Variable | Type | Required | Default | Description |
-      |----------|------|----------|---------|-------------|
-      | VAR_NAME | string/number/boolean | Yes/No | value | Purpose |
+      | Variable | Required | Description |
+      |----------|----------|-------------|
+      (list actual env vars found)
 
-      ## Port Allocations
-      | Service | Port | Protocol | Purpose |
-      |---------|------|----------|---------|
+      ## Ports
+      | Port | Service | Description |
+      |------|---------|-------------|
 
-      ## External Service URLs
-      | Service | Env Var | Default URL | Purpose |
-      |---------|---------|-------------|---------|
-
-      ## Docker/Container Requirements
-      - Base image requirements
-      - Volume mounts needed
-      - Network configuration
-
-      ## Resource Requirements
-      - Memory: minimum/recommended
-      - CPU: minimum/recommended
-      - Storage: minimum/recommended
-
-      ## Secrets Management
-      - Required secrets (without values)
-      - Secret rotation requirements
-      - Encryption requirements
+      ## External Services
+      | Service | Env Var | Description |
+      |---------|---------|-------------|
 
       ## Health Checks
-      - Endpoint: path and expected response
-      - Liveness check
-      - Readiness check
+      | Endpoint | Type | Description |
+      |----------|------|-------------|
+
+      Only list actual infrastructure found in the code.
 
   # ==========================================================================
   # PHASE 8: GENERATE THIRD PARTY INTEGRATIONS CONTRACT
@@ -868,11 +1100,8 @@ prompts:
     system: |
       {base_system}
 
-      Generate a Third Party Integrations Contract documenting all external service dependencies.
-      This contract helps:
-      - Track API key requirements
-      - Document rate limits and quotas
-      - Plan for service outages
+      Generate a CONCISE Third Party Integrations Contract.
+      List actual external services/APIs used in the code.
 
     user_template: |
       Feature: {feature_name}
@@ -883,44 +1112,23 @@ prompts:
       {analysis_json}
       ```
 
-      Generate a Third Party Integrations Contract:
+      Generate a CONCISE Third Party Integrations Contract:
 
       # {feature_name} Third Party Integrations
 
-      ## Service: [Service Name]
+      ## Services
 
-      ### Overview
-      - **Purpose**: Why we use this service
-      - **SDK/Package**: npm package or API client used
-      - **Documentation**: Link to official docs
+      | Service | Package/SDK | Auth Method | Env Var |
+      |---------|-------------|-------------|---------|
+      (list actual external services found)
 
-      ### Authentication
-      - **Method**: API Key / OAuth / Bearer Token
-      - **Env Variable**: VARIABLE_NAME
-      - **Scopes Required**: list of permissions needed
+      ## Endpoints Used
 
-      ### Rate Limits
-      - **Requests per minute**: X
-      - **Daily quota**: Y
-      - **Burst limit**: Z
+      | Service | Endpoint | Method | Purpose |
+      |---------|----------|--------|---------|
+      (list actual external API calls found)
 
-      ### Endpoints Used
-      | Endpoint | Method | Purpose | Rate Limited |
-      |----------|--------|---------|--------------|
-
-      ### Error Handling
-      - **Retry Strategy**: exponential backoff / fixed delay
-      - **Circuit Breaker**: yes/no, threshold
-      - **Fallback Behavior**: what happens when service is down
-
-      ### Webhook Configuration (if applicable)
-      - **Endpoint**: /webhook/service
-      - **Events**: list of subscribed events
-      - **Signature Verification**: yes/no
-
-      ### Cost Considerations
-      - Pricing model (per request, monthly, etc.)
-      - Estimated monthly cost
+      Only list actual integrations found in the code.
 
   # ==========================================================================
   # PHASE 9: GENERATE DATABASE SCHEMA CONTRACT
@@ -930,11 +1138,8 @@ prompts:
     system: |
       {base_system}
 
-      Generate a Database Schema Contract documenting all database tables and relationships.
-      This contract enables:
-      - Schema validation
-      - Migration planning
-      - Breaking change detection
+      Generate a CONCISE Database Schema Contract.
+      List actual tables found - no placeholder examples.
 
     user_template: |
       Feature: {feature_name}
@@ -945,68 +1150,26 @@ prompts:
       {analysis_json}
       ```
 
-      Generate a Database Schema Contract:
+      Generate a CONCISE Database Schema Contract JSON:
       ```json
       {
         "feature": "{feature_name}",
         "version": "1.0.0",
-        "database": "postgresql|mysql|mongodb|sqlite",
+        "database": "detected_db_type",
         "tables": [
           {
-            "name": "table_name",
-            "description": "What this table stores",
+            "name": "actual_table_name",
             "columns": [
-              {
-                "name": "column_name",
-                "type": "varchar(255)|integer|uuid|timestamp|jsonb|boolean",
-                "nullable": false,
-                "default": "default_value or null",
-                "description": "Column purpose"
-              }
+              {"name": "col", "type": "type", "nullable": bool, "primaryKey": bool}
             ],
-            "primaryKey": ["id"],
-            "indexes": [
-              {
-                "name": "idx_name",
-                "columns": ["col1", "col2"],
-                "unique": false,
-                "type": "btree|hash|gin"
-              }
-            ],
-            "foreignKeys": [
-              {
-                "column": "user_id",
-                "references": "users.id",
-                "onDelete": "CASCADE|SET NULL|RESTRICT",
-                "onUpdate": "CASCADE|NO ACTION"
-              }
-            ],
-            "constraints": [
-              {
-                "name": "constraint_name",
-                "type": "check|unique",
-                "definition": "SQL expression"
-              }
-            ]
+            "indexes": [{"name": "idx", "columns": ["col"], "unique": bool}],
+            "foreignKeys": [{"column": "fk", "references": "table.id"}]
           }
         ],
-        "enums": [
-          {
-            "name": "enum_name",
-            "values": ["value1", "value2"],
-            "usedIn": ["table.column"]
-          }
-        ],
-        "migrations": [
-          {
-            "version": "001",
-            "name": "create_initial_tables",
-            "date": "2024-01-01",
-            "changes": "Description of changes"
-          }
-        ]
+        "enums": [{"name": "enum", "values": ["v1", "v2"]}]
       }
       ```
+      Only include actual tables/columns found in the code.
 
   # ==========================================================================
   # PHASE 10: GENERATE EVENTS CONTRACT
@@ -1016,12 +1179,8 @@ prompts:
     system: |
       {base_system}
 
-      Generate an Events Contract documenting all event-driven communication.
-      This contract covers:
-      - WebSocket events
-      - Message queue topics
-      - Pub/sub patterns
-      - Server-sent events
+      Generate a CONCISE Events Contract.
+      List only actual events found in the code.
 
     user_template: |
       Feature: {feature_name}
@@ -1032,59 +1191,22 @@ prompts:
       {analysis_json}
       ```
 
-      Generate an Events Contract:
+      Generate a CONCISE Events Contract JSON:
       ```json
       {
         "feature": "{feature_name}",
         "version": "1.0.0",
-        "websocketEvents": {
-          "emitted": [
-            {
-              "event": "event_name",
-              "description": "What this event signals",
-              "payload": {
-                "type": "object",
-                "properties": {}
-              },
-              "emittedFrom": "file:line",
-              "frequency": "on_action|periodic|rare"
-            }
-          ],
-          "consumed": [
-            {
-              "event": "event_name",
-              "handler": "function_name",
-              "file": "handler_file.ts"
-            }
-          ]
+        "events": {
+          "emitted": [{"event": "name", "payload": "type", "from": "file"}],
+          "consumed": [{"event": "name", "handler": "fn", "file": "path"}]
         },
         "messageQueue": {
-          "provider": "rabbitmq|kafka|redis|sqs",
-          "topics": [
-            {
-              "name": "topic.name",
-              "description": "Purpose of this topic",
-              "messageSchema": {},
-              "publishers": ["service1"],
-              "subscribers": ["service2", "service3"],
-              "retention": "7d",
-              "partitions": 1
-            }
-          ]
-        },
-        "serverSentEvents": [
-          {
-            "endpoint": "/events/stream",
-            "events": ["event1", "event2"],
-            "description": "SSE stream purpose"
-          }
-        ],
-        "eventOrdering": {
-          "guarantees": "at-least-once|exactly-once|at-most-once",
-          "ordering": "strict|eventual|none"
+          "provider": "if_detected",
+          "topics": [{"name": "topic", "publishers": [], "subscribers": []}]
         }
       }
       ```
+      Only include events actually found in the code.
 
   # ==========================================================================
   # PHASE 11: GENERATE TEST CONTRACT
@@ -1094,12 +1216,8 @@ prompts:
     system: |
       {base_system}
 
-      Generate a Test Contract documenting testing requirements and coverage.
-      This contract defines:
-      - Required test scenarios
-      - Mocking requirements
-      - Fixture specifications
-      - Coverage targets
+      Generate a CONCISE Test Contract.
+      List actual test files and scenarios found.
 
     user_template: |
       Feature: {feature_name}
@@ -1110,71 +1228,21 @@ prompts:
       {analysis_json}
       ```
 
-      Generate a Test Contract:
+      Generate a CONCISE Test Contract JSON:
       ```json
       {
         "feature": "{feature_name}",
         "version": "1.0.0",
-        "testRequirements": {
-          "unit": {
-            "coverage": {
-              "target": 80,
-              "current": 0
-            },
-            "scenarios": [
-              {
-                "name": "Scenario description",
-                "file": "test_file.test.ts",
-                "priority": "critical|high|medium|low",
-                "status": "implemented|pending|skipped"
-              }
-            ],
-            "mocking": [
-              {
-                "dependency": "ExternalService",
-                "mockType": "jest.mock|sinon|manual",
-                "reason": "Why this needs mocking"
-              }
-            ]
-          },
-          "integration": {
-            "scenarios": [],
-            "fixtures": [
-              {
-                "name": "fixture_name",
-                "description": "Test data description",
-                "file": "fixtures/data.json"
-              }
-            ],
-            "dependencies": ["database", "redis"]
-          },
-          "e2e": {
-            "scenarios": [
-              {
-                "name": "User flow description",
-                "steps": ["step1", "step2"],
-                "expectedOutcome": "What should happen"
-              }
-            ],
-            "environment": "staging|local|dedicated"
-          }
+        "tests": {
+          "unit": {"files": [], "count": 0},
+          "integration": {"files": [], "count": 0},
+          "e2e": {"files": [], "count": 0}
         },
-        "criticalPaths": [
-          {
-            "name": "Critical user journey",
-            "description": "Why this is critical",
-            "testCoverage": "full|partial|none"
-          }
-        ],
-        "regressionTests": [
-          {
-            "bug": "BUG-123",
-            "test": "regression_test.test.ts",
-            "description": "What bug this prevents"
-          }
-        ]
+        "fixtures": [{"name": "fixture", "file": "path"}],
+        "mocks": [{"dependency": "name", "file": "path"}]
       }
       ```
+      Only list actual test files found.
 
 flow:
   type: "analysis"

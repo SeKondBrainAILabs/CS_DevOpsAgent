@@ -6,6 +6,7 @@ directories:
 files:
   - dist/**/*
   - package.json
+  - electron/config/**/*
 extraMetadata:
   main: dist/electron/index.js
 mac:

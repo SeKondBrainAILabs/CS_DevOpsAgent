@@ -4,8 +4,10 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { SessionReport } from '../../../shared/agent-protocol';
-import type { AgentInstance, ContractType, Contract, ActivityLogEntry } from '../../../shared/types';
+import type { AgentInstance, ContractType, Contract, ActivityLogEntry, DiscoveredFeature } from '../../../shared/types';
 import { useAgentStore } from '../../store/agentStore';
 import { CommitsTab } from './CommitsTab';
 
@@ -1468,6 +1470,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
     { type: 'admin', label: 'Admin', icon: '👤', file: 'ADMIN_CONTRACT.md' },
     { type: 'sql', label: 'SQL', icon: '🗃️', file: 'SQL_CONTRACT.md' },
     { type: 'css', label: 'CSS', icon: '🎨', file: 'CSS_CONTRACT.md' },
+    { type: 'prompts', label: 'Prompts', icon: '💬', file: 'PROMPTS_CONTRACT.md' },
     // Test Contracts (Quality Contracts)
     { type: 'e2e', label: 'E2E Tests', icon: '🎭', isTest: true },
     { type: 'unit', label: 'Unit Tests', icon: '🧪', isTest: true },
@@ -1481,12 +1484,13 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
       try {
         const repoPath = session.repoPath || session.worktreePath;
 
-        // Try to get contract changes for this session
+        // Load contract changes in background (non-blocking)
         if (window.api?.contract?.analyzeCommit && repoPath) {
-          const result = await window.api.contract.analyzeCommit(repoPath);
-          if (result.success && result.data?.changes) {
-            setContractChanges(result.data.changes);
-          }
+          window.api.contract.analyzeCommit(repoPath).then(result => {
+            if (result.success && result.data?.changes) {
+              setContractChanges(result.data.changes);
+            }
+          }).catch(() => {});
         }
 
         // Load contract files from House_Rules_Contracts/
@@ -1584,79 +1588,110 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
             version: '1.0.0',
             lastUpdated: new Date().toISOString(),
           },
+          {
+            id: 'prompts-contract',
+            type: 'prompts',
+            name: 'Prompts & Skills Contract',
+            description: 'AI prompts, skills, modes, and agent configurations',
+            filePath: `${repoPath}/House_Rules_Contracts/PROMPTS_CONTRACT.md`,
+            status: 'active',
+            version: '1.0.0',
+            lastUpdated: new Date().toISOString(),
+          },
         ];
 
-        // Try to load test contracts from contract registry
-        if (window.api?.contractRegistry?.getRepoSummary && repoPath) {
-          try {
-            const repoResult = await window.api.contractRegistry.getRepoSummary(repoPath);
-            if (repoResult.success && repoResult.data) {
-              const features = Object.keys(repoResult.data.features || {});
-              for (const featureName of features) {
-                const featureResult = await window.api.contractRegistry.getFeatureContracts(repoPath, featureName);
-                if (featureResult.success && featureResult.data) {
-                  const feature = featureResult.data;
-                  // Add E2E tests
-                  for (const test of feature.contracts.e2e) {
-                    knownContracts.push({
-                      id: `e2e-${featureName}-${test.file}`,
-                      type: 'e2e',
-                      name: `E2E: ${test.file}`,
-                      description: `${test.testCount} tests in ${featureName}`,
-                      filePath: `${repoPath}/${test.file}`,
-                      status: 'active',
-                      version: '1.0.0',
-                      lastUpdated: test.lastModified,
-                    });
-                  }
-                  // Add unit tests
-                  for (const test of feature.contracts.unit) {
-                    knownContracts.push({
-                      id: `unit-${featureName}-${test.file}`,
-                      type: 'unit',
-                      name: `Unit: ${test.file}`,
-                      description: `${test.testCount} tests in ${featureName}`,
-                      filePath: `${repoPath}/${test.file}`,
-                      status: 'active',
-                      version: '1.0.0',
-                      lastUpdated: test.lastModified,
-                    });
-                  }
-                  // Add integration tests
-                  for (const test of feature.contracts.integration) {
-                    knownContracts.push({
-                      id: `int-${featureName}-${test.file}`,
-                      type: 'integration',
-                      name: `Integration: ${test.file}`,
-                      description: `${test.testCount} tests in ${featureName}`,
-                      filePath: `${repoPath}/${test.file}`,
-                      status: 'active',
-                      version: '1.0.0',
-                      lastUpdated: test.lastModified,
-                    });
-                  }
-                  // Add fixtures
-                  for (const fixture of feature.contracts.fixtures) {
-                    knownContracts.push({
-                      id: `fixture-${featureName}-${fixture.file}`,
-                      type: 'fixtures',
-                      name: `Fixture: ${fixture.file}`,
-                      description: `Used by ${fixture.usedBy.length} tests`,
-                      filePath: `${repoPath}/${fixture.file}`,
-                      status: 'active',
-                      version: '1.0.0',
-                      lastUpdated: fixture.lastModified,
-                    });
-                  }
-                }
+        // Show base contracts immediately
+        setContracts(knownContracts);
+        setLoading(false);
+
+        // Load test contracts in background (from saved features cache)
+        if (window.api?.contractGeneration?.loadDiscoveredFeatures && repoPath) {
+          window.api.contractGeneration.loadDiscoveredFeatures(repoPath).then(savedResult => {
+            if (savedResult?.success && savedResult.data && savedResult.data.length > 0) {
+              // Also update discoveredFeatures state
+              setDiscoveredFeatures(savedResult.data);
+
+              // Collect all test files by type (GROUPED)
+              const e2eFiles: string[] = [];
+              const unitFiles: string[] = [];
+              const integrationFiles: string[] = [];
+              const fixtureFiles: string[] = [];
+
+              for (const feature of savedResult.data) {
+                e2eFiles.push(...(feature.files?.tests?.e2e || []));
+                unitFiles.push(...(feature.files?.tests?.unit || []));
+                integrationFiles.push(...(feature.files?.tests?.integration || []));
+                fixtureFiles.push(...(feature.files?.fixtures || []));
+              }
+
+              // Add test contract cards
+              const testContracts: Contract[] = [];
+
+              if (e2eFiles.length > 0) {
+                testContracts.push({
+                  id: 'e2e-all',
+                  type: 'e2e',
+                  name: 'E2E Tests',
+                  description: `${e2eFiles.length} E2E test file(s)`,
+                  filePath: `${repoPath}/.devops-kit/contracts/E2E_TESTS.md`,
+                  status: 'active',
+                  version: '1.0.0',
+                  lastUpdated: new Date().toISOString(),
+                });
+              }
+
+              if (unitFiles.length > 0) {
+                testContracts.push({
+                  id: 'unit-all',
+                  type: 'unit',
+                  name: 'Unit Tests',
+                  description: `${unitFiles.length} unit test file(s)`,
+                  filePath: `${repoPath}/.devops-kit/contracts/UNIT_TESTS.md`,
+                  status: 'active',
+                  version: '1.0.0',
+                  lastUpdated: new Date().toISOString(),
+                });
+              }
+
+              if (integrationFiles.length > 0) {
+                testContracts.push({
+                  id: 'integration-all',
+                  type: 'integration',
+                  name: 'Integration Tests',
+                  description: `${integrationFiles.length} integration test file(s)`,
+                  filePath: `${repoPath}/.devops-kit/contracts/INTEGRATION_TESTS.md`,
+                  status: 'active',
+                  version: '1.0.0',
+                  lastUpdated: new Date().toISOString(),
+                });
+              }
+
+              if (fixtureFiles.length > 0) {
+                testContracts.push({
+                  id: 'fixtures-all',
+                  type: 'fixtures',
+                  name: 'Test Fixtures',
+                  description: `${fixtureFiles.length} fixture file(s)`,
+                  filePath: `${repoPath}/.devops-kit/contracts/FIXTURES.md`,
+                  status: 'active',
+                  version: '1.0.0',
+                  lastUpdated: new Date().toISOString(),
+                });
+              }
+
+              // Append test contracts to existing
+              if (testContracts.length > 0) {
+                setContracts(prev => {
+                  const nonTest = prev.filter(c => !['e2e', 'unit', 'integration', 'fixtures'].includes(c.type));
+                  return [...nonTest, ...testContracts];
+                });
               }
             }
-          } catch (regErr) {
-            console.log('Contract registry not available:', regErr);
-          }
+          }).catch(() => {});
         }
 
-        setContracts(knownContracts);
+        // Early return - loading already set to false above
+        return;
       } catch (error) {
         console.error('Failed to load contracts:', error);
       } finally {
@@ -1665,6 +1700,94 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
     }
     loadContracts();
   }, [session.sessionId, session.repoPath, session.worktreePath]);
+
+  // Update contracts list when discoveredFeatures change (add grouped test contracts)
+  useEffect(() => {
+    if (discoveredFeatures.length === 0) return;
+
+    const repoPath = session.worktreePath || session.repoPath;
+    if (!repoPath) return;
+
+    // Add GROUPED test contracts from discovered features
+    setContracts(prev => {
+      // Filter out existing test contracts to avoid duplicates
+      const nonTestContracts = prev.filter(c => !['e2e', 'unit', 'integration', 'fixtures'].includes(c.type));
+
+      // Collect all test files by type
+      const e2eFiles: string[] = [];
+      const unitFiles: string[] = [];
+      const integrationFiles: string[] = [];
+      const fixtureFiles: string[] = [];
+
+      for (const feature of discoveredFeatures) {
+        e2eFiles.push(...(feature.files?.tests?.e2e || []));
+        unitFiles.push(...(feature.files?.tests?.unit || []));
+        integrationFiles.push(...(feature.files?.tests?.integration || []));
+        fixtureFiles.push(...(feature.files?.fixtures || []));
+      }
+
+      const newTestContracts: Contract[] = [];
+
+      // Create ONE card per test type (grouped)
+      if (e2eFiles.length > 0) {
+        newTestContracts.push({
+          id: 'e2e-all',
+          type: 'e2e',
+          name: 'E2E Tests',
+          description: `${e2eFiles.length} E2E test file(s) across ${discoveredFeatures.length} features`,
+          filePath: `${repoPath}/.devops-kit/contracts/E2E_TESTS.md`,
+          status: 'active',
+          version: '1.0.0',
+          lastUpdated: new Date().toISOString(),
+          testFiles: e2eFiles, // Store for later
+        } as Contract & { testFiles: string[] });
+      }
+
+      if (unitFiles.length > 0) {
+        newTestContracts.push({
+          id: 'unit-all',
+          type: 'unit',
+          name: 'Unit Tests',
+          description: `${unitFiles.length} unit test file(s) across ${discoveredFeatures.length} features`,
+          filePath: `${repoPath}/.devops-kit/contracts/UNIT_TESTS.md`,
+          status: 'active',
+          version: '1.0.0',
+          lastUpdated: new Date().toISOString(),
+          testFiles: unitFiles,
+        } as Contract & { testFiles: string[] });
+      }
+
+      if (integrationFiles.length > 0) {
+        newTestContracts.push({
+          id: 'integration-all',
+          type: 'integration',
+          name: 'Integration Tests',
+          description: `${integrationFiles.length} integration test file(s) across ${discoveredFeatures.length} features`,
+          filePath: `${repoPath}/.devops-kit/contracts/INTEGRATION_TESTS.md`,
+          status: 'active',
+          version: '1.0.0',
+          lastUpdated: new Date().toISOString(),
+          testFiles: integrationFiles,
+        } as Contract & { testFiles: string[] });
+      }
+
+      if (fixtureFiles.length > 0) {
+        newTestContracts.push({
+          id: 'fixtures-all',
+          type: 'fixtures',
+          name: 'Test Fixtures',
+          description: `${fixtureFiles.length} fixture file(s) across ${discoveredFeatures.length} features`,
+          filePath: `${repoPath}/.devops-kit/contracts/FIXTURES.md`,
+          status: 'active',
+          version: '1.0.0',
+          lastUpdated: new Date().toISOString(),
+          testFiles: fixtureFiles,
+        } as Contract & { testFiles: string[] });
+      }
+
+      return [...nonTestContracts, ...newTestContracts];
+    });
+  }, [discoveredFeatures, session.worktreePath, session.repoPath]);
 
   // Listen for generation progress events
   useEffect(() => {
@@ -1727,12 +1850,23 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
   useEffect(() => {
     const loadSavedFeatures = async () => {
       const repoPath = getScanPath();
-      if (!repoPath) return;
+      console.log('[SessionDetailView] loadSavedFeatures called with path:', repoPath);
+      console.log('[SessionDetailView] session.repoPath:', session.repoPath);
+      console.log('[SessionDetailView] session.worktreePath:', session.worktreePath);
+      console.log('[SessionDetailView] scanPathOption:', scanPathOption);
+      if (!repoPath) {
+        console.log('[SessionDetailView] No repoPath, skipping feature load');
+        return;
+      }
 
       try {
         const result = await window.api?.contractGeneration?.loadDiscoveredFeatures(repoPath);
+        console.log('[SessionDetailView] loadDiscoveredFeatures result:', result);
         if (result?.success && result.data && Array.isArray(result.data) && result.data.length > 0) {
+          console.log('[SessionDetailView] Setting', result.data.length, 'discovered features');
           setDiscoveredFeatures(result.data as typeof discoveredFeatures);
+        } else {
+          console.log('[SessionDetailView] No features found in database for path:', repoPath);
         }
       } catch (err) {
         console.error('Failed to load saved features:', err);
@@ -1767,7 +1901,9 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
   };
 
   // Generate contracts for all discovered features
-  const handleGenerateAll = async () => {
+  // forceRefresh=false (default): Incremental mode - only process features with changes
+  // forceRefresh=true: Process all features regardless of changes
+  const handleGenerateAll = async (forceRefresh = false) => {
     const repoPath = getScanPath();
     if (!repoPath || isGenerating) return;
 
@@ -1779,6 +1915,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
         includeCodeSamples: true,
         maxFilesPerFeature: 10,
         preDiscoveredFeatures: discoveredFeatures.length > 0 ? discoveredFeatures : undefined,
+        forceRefresh,
       });
       // Result comes via onComplete event
     } catch (err) {
@@ -1786,6 +1923,9 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
       setIsGenerating(false);
     }
   };
+
+  // State for generate button dropdown
+  const [showGenerateDropdown, setShowGenerateDropdown] = useState(false);
 
   const filteredContracts = activeContractType === 'all'
     ? contracts
@@ -1806,6 +1946,12 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
         <div className="flex-1">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-semibold text-text-primary">Contracts</h3>
+            {/* Show warning if no repo path */}
+            {!getScanPath() && (
+              <span className="text-xs text-orange-600 px-2 py-1 bg-orange-50 rounded">
+                Missing path - repoPath: "{session.repoPath || ''}" | worktreePath: "{session.worktreePath || ''}"
+              </span>
+            )}
             <div className="flex gap-2 items-center">
               {/* Path selector */}
               {session.repoPath && session.worktreePath && session.repoPath !== session.worktreePath && (
@@ -1840,26 +1986,71 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
                   '🔍 Discover Features'
                 )}
               </button>
-              <button
-                onClick={handleGenerateAll}
-                disabled={isGenerating || discoveredFeatures.length === 0}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
-                  ${isGenerating
-                    ? 'bg-kanvas-blue text-white cursor-wait'
-                    : discoveredFeatures.length === 0
-                      ? 'bg-surface-tertiary text-text-secondary cursor-not-allowed'
-                      : 'bg-kanvas-blue text-white hover:bg-blue-600'
-                  }`}
-              >
-                {isGenerating ? (
-                  <span className="flex items-center gap-2">
-                    <span className="animate-spin w-3 h-3 border border-white border-t-transparent rounded-full" />
-                    Generating...
-                  </span>
-                ) : (
-                  '✨ Generate Contracts'
+              {/* Split button: Update Contracts (incremental) with Force Refresh dropdown */}
+              <div className="relative">
+                <div className="flex">
+                  <button
+                    onClick={() => handleGenerateAll(false)}
+                    disabled={isGenerating || !getScanPath()}
+                    className={`px-3 py-1.5 rounded-l-lg text-sm font-medium transition-colors
+                      ${isGenerating
+                        ? 'bg-kanvas-blue text-white cursor-wait'
+                        : !getScanPath()
+                          ? 'bg-surface-tertiary text-text-secondary cursor-not-allowed'
+                          : 'bg-kanvas-blue text-white hover:bg-blue-600'
+                      }`}
+                    title={discoveredFeatures.length === 0 ? "Will auto-discover features and generate contracts" : "Smart update - only processes features with changes since last run"}
+                  >
+                    {isGenerating ? (
+                      <span className="flex items-center gap-2">
+                        <span className="animate-spin w-3 h-3 border border-white border-t-transparent rounded-full" />
+                        Generating...
+                      </span>
+                    ) : (
+                      '✨ Update Contracts'
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setShowGenerateDropdown(!showGenerateDropdown)}
+                    disabled={isGenerating || !getScanPath()}
+                    className={`px-2 py-1.5 rounded-r-lg text-sm font-medium transition-colors border-l border-white/20
+                      ${isGenerating
+                        ? 'bg-kanvas-blue text-white cursor-wait'
+                        : !getScanPath()
+                          ? 'bg-surface-tertiary text-text-secondary cursor-not-allowed'
+                          : 'bg-kanvas-blue text-white hover:bg-blue-600'
+                      }`}
+                  >
+                    <svg className={`w-4 h-4 transition-transform ${showGenerateDropdown ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                </div>
+                {showGenerateDropdown && (
+                  <div className="absolute right-0 top-full mt-1 bg-surface border border-border rounded-lg shadow-lg z-10 min-w-[180px]">
+                    <button
+                      onClick={() => { handleGenerateAll(false); setShowGenerateDropdown(false); }}
+                      className="w-full px-3 py-2 text-left text-sm hover:bg-surface-secondary flex items-center gap-2 rounded-t-lg"
+                    >
+                      <span className="text-green-500">⚡</span>
+                      <div>
+                        <div className="font-medium text-text-primary">Smart Update</div>
+                        <div className="text-xs text-text-secondary">Only changed features</div>
+                      </div>
+                    </button>
+                    <button
+                      onClick={() => { handleGenerateAll(true); setShowGenerateDropdown(false); }}
+                      className="w-full px-3 py-2 text-left text-sm hover:bg-surface-secondary flex items-center gap-2 rounded-b-lg border-t border-border"
+                    >
+                      <span className="text-orange-500">🔄</span>
+                      <div>
+                        <div className="font-medium text-text-primary">Force Refresh</div>
+                        <div className="text-xs text-text-secondary">Regenerate all contracts</div>
+                      </div>
+                    </button>
+                  </div>
                 )}
-              </button>
+              </div>
             </div>
           </div>
 
@@ -2128,7 +2319,13 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
         ) : (
           <div className="space-y-3">
             {filteredContracts.map((contract) => (
-              <ContractCard key={contract.id} contract={contract} />
+              <ContractCard
+                key={contract.id}
+                contract={contract}
+                repoPath={session.worktreePath || session.repoPath}
+                hasChanges={contractChanges.some(c => c.file.includes(contract.name) || contract.filePath.includes(c.file))}
+                discoveredFeatures={discoveredFeatures as DiscoveredFeature[]}
+              />
             ))}
           </div>
         )}
@@ -2138,10 +2335,194 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
 }
 
 /**
+ * Cleanup AI preamble and code blocks from contract content
+ * This fixes contracts that were generated before cleanup was added to the backend
+ */
+function cleanupContractContent(content: string): string {
+  let cleaned = content.trim();
+
+  // Remove AI preamble patterns at the start
+  const preamblePatterns = [
+    /^I'll analyze.*?\n+/i,
+    /^I will analyze.*?\n+/i,
+    /^Let me (analyze|examine|generate|create).*?\n+/i,
+    /^I will (analyze|examine|generate|create).*?\n+/i,
+    /^Here('s| is) (the|a) (contract|document|markdown|analysis).*?\n+/i,
+    /^Based on (the|my) analysis.*?\n+/i,
+    /^Looking at (the|this).*?\n+/i,
+    /^After (analyzing|examining|reviewing).*?\n+/i,
+  ];
+
+  for (const pattern of preamblePatterns) {
+    cleaned = cleaned.replace(pattern, '');
+  }
+
+  // If content starts with a code fence, check if it's code instead of markdown
+  const codeBlockMatch = cleaned.match(/^```(\w+)\n/);
+  if (codeBlockMatch) {
+    const lang = codeBlockMatch[1].toLowerCase();
+    // If it's markdown, extract it
+    if (lang === 'markdown' || lang === 'md') {
+      cleaned = cleaned.replace(/^```(?:markdown|md)\n?/, '').replace(/\n?```\s*$/, '');
+    }
+    // If it's code (Python, JS, etc), this is a bad response - return warning
+    else if (['python', 'py', 'javascript', 'js', 'typescript', 'ts', 'java', 'go', 'rust'].includes(lang)) {
+      return `# Contract Needs Regeneration
+
+> **Note:** This contract contains code instead of proper documentation.
+> Click "Force Refresh" to regenerate it properly.
+
+---
+
+*Original content was ${lang} code that should have been markdown documentation.*`;
+    }
+  }
+
+  // Check if the content looks like Python code without code fences
+  if (cleaned.startsWith('import ') || cleaned.startsWith('from ') || cleaned.startsWith('def ') || cleaned.startsWith('class ')) {
+    return `# Contract Needs Regeneration
+
+> **Note:** This contract contains Python code instead of proper documentation.
+> Click "Force Refresh" to regenerate it properly.`;
+  }
+
+  // Check for multiple lines of Python code (common patterns)
+  const pythonPatterns = /^(import \w+|from \w+ import|def \w+\(|class \w+:|if __name__|print\()/m;
+  const pythonMatches = cleaned.match(pythonPatterns);
+  if (pythonMatches && pythonMatches.length > 2) {
+    return `# Contract Needs Regeneration
+
+> **Note:** This contract appears to contain code instead of documentation.
+> Click "Force Refresh" to regenerate it properly.`;
+  }
+
+  return cleaned;
+}
+
+/**
+ * Extract version from contract content
+ * Looks for <!-- Version: X.X.X | Generated: ... --> comment or version: "X.X.X" in JSON
+ */
+function extractVersionFromContent(content: string): string | null {
+  // Try HTML comment format first: <!-- Version: 1.0.1 | Generated: ... -->
+  const versionMatch = content.match(/<!--\s*Version:\s*([\d.]+)/i);
+  if (versionMatch) {
+    return versionMatch[1];
+  }
+
+  // Try JSON format: "version": "1.0.0"
+  const jsonMatch = content.match(/"version"\s*:\s*"([\d.]+)"/);
+  if (jsonMatch) {
+    return jsonMatch[1];
+  }
+
+  // Try YAML frontmatter: version: 1.0.0
+  const yamlMatch = content.match(/^version:\s*([\d.]+)/m);
+  if (yamlMatch) {
+    return yamlMatch[1];
+  }
+
+  return null;
+}
+
+/**
+ * Extract metrics from contract markdown content
+ */
+function extractContractMetrics(content: string, type: string): { label: string; count: number }[] {
+  const metrics: { label: string; count: number }[] = [];
+
+  switch (type) {
+    case 'api': {
+      // Count endpoints (lines starting with ### GET, ### POST, etc.)
+      const endpointMatches = content.match(/^###?\s+(GET|POST|PUT|DELETE|PATCH)\s+/gm);
+      if (endpointMatches) metrics.push({ label: 'Endpoints', count: endpointMatches.length });
+      // Count route patterns
+      const routeMatches = content.match(/`\/([\w/:]+)`/g);
+      if (routeMatches) metrics.push({ label: 'Routes', count: new Set(routeMatches).size });
+      break;
+    }
+    case 'schema': {
+      // Count tables/models
+      const tableMatches = content.match(/^##\s+\w+/gm);
+      if (tableMatches) metrics.push({ label: 'Tables', count: tableMatches.length });
+      // Count fields (lines with | field |)
+      const fieldMatches = content.match(/^\|\s*\w+\s*\|/gm);
+      if (fieldMatches) metrics.push({ label: 'Fields', count: fieldMatches.length });
+      break;
+    }
+    case 'events': {
+      // Count events
+      const eventMatches = content.match(/^###?\s+\w+/gm);
+      if (eventMatches) metrics.push({ label: 'Events', count: eventMatches.length });
+      break;
+    }
+    case 'e2e':
+    case 'unit':
+    case 'integration': {
+      // Count tests (lines with test/it/describe)
+      const testMatches = content.match(/^\s*-\s+.*test|^\s*-\s+.*spec|^###?\s+Test/gim);
+      if (testMatches) metrics.push({ label: 'Tests', count: testMatches.length });
+      break;
+    }
+    case 'infra': {
+      // Count env vars
+      const envMatches = content.match(/`[A-Z_]+`/g);
+      if (envMatches) metrics.push({ label: 'Env Vars', count: new Set(envMatches).size });
+      break;
+    }
+    case 'features': {
+      // Count feature flags
+      const flagMatches = content.match(/^\s*-\s+`?\w+`?:/gm);
+      if (flagMatches) metrics.push({ label: 'Flags', count: flagMatches.length });
+      break;
+    }
+    case 'integrations': {
+      // Count integrations
+      const integrationMatches = content.match(/^##\s+\w+/gm);
+      if (integrationMatches) metrics.push({ label: 'Services', count: integrationMatches.length });
+      break;
+    }
+    default: {
+      // Count sections as generic metric
+      const sectionMatches = content.match(/^##\s+/gm);
+      if (sectionMatches) metrics.push({ label: 'Sections', count: sectionMatches.length });
+    }
+  }
+
+  return metrics;
+}
+
+/**
  * ContractCard - Individual contract display matching House_Rules_Contracts format
  */
-function ContractCard({ contract }: { contract: Contract }): React.ReactElement {
+interface FeatureContract {
+  name: string;
+  path: string;
+}
+
+function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
+  contract: Contract;
+  repoPath?: string;
+  hasChanges?: boolean;
+  discoveredFeatures?: DiscoveredFeature[];
+}): React.ReactElement {
   const [expanded, setExpanded] = useState(false);
+  const [showContent, setShowContent] = useState(false);
+  const [showDiff, setShowDiff] = useState(false);
+  const [content, setContent] = useState<string | null>(null);
+  const [diff, setDiff] = useState<string | null>(null);
+  const [diffStats, setDiffStats] = useState<{ additions: number; deletions: number } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [loadingDiff, setLoadingDiff] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<{ label: string; count: number }[]>([]);
+  const [extractedVersion, setExtractedVersion] = useState<string | null>(null);
+  const [selectedFeature, setSelectedFeature] = useState<string>('repo');
+  const [featureContracts, setFeatureContracts] = useState<FeatureContract[]>([]);
+  const [fileExists, setFileExists] = useState<boolean>(true);
+  const [generating, setGenerating] = useState(false);
+  const [viewMode, setViewMode] = useState<'markdown' | 'json'>('markdown');
+  const [rawContent, setRawContent] = useState<string | null>(null);
 
   const statusColors: Record<string, string> = {
     active: 'bg-green-100 text-green-700',
@@ -2161,6 +2542,7 @@ function ContractCard({ contract }: { contract: Contract }): React.ReactElement 
     integrations: '🔗',
     admin: '👤',
     sql: '🗃️',
+    prompts: '💬',
     e2e: '🎭',
     unit: '🧪',
     integration: '🔗',
@@ -2177,120 +2559,711 @@ function ContractCard({ contract }: { contract: Contract }): React.ReactElement 
     integrations: '3rd Party',
     admin: 'Admin Panel',
     sql: 'SQL Queries',
+    prompts: 'Prompts & Skills',
     e2e: 'E2E Tests',
     unit: 'Unit Tests',
     integration: 'Integration Tests',
     fixtures: 'Test Fixtures',
   };
 
-  const handleOpenFile = async () => {
-    // Try to open the contract file
-    console.log('Open contract file:', contract.filePath);
-    // Could add shell.openPath or similar here
+  const loadContent = async (filePath?: string) => {
+    const pathToLoad = filePath || contract.filePath;
+    // Only skip if we're loading the same path and already have content
+    if (content && !filePath && !loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await window.api?.file?.readContent?.(pathToLoad);
+      if (result?.success && result.data) {
+        setFileExists(true);
+        setRawContent(result.data); // Store raw for JSON view
+        // Clean up AI preamble/code from old contracts
+        const cleanedContent = cleanupContractContent(result.data);
+        setContent(cleanedContent);
+        setMetrics(extractContractMetrics(cleanedContent, contract.type));
+        // Extract version from content (before cleanup to get metadata)
+        const version = extractVersionFromContent(result.data);
+        if (version) {
+          setExtractedVersion(version);
+        }
+      } else {
+        // Check if file doesn't exist vs other error
+        const errorMsg = result?.error?.message || 'Failed to load content';
+        if (errorMsg.includes('ENOENT') || errorMsg.includes('no such file') || errorMsg.includes('does not exist')) {
+          setFileExists(false);
+          setError(null); // Don't show error, show generate button instead
+        } else {
+          setError(errorMsg);
+        }
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to load content';
+      if (errorMsg.includes('ENOENT') || errorMsg.includes('no such file')) {
+        setFileExists(false);
+        setError(null);
+      } else {
+        setError(errorMsg);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
+  // Handle generating a single contract
+  const handleGenerate = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    console.log('[ContractCard] handleGenerate called, selectedFeature:', selectedFeature, 'repoPath:', repoPath);
+
+    if (!repoPath || generating) {
+      return;
+    }
+
+    setGenerating(true);
+    setError(null);
+
+    try {
+      // Always regenerate repo-level contract first
+      console.log('[ContractCard] Regenerating REPO-level contract:', contract.type);
+      const repoResult = await window.api?.contractGeneration?.generateSingle?.(repoPath, contract.type);
+
+      if (!repoResult?.success || !repoResult.data?.success) {
+        console.warn('[ContractCard] Repo contract failed:', repoResult?.data?.error);
+      }
+
+      // Then regenerate all feature-level contracts
+      if (discoveredFeatures && discoveredFeatures.length > 0) {
+        console.log('[ContractCard] Regenerating', discoveredFeatures.length, 'feature contracts...');
+
+        for (const feature of discoveredFeatures) {
+          console.log('[ContractCard] Regenerating feature:', feature.name);
+          try {
+            await window.api?.contractGeneration?.generateFeature?.(repoPath, feature, {
+              includeCodeSamples: true,
+              maxFilesPerFeature: 10,
+            });
+          } catch (err) {
+            console.warn('[ContractCard] Failed to regenerate feature:', feature.name, err);
+          }
+        }
+      }
+
+      // Reload the currently selected content
+      setFileExists(true);
+      if (selectedFeature === 'repo') {
+        await loadContent(contract.filePath);
+      } else {
+        const featureContract = featureContracts.find(f => f.name === selectedFeature);
+        if (featureContract) {
+          await loadContent(featureContract.path);
+        }
+      }
+
+      console.log('[ContractCard] All contracts regenerated');
+    } catch (err) {
+      console.error('[ContractCard] Error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to generate contracts');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // Load feature contracts related to this contract type
+  useEffect(() => {
+    if (discoveredFeatures && discoveredFeatures.length > 0 && repoPath) {
+      const features: FeatureContract[] = discoveredFeatures.map(f => ({
+        name: f.name,
+        path: `${f.basePath}/CONTRACTS.md`,
+      }));
+      setFeatureContracts(features);
+    }
+  }, [discoveredFeatures, repoPath]);
+
+  // Handle feature selection change
+  const handleFeatureChange = async (featureName: string) => {
+    setSelectedFeature(featureName);
+    setContent(null); // Clear current content
+    setMetrics([]);
+    setExtractedVersion(null);
+
+    if (featureName === 'repo') {
+      // Load repo-level contract
+      await loadContent(contract.filePath);
+    } else {
+      // Load feature-level contract
+      const feature = featureContracts.find(f => f.name === featureName);
+      if (feature) {
+        await loadContent(feature.path);
+      }
+    }
+  };
+
+  const loadDiff = async () => {
+    if (diff || loadingDiff || !repoPath) return;
+    setLoadingDiff(true);
+    try {
+      const result = await window.api?.git?.getDiffSummary?.(repoPath);
+      if (result?.success && result.data?.files) {
+        // Find diff for this contract file
+        const relativePath = contract.filePath.replace(repoPath + '/', '');
+        const fileDiff = result.data.files.find((f: { path: string }) =>
+          f.path === relativePath ||
+          contract.filePath.includes(f.path) ||
+          f.path.includes(contract.name)
+        );
+        if (fileDiff) {
+          setDiff(fileDiff.diff);
+          setDiffStats({ additions: fileDiff.additions, deletions: fileDiff.deletions });
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load diff:', err);
+    } finally {
+      setLoadingDiff(false);
+    }
+  };
+
+  const handleOpenFile = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!content) {
+      await loadContent();
+    }
+    setShowContent(true);
+  };
+
+  const handleOpenInEditor = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    // Open in VS Code
+    const dir = contract.filePath.split('/').slice(0, -1).join('/');
+    await window.api?.shell?.openVSCode?.(dir);
+  };
+
+  // Load metrics on mount (for collapsed state display)
+  useEffect(() => {
+    if (!content && !loading) {
+      loadContent();
+    }
+  }, []); // Run once on mount
+
+  // Load diff when expanded and has changes
+  useEffect(() => {
+    if (expanded && hasChanges && !diff && !loadingDiff) {
+      loadDiff();
+    }
+  }, [expanded, hasChanges]);
+
   return (
-    <div
-      className={`
-        bg-surface rounded-xl border transition-all cursor-pointer
-        ${expanded ? 'border-kanvas-blue shadow-kanvas' : 'border-border hover:border-kanvas-blue/30 hover:shadow-card-hover'}
-      `}
-      onClick={() => setExpanded(!expanded)}
-    >
-      <div className="p-4">
-        <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-lg bg-surface-secondary flex items-center justify-center flex-shrink-0">
-            <span className="text-xl">{typeIcons[contract.type]}</span>
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <h4 className="font-semibold text-text-primary truncate">{contract.name}</h4>
-              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColors[contract.status]}`}>
-                {contract.status}
-              </span>
-              {contract.breaking && (
-                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
-                  ⚠️ Breaking
+    <>
+      <div
+        className={`
+          bg-surface rounded-xl border transition-all cursor-pointer
+          ${expanded ? 'border-kanvas-blue shadow-kanvas' : 'border-border hover:border-kanvas-blue/30 hover:shadow-card-hover'}
+        `}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="p-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-lg bg-surface-secondary flex items-center justify-center flex-shrink-0">
+              <span className="text-xl">{typeIcons[contract.type]}</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <h4 className="font-semibold text-text-primary truncate">{contract.name}</h4>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColors[contract.status]}`}>
+                  {contract.status}
                 </span>
+                {contract.breaking && (
+                  <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                    Breaking
+                  </span>
+                )}
+                {hasChanges && (
+                  <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700 flex items-center gap-1">
+                    {diffStats ? (
+                      <>
+                        <span className="text-green-600">+{diffStats.additions}</span>
+                        <span className="text-red-600">-{diffStats.deletions}</span>
+                      </>
+                    ) : (
+                      'Modified'
+                    )}
+                  </span>
+                )}
+              </div>
+              {/* Not generated indicator */}
+              {!fileExists && !loading && (
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                    Not Generated
+                  </span>
+                  {generating && (
+                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 flex items-center gap-1">
+                      <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                      Generating...
+                    </span>
+                  )}
+                </div>
+              )}
+              {/* Metrics pills - show when available */}
+              {fileExists && metrics.length > 0 && (
+                <div className="flex items-center gap-1.5 mb-1">
+                  {metrics.map((m, idx) => (
+                    <span key={idx} className="px-2 py-0.5 rounded-full text-xs font-medium bg-surface-tertiary text-text-secondary">
+                      {m.count} {m.label}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {contract.description && (
+                <p className="text-sm text-text-secondary line-clamp-1">{contract.description}</p>
               )}
             </div>
-            {contract.description && (
-              <p className="text-sm text-text-secondary">{contract.description}</p>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-text-secondary">v{contract.version}</span>
-            <svg
-              className={`w-4 h-4 text-text-secondary transition-transform ${expanded ? 'rotate-180' : ''}`}
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-text-secondary">v{extractedVersion || contract.version}</span>
+              <svg
+                className={`w-4 h-4 text-text-secondary transition-transform ${expanded ? 'rotate-180' : ''}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
           </div>
         </div>
+
+        {/* Expanded details */}
+        {expanded && (
+          <div className="px-4 pb-4 border-t border-border pt-3 space-y-3">
+            {/* Actions row */}
+            <div className="flex items-center gap-2">
+              {!fileExists ? (
+                <>
+                  <button
+                    onClick={handleGenerate}
+                    disabled={generating || !repoPath}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+                      bg-kanvas-blue text-white hover:bg-kanvas-blue/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {generating ? (
+                      <>
+                        <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        Generating...
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                        </svg>
+                        Generate Contract
+                      </>
+                    )}
+                  </button>
+                  <span className="text-xs text-text-secondary">
+                    This contract has not been generated yet
+                  </span>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={handleOpenFile}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+                      bg-kanvas-blue text-white hover:bg-kanvas-blue/90 transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                    View Contract
+                  </button>
+                  <button
+                    onClick={handleOpenInEditor}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+                      bg-surface-secondary text-text-primary hover:bg-surface-tertiary transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M17.583 17.834l-8.042-6.667 8.042-6.667V17.834zm-.001 4.165L1.999 12 17.582 2.001l4.419 2.209v15.58l-4.419 2.209z"/>
+                    </svg>
+                    Open in Editor
+                  </button>
+                  <button
+                    onClick={handleGenerate}
+                    disabled={generating || !repoPath}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+                      bg-surface-secondary text-text-primary hover:bg-surface-tertiary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={!repoPath ? "Repository path not available" : "Regenerate this contract"}
+                  >
+                    {generating ? (
+                      <>
+                        <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        Regenerating...
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        Regenerate
+                      </>
+                    )}
+                  </button>
+                </>
+              )}
+              <div className="flex-1" />
+              <code className="text-xs text-text-secondary bg-surface-secondary px-2 py-1 rounded truncate max-w-[200px]">
+                {contract.filePath.split('/').slice(-2).join('/')}
+              </code>
+            </div>
+
+            {/* Metadata */}
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <span className="text-text-secondary">Type:</span>
+                <span className="ml-2 text-text-primary">{typeLabels[contract.type]}</span>
+              </div>
+              <div>
+                <span className="text-text-secondary">Last Updated:</span>
+                <span className="ml-2 text-text-primary">
+                  {new Date(contract.lastUpdated).toLocaleDateString()}
+                </span>
+              </div>
+              {contract.modifiedBy && (
+                <div className="col-span-2">
+                  <span className="text-text-secondary">Modified By:</span>
+                  <span className="ml-2 text-text-primary">{contract.modifiedBy}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Changelog preview */}
+            {contract.changeLog && contract.changeLog.length > 0 && (
+              <div className="mt-2">
+                <p className="text-xs text-text-secondary mb-1">Recent Changes:</p>
+                <div className="bg-surface-secondary rounded-lg p-2 text-xs">
+                  {contract.changeLog.slice(0, 2).map((entry, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <span className="text-text-secondary">{entry.date}</span>
+                      <span className={`px-1.5 py-0.5 rounded text-xs ${
+                        entry.impact === 'breaking' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'
+                      }`}>
+                        {entry.impact}
+                      </span>
+                      <span className="text-text-primary truncate">{entry.changes}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Uncommitted Changes Diff */}
+            {(hasChanges || diff) && (
+              <div className="mt-3">
+                <button
+                  onClick={(e) => { e.stopPropagation(); setShowDiff(!showDiff); }}
+                  className="flex items-center gap-2 text-xs font-medium text-text-secondary hover:text-text-primary"
+                >
+                  <svg
+                    className={`w-3.5 h-3.5 transition-transform ${showDiff ? 'rotate-90' : ''}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                  Uncommitted Changes
+                  {diffStats && (
+                    <span className="text-text-secondary">
+                      (<span className="text-green-600">+{diffStats.additions}</span>{' '}
+                      <span className="text-red-600">-{diffStats.deletions}</span>)
+                    </span>
+                  )}
+                </button>
+                {showDiff && (
+                  <div className="mt-2 bg-surface-secondary rounded-lg p-3 overflow-auto max-h-[300px]">
+                    {loadingDiff ? (
+                      <div className="flex items-center gap-2 text-xs text-text-secondary">
+                        <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Loading diff...
+                      </div>
+                    ) : diff ? (
+                      <pre className="text-xs font-mono whitespace-pre-wrap">
+                        {diff.split('\n').map((line, i) => {
+                          let className = 'text-text-primary';
+                          if (line.startsWith('+') && !line.startsWith('+++')) {
+                            className = 'text-green-600 bg-green-50';
+                          } else if (line.startsWith('-') && !line.startsWith('---')) {
+                            className = 'text-red-600 bg-red-50';
+                          } else if (line.startsWith('@@')) {
+                            className = 'text-blue-600';
+                          }
+                          return (
+                            <div key={i} className={className}>{line}</div>
+                          );
+                        })}
+                      </pre>
+                    ) : (
+                      <div className="text-xs text-text-secondary">
+                        No diff available. Changes may be committed already.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Expanded details */}
-      {expanded && (
-        <div className="px-4 pb-4 border-t border-border pt-3 space-y-3">
-          {/* File path */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-text-secondary">File:</span>
-            <code className="text-xs text-kanvas-blue bg-surface-secondary px-2 py-0.5 rounded truncate flex-1">
-              {contract.filePath.split('/').slice(-2).join('/')}
-            </code>
-            <button
-              onClick={(e) => { e.stopPropagation(); handleOpenFile(); }}
-              className="text-xs text-kanvas-blue hover:underline"
-            >
-              Open
-            </button>
-          </div>
-
-          {/* Metadata */}
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <div>
-              <span className="text-text-secondary">Type:</span>
-              <span className="ml-2 text-text-primary">{typeLabels[contract.type]}</span>
-            </div>
-            <div>
-              <span className="text-text-secondary">Last Updated:</span>
-              <span className="ml-2 text-text-primary">
-                {new Date(contract.lastUpdated).toLocaleDateString()}
-              </span>
-            </div>
-            {contract.modifiedBy && (
-              <div className="col-span-2">
-                <span className="text-text-secondary">Modified By:</span>
-                <span className="ml-2 text-text-primary">{contract.modifiedBy}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Changelog preview */}
-          {contract.changeLog && contract.changeLog.length > 0 && (
-            <div className="mt-2">
-              <p className="text-xs text-text-secondary mb-1">Recent Changes:</p>
-              <div className="bg-surface-secondary rounded-lg p-2 text-xs">
-                {contract.changeLog.slice(0, 2).map((entry, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <span className="text-text-secondary">{entry.date}</span>
-                    <span className={`px-1.5 py-0.5 rounded text-xs ${
-                      entry.impact === 'breaking' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'
-                    }`}>
-                      {entry.impact}
-                    </span>
-                    <span className="text-text-primary truncate">{entry.changes}</span>
+      {/* Contract Content Modal */}
+      {showContent && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+          onClick={() => setShowContent(false)}
+        >
+          <div
+            className="bg-surface border border-border rounded-xl shadow-xl w-full max-w-4xl max-h-[85vh] mx-4 flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b border-border">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-surface-secondary flex items-center justify-center">
+                  <span className="text-lg">{typeIcons[contract.type]}</span>
+                </div>
+                <div>
+                  <h3 className="font-semibold text-text-primary">{contract.name}</h3>
+                  <p className="text-xs text-text-secondary">{typeLabels[contract.type]}</p>
+                </div>
+                {/* Feature Dropdown */}
+                {featureContracts.length > 0 && (
+                  <div className="ml-4">
+                    <select
+                      value={selectedFeature}
+                      onChange={(e) => handleFeatureChange(e.target.value)}
+                      className="px-3 py-1.5 text-xs rounded-lg border border-border bg-surface-secondary text-text-primary
+                        focus:outline-none focus:ring-2 focus:ring-kanvas-blue/50"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <option value="repo">Repo-Level (Consolidated)</option>
+                      <optgroup label="Feature-Level Contracts">
+                        {featureContracts.map(f => (
+                          <option key={f.name} value={f.name}>{f.name}</option>
+                        ))}
+                      </optgroup>
+                    </select>
                   </div>
-                ))}
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {metrics.length > 0 && (
+                  <div className="flex items-center gap-1.5 mr-4">
+                    {metrics.map((m, idx) => (
+                      <span key={idx} className="px-2 py-1 rounded-full text-xs font-medium bg-kanvas-blue/10 text-kanvas-blue">
+                        {m.count} {m.label}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {/* Regenerate Button */}
+                <button
+                  onClick={handleGenerate}
+                  disabled={generating || !repoPath}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors mr-2 ${
+                    generating || !repoPath
+                      ? 'bg-surface-secondary text-text-secondary opacity-50 cursor-not-allowed'
+                      : 'bg-kanvas-blue text-white hover:bg-kanvas-blue/90'
+                  }`}
+                  title={selectedFeature === 'repo' ? 'Regenerate repo-level contract' : `Regenerate ${selectedFeature} contract`}
+                >
+                  {generating ? (
+                    <>
+                      <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                      Regenerating...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      Regenerate
+                    </>
+                  )}
+                </button>
+                {/* View Mode Toggle */}
+                <div className="flex items-center rounded-lg border border-border overflow-hidden mr-2">
+                  <button
+                    onClick={() => setViewMode('markdown')}
+                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                      viewMode === 'markdown'
+                        ? 'bg-kanvas-blue text-white'
+                        : 'bg-surface-secondary text-text-secondary hover:text-text-primary'
+                    }`}
+                    title="Markdown View"
+                  >
+                    Markdown
+                  </button>
+                  <button
+                    onClick={() => setViewMode('json')}
+                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                      viewMode === 'json'
+                        ? 'bg-kanvas-blue text-white'
+                        : 'bg-surface-secondary text-text-secondary hover:text-text-primary'
+                    }`}
+                    title="JSON View"
+                  >
+                    Raw
+                  </button>
+                </div>
+                <button
+                  onClick={handleOpenInEditor}
+                  className="p-2 rounded-lg hover:bg-surface-secondary transition-colors"
+                  title="Open in Editor"
+                >
+                  <svg className="w-4 h-4 text-text-secondary" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17.583 17.834l-8.042-6.667 8.042-6.667V17.834zm-.001 4.165L1.999 12 17.582 2.001l4.419 2.209v15.58l-4.419 2.209z"/>
+                  </svg>
+                </button>
+                <button
+                  onClick={() => setShowContent(false)}
+                  className="p-2 rounded-lg hover:bg-surface-secondary transition-colors"
+                >
+                  <svg className="w-5 h-5 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
               </div>
             </div>
-          )}
+
+            {/* Modal Content */}
+            <div className="flex-1 overflow-auto p-4">
+              {loading || generating ? (
+                <div className="flex flex-col items-center justify-center h-32 gap-4">
+                  <div className="flex items-center gap-2 text-text-secondary">
+                    <svg className="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    {generating ? 'Generating contract...' : 'Loading contract...'}
+                  </div>
+                  {generating && (
+                    <div className="w-64 h-2 bg-surface-secondary rounded-full overflow-hidden">
+                      <div className="h-full bg-kanvas-blue rounded-full animate-pulse" style={{ width: '60%' }}></div>
+                    </div>
+                  )}
+                </div>
+              ) : error ? (
+                <div className="flex items-center justify-center h-32">
+                  <div className="text-center">
+                    <p className="text-red-500 mb-2">{error}</p>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); loadContent(); }}
+                      className="text-kanvas-blue text-sm hover:underline"
+                    >
+                      Try again
+                    </button>
+                  </div>
+                </div>
+              ) : content ? (
+                viewMode === 'markdown' ? (
+                  <div className="prose prose-sm dark:prose-invert max-w-none select-text
+                    prose-headings:text-text-primary prose-p:text-text-secondary
+                    prose-table:border-collapse prose-table:w-full prose-table:my-4
+                    prose-th:border prose-th:border-border prose-th:bg-surface-secondary prose-th:px-3 prose-th:py-2 prose-th:text-left prose-th:text-text-primary prose-th:font-semibold
+                    prose-td:border prose-td:border-border prose-td:px-3 prose-td:py-2 prose-td:text-text-secondary
+                    prose-code:bg-surface-secondary prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-kanvas-blue prose-code:font-mono prose-code:text-sm
+                    prose-pre:bg-surface-secondary prose-pre:p-4 prose-pre:rounded-lg prose-pre:overflow-auto
+                    prose-blockquote:border-l-4 prose-blockquote:border-kanvas-blue prose-blockquote:pl-4 prose-blockquote:italic prose-blockquote:text-text-secondary
+                    prose-ul:list-disc prose-ul:pl-6 prose-ol:list-decimal prose-ol:pl-6
+                    prose-li:text-text-secondary prose-li:my-1
+                    prose-a:text-kanvas-blue prose-a:no-underline hover:prose-a:underline
+                    prose-strong:text-text-primary prose-em:text-text-secondary
+                    prose-hr:border-border"
+                    style={{ userSelect: 'text', WebkitUserSelect: 'text' }}>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        table: ({ children }) => (
+                          <table className="w-full border-collapse my-4 text-sm">{children}</table>
+                        ),
+                        thead: ({ children }) => (
+                          <thead className="bg-surface-secondary">{children}</thead>
+                        ),
+                        tbody: ({ children }) => (
+                          <tbody>{children}</tbody>
+                        ),
+                        tr: ({ children }) => (
+                          <tr className="border-b border-border">{children}</tr>
+                        ),
+                        th: ({ children }) => (
+                          <th className="border border-border bg-surface-secondary px-3 py-2 text-left text-text-primary font-semibold">{children}</th>
+                        ),
+                        td: ({ children }) => (
+                          <td className="border border-border px-3 py-2 text-text-secondary">{children}</td>
+                        ),
+                        h1: ({ children }) => (
+                          <h1 className="text-2xl font-bold text-text-primary mt-6 mb-4">{children}</h1>
+                        ),
+                        h2: ({ children }) => (
+                          <h2 className="text-xl font-semibold text-text-primary mt-5 mb-3 border-b border-border pb-2">{children}</h2>
+                        ),
+                        h3: ({ children }) => (
+                          <h3 className="text-lg font-medium text-text-primary mt-4 mb-2">{children}</h3>
+                        ),
+                        p: ({ children }) => (
+                          <p className="text-text-secondary my-2">{children}</p>
+                        ),
+                        code: ({ children, className }) => {
+                          const isInline = !className;
+                          return isInline ? (
+                            <code className="bg-surface-secondary px-1.5 py-0.5 rounded text-kanvas-blue font-mono text-sm">{children}</code>
+                          ) : (
+                            <code className={className}>{children}</code>
+                          );
+                        },
+                        pre: ({ children }) => (
+                          <pre className="bg-surface-secondary p-4 rounded-lg overflow-auto my-4">{children}</pre>
+                        ),
+                      }}
+                    >
+                      {content}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  <pre className="bg-surface-secondary rounded-lg p-4 text-sm font-mono text-text-secondary overflow-auto select-text whitespace-pre-wrap"
+                    style={{ userSelect: 'text', WebkitUserSelect: 'text' }}>
+                    {rawContent || content}
+                  </pre>
+                )
+              ) : (
+                <div className="flex items-center justify-center h-32 text-text-secondary">
+                  No content available
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-between p-4 border-t border-border text-xs text-text-secondary">
+              <span>{selectedFeature === 'repo' ? contract.filePath : featureContracts.find(f => f.name === selectedFeature)?.path || contract.filePath}</span>
+              <span>v{extractedVersion || contract.version} - Last updated {new Date(contract.lastUpdated).toLocaleDateString()}</span>
+            </div>
+          </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 

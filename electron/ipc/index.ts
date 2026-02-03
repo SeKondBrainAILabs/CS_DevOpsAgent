@@ -13,6 +13,7 @@ import { databaseService } from '../services/DatabaseService';
  * Removes existing handlers first to support HMR during development
  */
 export function registerIpcHandlers(services: Services, mainWindow: BrowserWindow): void {
+  console.log('[IPC] Registering IPC handlers...');
   // Remove existing handlers first (for HMR support)
   removeIpcHandlers();
   // ==========================================================================
@@ -603,13 +604,16 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
 
   ipcMain.handle(IPC.CONTRACT_SAVE_DISCOVERED_FEATURES, async (_, repoPath: string, features: unknown[]) => {
     const key = `discovered_features:${repoPath}`;
+    console.log('[IPC] Saving discovered features with key:', key, 'count:', features?.length);
     databaseService.setSetting(key, features);
     return { success: true };
   });
 
   ipcMain.handle(IPC.CONTRACT_LOAD_DISCOVERED_FEATURES, async (_, repoPath: string) => {
     const key = `discovered_features:${repoPath}`;
+    console.log('[IPC] Loading discovered features with key:', key);
     const features = databaseService.getSetting<unknown[]>(key, []);
+    console.log('[IPC] Found features:', features?.length || 0);
     return { success: true, data: features };
   });
 
@@ -619,6 +623,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
 
   ipcMain.handle(IPC.CONTRACT_GENERATE_ALL, async (_, repoPath: string, options?: unknown) => {
     return services.contractGeneration.generateAllContracts(repoPath, options as any);
+  });
+
+  ipcMain.handle(IPC.CONTRACT_GENERATE_SINGLE, async (_, repoPath: string, contractType: string) => {
+    return services.contractGeneration.generateSingleContract(repoPath, contractType);
   });
 
   ipcMain.handle(IPC.CONTRACT_CANCEL_GENERATION, async () => {
@@ -987,6 +995,25 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   });
 
   // ==========================================================================
+  // FILE SYSTEM HANDLERS
+  // ==========================================================================
+  ipcMain.handle(IPC.FILE_READ_CONTENT, async (_, filePath: string) => {
+    try {
+      const fs = await import('fs/promises');
+      const content = await fs.readFile(filePath, 'utf-8');
+      return { success: true, data: content };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'FILE_READ_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to read file',
+        },
+      };
+    }
+  });
+
+  // ==========================================================================
   // SHELL/QUICK ACTION HANDLERS
   // ==========================================================================
   ipcMain.handle(IPC.SHELL_OPEN_TERMINAL, async (_, dirPath: string) => {
@@ -1164,6 +1191,7 @@ async function startWatchersForExistingSessions(services: Services): Promise<voi
       }
     }, 2000); // Delay to let watchers start first
   }
+  console.log('[IPC] All IPC handlers registered successfully');
 }
 
 /**

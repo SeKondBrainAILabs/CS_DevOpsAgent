@@ -350,7 +350,7 @@ export interface KanvasConfig {
  * - admin: Admin capabilities - what can be administered for this feature
  * - sql: Reusable SQL queries, stored procedures, performance hints
  */
-export type ContractType = 'api' | 'schema' | 'events' | 'css' | 'features' | 'infra' | 'integrations' | 'e2e' | 'unit' | 'integration' | 'fixtures' | 'admin' | 'sql';
+export type ContractType = 'api' | 'schema' | 'events' | 'css' | 'features' | 'infra' | 'integrations' | 'e2e' | 'unit' | 'integration' | 'fixtures' | 'admin' | 'sql' | 'prompts';
 
 export type ContractStatus = 'active' | 'modified' | 'deprecated' | 'breaking' | 'beta';
 
@@ -628,6 +628,7 @@ export interface ContractGenerationOptions {
   features?: string[]; // Generate only specific features by name (empty = all)
   useAI?: boolean; // Use LLM to intelligently identify actual features (not just folders)
   preDiscoveredFeatures?: DiscoveredFeature[]; // Use pre-discovered features instead of re-discovering
+  forceRefresh?: boolean; // If true, regenerate all contracts ignoring diffs (default: false = incremental)
 }
 
 /**

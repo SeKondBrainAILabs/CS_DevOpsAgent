@@ -11,6 +11,23 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
 import detectPort from 'detect-port';
+import { cpSync, existsSync, mkdirSync } from 'fs';
+
+// Plugin to copy config files to dist during build
+function copyConfigPlugin() {
+  return {
+    name: 'copy-config',
+    closeBundle() {
+      const srcConfig = resolve(__dirname, 'electron/config');
+      const destConfig = resolve(__dirname, 'dist/config');
+      if (existsSync(srcConfig)) {
+        mkdirSync(destConfig, { recursive: true });
+        cpSync(srcConfig, destConfig, { recursive: true });
+        console.log('[Kanvas] Copied config to dist/config');
+      }
+    },
+  };
+}
 
 // Preferred port - will try this first, then find next available
 const PREFERRED_PORT = 5173;
@@ -27,7 +44,7 @@ export default defineConfig(async () => {
 
   return {
     main: {
-      plugins: [externalizeDepsPlugin()],
+      plugins: [externalizeDepsPlugin(), copyConfigPlugin()],
       build: {
         outDir: 'dist/electron',
         lib: {

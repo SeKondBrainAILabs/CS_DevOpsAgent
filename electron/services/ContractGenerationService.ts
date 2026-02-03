@@ -31,6 +31,7 @@ async function getGlobSync() {
   return _globSync;
 }
 import type { ContractRegistryService } from './ContractRegistryService';
+import { databaseService } from './DatabaseService';
 import { KANVAS_PATHS } from '../../shared/agent-protocol';
 // Phase 3: Analysis services for enhanced contract generation
 import type { ASTParserService } from './analysis/ASTParserService';
@@ -293,6 +294,16 @@ function matchesGitignorePattern(relativePath: string, patterns: string[]): bool
   return false;
 }
 
+// Metadata file for tracking contract generation state
+const CONTRACT_GENERATION_METADATA_FILE = '.contract-generation-meta.json';
+
+interface ContractGenerationMetadata {
+  lastGeneratedAt: string; // ISO timestamp
+  lastCommitHash: string;
+  generatedFeatures: string[];
+  version: string;
+}
+
 export class ContractGenerationService extends BaseService {
   private aiService: AIService;
   private registryService: ContractRegistryService;
@@ -309,6 +320,111 @@ export class ContractGenerationService extends BaseService {
     super();
     this.aiService = aiService;
     this.registryService = registryService;
+  }
+
+  /**
+   * Get contract generation metadata (last generation time, commit hash, etc.)
+   */
+  private async getGenerationMetadata(repoPath: string): Promise<ContractGenerationMetadata | null> {
+    try {
+      const metaPath = path.join(repoPath, KANVAS_PATHS.baseDir, CONTRACT_GENERATION_METADATA_FILE);
+      const content = await fs.readFile(metaPath, 'utf-8');
+      return JSON.parse(content);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Save contract generation metadata
+   */
+  private async saveGenerationMetadata(repoPath: string, metadata: ContractGenerationMetadata): Promise<void> {
+    const metaPath = path.join(repoPath, KANVAS_PATHS.baseDir, CONTRACT_GENERATION_METADATA_FILE);
+    await fs.mkdir(path.dirname(metaPath), { recursive: true });
+    await fs.writeFile(metaPath, JSON.stringify(metadata, null, 2), 'utf-8');
+  }
+
+  /**
+   * Get current git commit hash
+   */
+  private async getCurrentCommitHash(repoPath: string): Promise<string> {
+    try {
+      const { execSync } = await import('child_process');
+      const hash = execSync('git rev-parse HEAD', { cwd: repoPath, encoding: 'utf-8' }).trim();
+      return hash;
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /**
+   * Get files changed since a specific commit
+   */
+  private async getChangedFilesSinceCommit(repoPath: string, sinceCommit: string): Promise<string[]> {
+    try {
+      const { execSync } = await import('child_process');
+      // Get files changed since the given commit
+      const output = execSync(`git diff --name-only ${sinceCommit} HEAD`, { cwd: repoPath, encoding: 'utf-8' });
+      return output.trim().split('\n').filter(f => f.length > 0);
+    } catch {
+      // If error (e.g., commit doesn't exist), return empty - will force full refresh
+      return [];
+    }
+  }
+
+  /**
+   * Determine which features have changes based on git diffs
+   */
+  private getFeaturesWithChanges(features: DiscoveredFeature[], changedFiles: string[], repoPath: string): DiscoveredFeature[] {
+    if (changedFiles.length === 0) {
+      return []; // No changes, nothing to update
+    }
+
+    return features.filter(feature => {
+      // Get relative path of feature base
+      const featureRelPath = path.relative(repoPath, feature.basePath);
+
+      // Check if any changed file is within this feature's directory
+      return changedFiles.some(changedFile => {
+        // Check if the changed file is in the feature directory
+        if (changedFile.startsWith(featureRelPath + '/') || changedFile.startsWith(featureRelPath + '\\')) {
+          return true;
+        }
+        // Also check if the feature references the changed file
+        const allFeatureFiles = [
+          ...feature.files.api,
+          ...feature.files.schema,
+          ...feature.files.tests.e2e,
+          ...feature.files.tests.unit,
+          ...feature.files.tests.integration,
+          ...feature.files.fixtures,
+          ...feature.files.config,
+          ...feature.files.other,
+        ];
+        return allFeatureFiles.some(featureFile => {
+          const relFile = path.relative(repoPath, featureFile);
+          return relFile === changedFile;
+        });
+      });
+    });
+  }
+
+  /**
+   * Check if this is the first run (no existing contracts)
+   */
+  private async isFirstRun(repoPath: string): Promise<boolean> {
+    // Check if metadata exists
+    const metadata = await this.getGenerationMetadata(repoPath);
+    if (!metadata) return true;
+
+    // Check if contracts directory exists with any content
+    const contractsDir = path.join(repoPath, 'House_Rules_Contracts');
+    try {
+      const files = await fs.readdir(contractsDir);
+      return files.filter(f => f.endsWith('.md')).length === 0;
+    } catch {
+      return true;
+    }
   }
 
   /**
@@ -1229,6 +1345,8 @@ export class ContractGenerationService extends BaseService {
         totalFiles: feature.contractPatternMatches,
       };
 
+      console.log(`[ContractGeneration] Analysis JSON for ${feature.name}:`, JSON.stringify(analysisJson, null, 2).slice(0, 2000));
+
       // Generate Markdown contract using AI
       this.emitProgress({
         total: this.currentProgress?.total || 0,
@@ -1251,6 +1369,11 @@ export class ContractGenerationService extends BaseService {
       if (!markdownResult.success || !markdownResult.data) {
         throw new Error(`Failed to generate markdown: ${markdownResult.error?.message}`);
       }
+
+      console.log(`[ContractGeneration] Raw AI response for ${feature.name}:`, markdownResult.data.slice(0, 1000));
+
+      // Clean up AI response - remove any "thinking" text before the actual contract
+      let cleanedMarkdown = this.cleanupAIResponse(markdownResult.data);
 
       // Generate JSON contract using AI
       this.emitProgress({
@@ -1317,18 +1440,18 @@ export class ContractGenerationService extends BaseService {
           }
           adminContract = JSON.parse(adminStr);
           // Add admin contract to the main JSON contract
-          (jsonContract as Record<string, unknown>).adminContract = adminContract;
+          (jsonContract as unknown as Record<string, unknown>).adminContract = adminContract;
           console.log(`[ContractGeneration] Admin contract generated for: ${feature.name}`);
         } catch (err) {
           console.warn(`[ContractGeneration] Failed to parse admin contract:`, err);
         }
       }
 
-      // Save contracts
+      // Save contracts (use cleaned markdown, not raw AI response)
       const savedPaths = await this.saveContract(
         repoPath,
         feature,
-        markdownResult.data,
+        cleanedMarkdown,
         jsonContract
       );
 
@@ -1545,6 +1668,121 @@ export class ContractGenerationService extends BaseService {
   }
 
   /**
+   * Clean up AI response - remove any "thinking" text or preamble before the actual contract content
+   * Handles cases where AI returns "I'll analyze..." or "Let me..." before the contract
+   */
+  private cleanupAIResponse(response: string): string {
+    let cleaned = response.trim();
+
+    // Remove common AI preamble patterns - expanded list
+    const preamblePatterns = [
+      /^I'll analyze.*?\n+/i,
+      /^I will analyze.*?\n+/i,
+      /^Let me (analyze|examine|generate|create|look).*?\n+/i,
+      /^I will (analyze|examine|generate|create).*?\n+/i,
+      /^Here('s| is) (the|a) (contract|document|markdown|analysis).*?\n+/i,
+      /^Based on (the|my) analysis.*?\n+/i,
+      /^Looking at (the|this).*?\n+/i,
+      /^After (analyzing|examining|reviewing).*?\n+/i,
+      /^First, (let me|I'll|I will).*?\n+/i,
+      /^Now (let me|I'll|I will).*?\n+/i,
+    ];
+
+    for (const pattern of preamblePatterns) {
+      cleaned = cleaned.replace(pattern, '');
+    }
+
+    // If content starts with a code fence but is supposed to be markdown, extract it
+    if (cleaned.startsWith('```markdown') || cleaned.startsWith('```md')) {
+      cleaned = cleaned.replace(/^```(?:markdown|md)\n?/, '').replace(/\n?```$/, '');
+    }
+
+    // If the response is mostly Python code or other code (not markdown), it's a bad response
+    // Check if it starts with ``` and a language other than markdown
+    const codeBlockMatch = cleaned.match(/^```(\w+)\n/);
+    if (codeBlockMatch && !['markdown', 'md', ''].includes(codeBlockMatch[1])) {
+      // The AI returned code instead of a contract - return a placeholder
+      console.warn(`[ContractGeneration] AI returned code block (${codeBlockMatch[1]}) instead of contract markdown`);
+      return `# Contract
+
+> This contract needs to be regenerated. The AI did not return proper contract content.
+
+## Status
+- Generation failed: AI returned ${codeBlockMatch[1]} code instead of markdown contract.
+- Please try regenerating this contract.
+`;
+    }
+
+    // Check if content looks like Python code without code fences
+    const looksLikePython = (
+      cleaned.startsWith('import ') ||
+      cleaned.startsWith('from ') ||
+      cleaned.startsWith('def ') ||
+      cleaned.startsWith('class ') ||
+      /^(import \w+|from \w+ import)/m.test(cleaned.slice(0, 200))
+    );
+
+    if (looksLikePython) {
+      console.warn('[ContractGeneration] AI returned Python code instead of contract markdown');
+      return `# Contract
+
+> This contract needs to be regenerated. The AI returned Python code instead of proper documentation.
+
+## Status
+- Generation failed: Response was Python code instead of markdown contract.
+- Please try regenerating this contract.
+`;
+    }
+
+    // Ensure it starts with a markdown heading
+    if (!cleaned.startsWith('#')) {
+      // Try to find the first heading
+      const headingMatch = cleaned.match(/^(#+ .+)$/m);
+      if (headingMatch) {
+        const headingIndex = cleaned.indexOf(headingMatch[0]);
+        if (headingIndex > 0 && headingIndex < 500) {
+          // Remove content before the first heading (likely AI preamble)
+          cleaned = cleaned.substring(headingIndex);
+        }
+      }
+    }
+
+    return cleaned.trim();
+  }
+
+  /**
+   * Get existing contract version from JSON file or default to 1.0.0
+   */
+  private async getExistingContractVersion(jsonPath: string): Promise<string> {
+    try {
+      const content = await fs.readFile(jsonPath, 'utf-8');
+      const json = JSON.parse(content);
+      return json.version || '1.0.0';
+    } catch {
+      return '1.0.0';
+    }
+  }
+
+  /**
+   * Increment version number (1.0.0 -> 1.0.1, 1.0.9 -> 1.1.0, etc.)
+   */
+  private incrementVersion(version: string): string {
+    const parts = version.split('.').map(Number);
+    if (parts.length !== 3) return '1.0.1';
+
+    parts[2]++; // Increment patch
+    if (parts[2] >= 10) {
+      parts[2] = 0;
+      parts[1]++; // Increment minor
+    }
+    if (parts[1] >= 10) {
+      parts[1] = 0;
+      parts[0]++; // Increment major
+    }
+    return parts.join('.');
+  }
+
+  /**
    * Save contract to both feature folder and registry
    */
   private async saveContract(
@@ -1553,24 +1791,58 @@ export class ContractGenerationService extends BaseService {
     markdown: string,
     json: GeneratedContractJSON
   ): Promise<{ markdownPath: string; jsonPath: string }> {
-    // 1. Save Markdown to feature folder
-    const markdownPath = path.join(feature.basePath, 'CONTRACTS.md');
-    await fs.writeFile(markdownPath, markdown, 'utf-8');
-    console.log(`[ContractGeneration] Saved markdown: ${markdownPath}`);
-
-    // 2. Save JSON to registry
+    // Determine paths
     const registryDir = path.join(repoPath, KANVAS_PATHS.baseDir, 'contracts', 'features');
     await fs.mkdir(registryDir, { recursive: true });
-
     const jsonPath = path.join(registryDir, `${feature.name}.contracts.json`);
+
+    // Get existing version and increment
+    const existingVersion = await this.getExistingContractVersion(jsonPath);
+    const newVersion = this.incrementVersion(existingVersion);
+
+    // Update JSON with new version
+    json.version = newVersion;
+    json.lastGenerated = new Date().toISOString();
+
+    // Update markdown with version header
+    const versionHeader = `<!-- Version: ${newVersion} | Generated: ${json.lastGenerated} -->\n\n`;
+    const markdownWithVersion = versionHeader + markdown;
+
+    // 1. Save Markdown to feature folder
+    const markdownPath = path.join(feature.basePath, 'CONTRACTS.md');
+    await fs.writeFile(markdownPath, markdownWithVersion, 'utf-8');
+    console.log(`[ContractGeneration] Saved markdown v${newVersion}: ${markdownPath}`);
+
+    // 2. Save JSON to registry (version already updated above)
     await fs.writeFile(jsonPath, JSON.stringify(json, null, 2), 'utf-8');
-    console.log(`[ContractGeneration] Saved JSON: ${jsonPath}`);
+    console.log(`[ContractGeneration] Saved JSON v${newVersion}: ${jsonPath}`);
+
+    // 3. Save to database for versioned history
+    try {
+      databaseService.saveContract({
+        repoPath,
+        contractType: 'feature',
+        name: feature.name,
+        version: newVersion,
+        content: markdownWithVersion,
+        jsonContent: JSON.stringify(json, null, 2),
+        filePath: markdownPath,
+        featureName: feature.name,
+        isRepoLevel: false,
+      });
+      console.log(`[ContractGeneration] Saved to database v${newVersion}: ${feature.name}`);
+    } catch (dbErr) {
+      console.warn(`[ContractGeneration] Failed to save to database:`, dbErr);
+      // Don't fail the generation if database save fails
+    }
 
     return { markdownPath, jsonPath };
   }
 
   /**
    * Generate contracts for all features in a repository
+   * By default uses incremental mode (only processes features with changes since last run)
+   * Set forceRefresh=true to regenerate all contracts
    */
   async generateAllContracts(
     repoPath: string,
@@ -1608,27 +1880,79 @@ export class ContractGenerationService extends BaseService {
         features = features.filter(f => options.features!.includes(f.name));
       }
 
-      console.log(`[ContractGeneration] Generating contracts for ${features.length} features`);
+      // Incremental mode: Only process features with changes since last run
+      // Unless forceRefresh is true or this is the first run
+      let featuresToProcess = features;
+      let isIncremental = false;
+      const currentCommitHash = await this.getCurrentCommitHash(repoPath);
 
-      // Generate contract for each feature
-      for (let i = 0; i < features.length; i++) {
+      if (!options.forceRefresh) {
+        const isFirst = await this.isFirstRun(repoPath);
+        if (!isFirst) {
+          const metadata = await this.getGenerationMetadata(repoPath);
+          if (metadata && metadata.lastCommitHash && metadata.lastCommitHash !== currentCommitHash) {
+            const changedFiles = await this.getChangedFilesSinceCommit(repoPath, metadata.lastCommitHash);
+            if (changedFiles.length > 0) {
+              featuresToProcess = this.getFeaturesWithChanges(features, changedFiles, repoPath);
+              isIncremental = true;
+              console.log(`[ContractGeneration] Incremental mode: ${changedFiles.length} files changed, ${featuresToProcess.length}/${features.length} features affected`);
+            } else {
+              console.log(`[ContractGeneration] No changes detected since last generation`);
+              featuresToProcess = [];
+              isIncremental = true;
+            }
+          } else if (metadata && metadata.lastCommitHash === currentCommitHash) {
+            console.log(`[ContractGeneration] No new commits since last generation`);
+            featuresToProcess = [];
+            isIncremental = true;
+          }
+        } else {
+          console.log(`[ContractGeneration] First run detected, processing all features`);
+        }
+      } else {
+        console.log(`[ContractGeneration] Force refresh mode, processing all features`);
+      }
+
+      console.log(`[ContractGeneration] Generating contracts for ${featuresToProcess.length} features${isIncremental ? ' (incremental)' : ''}`);
+
+      // If no features to process (incremental with no changes), return early with success
+      if (featuresToProcess.length === 0 && isIncremental) {
+        const batchResult: BatchContractGenerationResult = {
+          totalFeatures: features.length,
+          generated: 0,
+          skipped: features.length,
+          failed: 0,
+          results: features.map(f => ({
+            feature: f.name,
+            success: true,
+            markdownPath: path.join(f.basePath, 'CONTRACTS.md'),
+          })),
+          duration: Date.now() - startTime,
+        };
+        this.emitToRenderer(IPC.CONTRACT_GENERATION_COMPLETE, batchResult);
+        console.log(`[ContractGeneration] No changes detected, skipped all ${features.length} features`);
+        return batchResult;
+      }
+
+      // Generate contract for each feature that needs processing
+      for (let i = 0; i < featuresToProcess.length; i++) {
         if (this.isCancelled) {
           console.log('[ContractGeneration] Cancelled by user');
           break;
         }
 
-        const feature = features[i];
+        const feature = featuresToProcess[i];
 
         this.emitProgress({
-          total: features.length,
+          total: featuresToProcess.length,
           completed: i,
           currentFeature: feature.name,
           currentStep: 'generating',
           errors: results.filter(r => !r.success).map(r => r.error || 'Unknown error'),
         });
 
-        // Check if should skip existing
-        if (options.skipExisting) {
+        // Check if should skip existing (only in non-incremental mode or forceRefresh)
+        if (options.skipExisting && !isIncremental) {
           const existingPath = path.join(feature.basePath, 'CONTRACTS.md');
           try {
             await fs.access(existingPath);
@@ -1658,11 +1982,23 @@ export class ContractGenerationService extends BaseService {
         }
       }
 
+      // Save generation metadata for future incremental runs
+      const generatedFeatureNames = results.filter(r => r.success).map(r => r.feature);
+      await this.saveGenerationMetadata(repoPath, {
+        lastGeneratedAt: new Date().toISOString(),
+        lastCommitHash: currentCommitHash,
+        generatedFeatures: generatedFeatureNames,
+        version: '1.0',
+      });
+
       const duration = Date.now() - startTime;
+      const skippedCount = isIncremental ? (features.length - featuresToProcess.length) :
+        (options.skipExisting ? results.filter(r => r.success && !r.error).length : 0);
+
       const batchResult: BatchContractGenerationResult = {
         totalFeatures: features.length,
         generated: results.filter(r => r.success).length,
-        skipped: options.skipExisting ? results.filter(r => r.success && !r.error).length : 0,
+        skipped: skippedCount,
         failed: results.filter(r => !r.success).length,
         results,
         duration,
@@ -1670,7 +2006,7 @@ export class ContractGenerationService extends BaseService {
 
       // Emit completion
       this.emitToRenderer(IPC.CONTRACT_GENERATION_COMPLETE, batchResult);
-      console.log(`[ContractGeneration] Batch complete: ${batchResult.generated} generated, ${batchResult.failed} failed in ${duration}ms`);
+      console.log(`[ContractGeneration] Batch complete: ${batchResult.generated} generated, ${batchResult.skipped} skipped (unchanged), ${batchResult.failed} failed in ${duration}ms`);
 
       return batchResult;
     }, 'GENERATE_ALL_ERROR');
@@ -1753,9 +2089,48 @@ export class ContractGenerationService extends BaseService {
           });
 
           if (result.success && result.data) {
-            await fs.writeFile(contractPath, result.data, 'utf-8');
+            // Clean up AI response - remove any "thinking" text
+            const cleanedContent = this.cleanupAIResponse(result.data);
+
+            // Get existing version and increment
+            const jsonSidecarPath = contractPath.replace('.md', '.json');
+            const existingVersion = await this.getExistingContractVersion(jsonSidecarPath);
+            const newVersion = this.incrementVersion(existingVersion);
+
+            // Add version header to markdown
+            const versionHeader = `<!-- Version: ${newVersion} | Generated: ${new Date().toISOString()} -->\n\n`;
+            const contentWithVersion = versionHeader + cleanedContent;
+            await fs.writeFile(contractPath, contentWithVersion, 'utf-8');
+
+            // Save JSON sidecar with version info
+            const jsonSidecar = {
+              type: contract.type,
+              version: newVersion,
+              lastGenerated: new Date().toISOString(),
+              file: contract.file,
+              description: contract.description,
+            };
+            await fs.writeFile(jsonSidecarPath, JSON.stringify(jsonSidecar, null, 2), 'utf-8');
+
+            // Save to database for versioned history
+            try {
+              databaseService.saveContract({
+                repoPath,
+                contractType: contract.type,
+                name: contract.file.replace('.md', ''),
+                version: newVersion,
+                content: contentWithVersion,
+                jsonContent: JSON.stringify(jsonSidecar, null, 2),
+                filePath: contractPath,
+                isRepoLevel: true,
+              });
+              console.log(`[ContractGeneration] Saved to database v${newVersion}: ${contract.file}`);
+            } catch (dbErr) {
+              console.warn(`[ContractGeneration] Failed to save to database:`, dbErr);
+            }
+
             generated.push(contract.file);
-            console.log(`[ContractGeneration] Generated repo contract: ${contract.file}`);
+            console.log(`[ContractGeneration] Generated repo contract v${newVersion}: ${contract.file}`);
           } else {
             errors.push(`Failed to generate ${contract.file}: ${result.error?.message || 'Unknown error'}`);
           }
@@ -1768,6 +2143,121 @@ export class ContractGenerationService extends BaseService {
 
       return { generated, skipped, errors };
     }, 'GENERATE_REPO_CONTRACTS_ERROR');
+  }
+
+  /**
+   * Generate a single contract by type
+   * Used for generating individual missing contracts from the UI
+   */
+  async generateSingleContract(
+    repoPath: string,
+    contractType: string
+  ): Promise<IpcResult<{ file: string; success: boolean; error?: string }>> {
+    return this.wrap(async () => {
+      // Contract definitions mapping - using repo-level prompts that accept repo_name, repo_structure, features_summary, feature_count
+      const contractDefs: Record<string, { file: string; promptKey: string; description: string }> = {
+        api: { file: 'API_CONTRACT.md', promptKey: 'generate_repo_api_contract', description: 'Aggregated API endpoints across all features' },
+        infra: { file: 'INFRA_CONTRACT.md', promptKey: 'generate_repo_infra_contract', description: 'Infrastructure, environment variables, and deployment config' },
+        integrations: { file: 'THIRD_PARTY_INTEGRATIONS.md', promptKey: 'generate_repo_third_party_contract', description: 'External service integrations and SDKs' },
+        schema: { file: 'DATABASE_SCHEMA_CONTRACT.md', promptKey: 'generate_repo_database_schema_contract', description: 'Database tables, schemas, and migrations' },
+        events: { file: 'EVENTS_CONTRACT.md', promptKey: 'generate_repo_events_contract', description: 'Event bus, WebSocket, and pub/sub events' },
+        admin: { file: 'ADMIN_CONTRACT.md', promptKey: 'generate_repo_admin_contract', description: 'Admin panel capabilities and permissions' },
+        sql: { file: 'SQL_CONTRACT.md', promptKey: 'generate_repo_sql_contract', description: 'Reusable SQL queries and stored procedures' },
+        features: { file: 'FEATURES_CONTRACT.md', promptKey: 'generate_repo_features_contract', description: 'Feature flags and configuration' },
+        css: { file: 'CSS_CONTRACT.md', promptKey: 'generate_repo_css_contract', description: 'Design tokens and CSS variables' },
+        prompts: { file: 'PROMPTS_CONTRACT.md', promptKey: 'generate_repo_prompts_contract', description: 'AI prompts, skills, and agent configurations' },
+      };
+
+      const contractDef = contractDefs[contractType];
+      if (!contractDef) {
+        throw new Error(`Unknown contract type: ${contractType}`);
+      }
+
+      // Create contracts directory
+      const contractsDir = path.join(repoPath, 'House_Rules_Contracts');
+      await fs.mkdir(contractsDir, { recursive: true });
+
+      const contractPath = path.join(contractsDir, contractDef.file);
+
+      // Get repo structure for context
+      const structureResult = await this.analyzeRepoStructure(repoPath);
+      const repoStructure = structureResult.success ? structureResult.data : null;
+
+      // Get discovered features for aggregation
+      const featuresResult = await this.discoverFeatures(repoPath, false);
+      const features = featuresResult.success ? featuresResult.data || [] : [];
+
+      const featuresSummary = features.map(f => ({
+        name: f.name,
+        description: f.description || '',
+        apiFiles: f.files.api.length,
+        schemaFiles: f.files.schema.length,
+        testFiles: f.files.tests.e2e.length + f.files.tests.unit.length + f.files.tests.integration.length,
+      }));
+
+      console.log(`[ContractGeneration] Generating single contract: ${contractDef.file}`);
+
+      // Generate using AI
+      const result = await this.aiService.sendWithMode({
+        modeId: 'contract_generator',
+        promptKey: contractDef.promptKey,
+        variables: {
+          repo_name: path.basename(repoPath),
+          repo_structure: repoStructure ? JSON.stringify(repoStructure, null, 2) : 'Not available',
+          features_summary: JSON.stringify(featuresSummary, null, 2),
+          feature_count: features.length.toString(),
+        },
+        userMessage: `Generate a comprehensive ${contractDef.description} for this repository.`,
+      });
+
+      if (result.success && result.data) {
+        // Clean up AI response
+        const cleanedContent = this.cleanupAIResponse(result.data);
+
+        // Get existing version and increment
+        const jsonSidecarPath = contractPath.replace('.md', '.json');
+        const existingVersion = await this.getExistingContractVersion(jsonSidecarPath);
+        const newVersion = this.incrementVersion(existingVersion);
+
+        // Add version header
+        const versionHeader = `<!-- Version: ${newVersion} | Generated: ${new Date().toISOString()} -->\n\n`;
+        const contentWithVersion = versionHeader + cleanedContent;
+        await fs.writeFile(contractPath, contentWithVersion, 'utf-8');
+
+        // Save JSON sidecar
+        const jsonSidecar = {
+          type: contractType,
+          version: newVersion,
+          lastGenerated: new Date().toISOString(),
+          file: contractDef.file,
+          description: contractDef.description,
+        };
+        await fs.writeFile(jsonSidecarPath, JSON.stringify(jsonSidecar, null, 2), 'utf-8');
+
+        // Save to database
+        try {
+          databaseService.saveContract({
+            repoPath,
+            contractType,
+            name: contractDef.file.replace('.md', ''),
+            version: newVersion,
+            content: contentWithVersion,
+            jsonContent: JSON.stringify(jsonSidecar, null, 2),
+            filePath: contractPath,
+            isRepoLevel: true,
+          });
+        } catch (dbErr) {
+          console.warn('[ContractGeneration] Failed to save to database:', dbErr);
+        }
+
+        console.log(`[ContractGeneration] Successfully generated: ${contractDef.file}`);
+        return { file: contractDef.file, success: true };
+      } else {
+        const errorMsg = result.error?.message || 'Unknown error';
+        console.error(`[ContractGeneration] Failed to generate ${contractDef.file}:`, errorMsg);
+        return { file: contractDef.file, success: false, error: errorMsg };
+      }
+    }, 'GENERATE_SINGLE_CONTRACT_ERROR');
   }
 
   /**

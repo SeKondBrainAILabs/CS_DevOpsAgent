@@ -925,6 +925,13 @@ const api = {
     }>> =>
       ipcRenderer.invoke(IPC.CONTRACT_GENERATE_ALL, repoPath, options),
 
+    generateSingle: (repoPath: string, contractType: string): Promise<IpcResult<{
+      file: string;
+      success: boolean;
+      error?: string;
+    }>> =>
+      ipcRenderer.invoke(IPC.CONTRACT_GENERATE_SINGLE, repoPath, contractType),
+
     cancel: (): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.CONTRACT_CANCEL_GENERATION),
 
@@ -1519,6 +1526,14 @@ const api = {
       ipcRenderer.on(IPC.REBASE_AUTO_COMPLETED, handler);
       return () => ipcRenderer.removeListener(IPC.REBASE_AUTO_COMPLETED, handler);
     },
+  },
+
+  // ==========================================================================
+  // FILE SYSTEM API
+  // ==========================================================================
+  file: {
+    readContent: (filePath: string): Promise<IpcResult<string>> =>
+      ipcRenderer.invoke(IPC.FILE_READ_CONTENT, filePath),
   },
 
   // ==========================================================================

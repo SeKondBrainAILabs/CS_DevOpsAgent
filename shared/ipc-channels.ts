@@ -235,6 +235,7 @@ export const IPC = {
   CONTRACT_LOAD_DISCOVERED_FEATURES: 'contract:load-discovered-features',
   CONTRACT_GENERATE_FEATURE: 'contract:generate-feature',
   CONTRACT_GENERATE_ALL: 'contract:generate-all',
+  CONTRACT_GENERATE_SINGLE: 'contract:generate-single',
   CONTRACT_CANCEL_GENERATION: 'contract:cancel-generation',
   // New: Repo structure analysis and README generation
   CONTRACT_ANALYZE_REPO_STRUCTURE: 'contract:analyze-repo-structure',
@@ -282,6 +283,12 @@ export const IPC = {
   ANALYSIS_PROGRESS: 'analysis:progress',
   ANALYSIS_COMPLETE: 'analysis:complete',
   ANALYSIS_ERROR: 'analysis:error',
+
+  // ==========================================================================
+  // FILE SYSTEM CHANNELS
+  // Read file content for in-app viewing
+  // ==========================================================================
+  FILE_READ_CONTENT: 'file:read-content',
 
   // ==========================================================================
   // SHELL/QUICK ACTION CHANNELS

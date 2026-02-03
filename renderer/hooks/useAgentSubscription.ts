@@ -31,8 +31,13 @@ export function useAgentSubscription(): void {
     window.api.agent.list().then((result) => {
       if (result.success && result.data) {
         setAgents(result.data);
-        setInitialized(true);
       }
+      // Always mark as initialized, even if no agents
+      setInitialized(true);
+    }).catch((err) => {
+      console.error('Failed to load agents:', err);
+      // Still mark as initialized to show empty state instead of skeleton
+      setInitialized(true);
     });
 
     // Subscribe to agent registered events

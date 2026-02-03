@@ -132,6 +132,45 @@ export class DatabaseService extends BaseService {
       CREATE INDEX IF NOT EXISTS idx_commits_timestamp ON commits(timestamp);
     `);
 
+    // Contracts table (for versioned contract storage)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS contracts (
+        id TEXT PRIMARY KEY,
+        repo_path TEXT NOT NULL,
+        contract_type TEXT NOT NULL,
+        name TEXT NOT NULL,
+        version TEXT NOT NULL,
+        content TEXT NOT NULL,
+        json_content TEXT,
+        file_path TEXT,
+        feature_name TEXT,
+        is_repo_level INTEGER DEFAULT 0,
+        generated_at TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_contracts_repo ON contracts(repo_path);
+      CREATE INDEX IF NOT EXISTS idx_contracts_type ON contracts(contract_type);
+      CREATE INDEX IF NOT EXISTS idx_contracts_feature ON contracts(feature_name);
+      CREATE INDEX IF NOT EXISTS idx_contracts_version ON contracts(version);
+    `);
+
+    // Contract versions table (for tracking version history)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS contract_versions (
+        id TEXT PRIMARY KEY,
+        contract_id TEXT NOT NULL,
+        version TEXT NOT NULL,
+        content TEXT NOT NULL,
+        json_content TEXT,
+        generated_at TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (contract_id) REFERENCES contracts(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_contract_versions_contract ON contract_versions(contract_id);
+    `);
+
     console.log('[DatabaseService] Tables created/verified');
   }
 
@@ -577,6 +616,238 @@ export class DatabaseService extends BaseService {
       details: row.details ? JSON.parse(row.details) : undefined,
       commitHash: row.commit_hash || undefined,
     }));
+  }
+
+  // ==========================================================================
+  // CONTRACTS
+  // ==========================================================================
+
+  /**
+   * Save a contract to the database
+   */
+  saveContract(params: {
+    repoPath: string;
+    contractType: string;
+    name: string;
+    version: string;
+    content: string;
+    jsonContent?: string;
+    filePath?: string;
+    featureName?: string;
+    isRepoLevel?: boolean;
+  }): string {
+    if (!this.db) return '';
+
+    const id = `contract_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const generatedAt = new Date().toISOString();
+
+    // Check if contract already exists (by repo, type, and feature/name)
+    const existingStmt = this.db.prepare(`
+      SELECT id, version FROM contracts
+      WHERE repo_path = ? AND contract_type = ? AND name = ?
+        AND (feature_name = ? OR (feature_name IS NULL AND ? IS NULL))
+    `);
+    const existing = existingStmt.get(
+      params.repoPath,
+      params.contractType,
+      params.name,
+      params.featureName || null,
+      params.featureName || null
+    ) as { id: string; version: string } | undefined;
+
+    if (existing) {
+      // Save current version to history before updating
+      const historyId = `cv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const historyStmt = this.db.prepare(`
+        INSERT INTO contract_versions (id, contract_id, version, content, json_content, generated_at)
+        SELECT ?, id, version, content, json_content, generated_at
+        FROM contracts WHERE id = ?
+      `);
+      historyStmt.run(historyId, existing.id);
+
+      // Update existing contract
+      const updateStmt = this.db.prepare(`
+        UPDATE contracts SET
+          version = ?,
+          content = ?,
+          json_content = ?,
+          file_path = ?,
+          generated_at = ?
+        WHERE id = ?
+      `);
+      updateStmt.run(
+        params.version,
+        params.content,
+        params.jsonContent || null,
+        params.filePath || null,
+        generatedAt,
+        existing.id
+      );
+
+      console.log(`[DatabaseService] Updated contract ${params.name} v${params.version}`);
+      return existing.id;
+    }
+
+    // Insert new contract
+    const insertStmt = this.db.prepare(`
+      INSERT INTO contracts (id, repo_path, contract_type, name, version, content, json_content, file_path, feature_name, is_repo_level, generated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    insertStmt.run(
+      id,
+      params.repoPath,
+      params.contractType,
+      params.name,
+      params.version,
+      params.content,
+      params.jsonContent || null,
+      params.filePath || null,
+      params.featureName || null,
+      params.isRepoLevel ? 1 : 0,
+      generatedAt
+    );
+
+    console.log(`[DatabaseService] Saved new contract ${params.name} v${params.version}`);
+    return id;
+  }
+
+  /**
+   * Get contracts for a repository
+   */
+  getContractsForRepo(repoPath: string): Array<{
+    id: string;
+    contractType: string;
+    name: string;
+    version: string;
+    filePath?: string;
+    featureName?: string;
+    isRepoLevel: boolean;
+    generatedAt: string;
+  }> {
+    if (!this.db) return [];
+
+    const stmt = this.db.prepare(`
+      SELECT id, contract_type, name, version, file_path, feature_name, is_repo_level, generated_at
+      FROM contracts
+      WHERE repo_path = ?
+      ORDER BY is_repo_level DESC, name ASC
+    `);
+
+    const rows = stmt.all(repoPath) as any[];
+    return rows.map(row => ({
+      id: row.id,
+      contractType: row.contract_type,
+      name: row.name,
+      version: row.version,
+      filePath: row.file_path || undefined,
+      featureName: row.feature_name || undefined,
+      isRepoLevel: row.is_repo_level === 1,
+      generatedAt: row.generated_at,
+    }));
+  }
+
+  /**
+   * Get a specific contract with full content
+   */
+  getContract(contractId: string): {
+    id: string;
+    repoPath: string;
+    contractType: string;
+    name: string;
+    version: string;
+    content: string;
+    jsonContent?: string;
+    filePath?: string;
+    featureName?: string;
+    isRepoLevel: boolean;
+    generatedAt: string;
+  } | null {
+    if (!this.db) return null;
+
+    const stmt = this.db.prepare('SELECT * FROM contracts WHERE id = ?');
+    const row = stmt.get(contractId) as any;
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      repoPath: row.repo_path,
+      contractType: row.contract_type,
+      name: row.name,
+      version: row.version,
+      content: row.content,
+      jsonContent: row.json_content || undefined,
+      filePath: row.file_path || undefined,
+      featureName: row.feature_name || undefined,
+      isRepoLevel: row.is_repo_level === 1,
+      generatedAt: row.generated_at,
+    };
+  }
+
+  /**
+   * Get contract version history
+   */
+  getContractVersionHistory(contractId: string): Array<{
+    id: string;
+    version: string;
+    generatedAt: string;
+  }> {
+    if (!this.db) return [];
+
+    const stmt = this.db.prepare(`
+      SELECT id, version, generated_at
+      FROM contract_versions
+      WHERE contract_id = ?
+      ORDER BY generated_at DESC
+    `);
+
+    const rows = stmt.all(contractId) as any[];
+    return rows.map(row => ({
+      id: row.id,
+      version: row.version,
+      generatedAt: row.generated_at,
+    }));
+  }
+
+  /**
+   * Get a specific version's content
+   */
+  getContractVersion(versionId: string): {
+    version: string;
+    content: string;
+    jsonContent?: string;
+    generatedAt: string;
+  } | null {
+    if (!this.db) return null;
+
+    const stmt = this.db.prepare('SELECT version, content, json_content, generated_at FROM contract_versions WHERE id = ?');
+    const row = stmt.get(versionId) as any;
+
+    if (!row) return null;
+
+    return {
+      version: row.version,
+      content: row.content,
+      jsonContent: row.json_content || undefined,
+      generatedAt: row.generated_at,
+    };
+  }
+
+  /**
+   * Get the latest version of a contract by type and name
+   */
+  getLatestContractVersion(repoPath: string, contractType: string, name: string): string | null {
+    if (!this.db) return null;
+
+    const stmt = this.db.prepare(`
+      SELECT version FROM contracts
+      WHERE repo_path = ? AND contract_type = ? AND name = ?
+      LIMIT 1
+    `);
+    const row = stmt.get(repoPath, contractType, name) as { version: string } | undefined;
+
+    return row?.version || null;
   }
 
   // ==========================================================================
