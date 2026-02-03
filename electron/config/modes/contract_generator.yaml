@@ -534,10 +534,13 @@ prompts:
     system: |
       {base_system}
 
-      Generate an API Contract based on ACTUAL endpoints found in the repository structure.
-      IMPORTANT: Do NOT output placeholder text like "[Feature Name]" or "(list actual endpoints)".
-      Extract real endpoint paths, methods, and handlers from the repository structure.
-      If no endpoints are found, say "No API endpoints detected".
+      Generate an API Contract documenting ACTUAL endpoints found in the codebase.
+      CRITICAL RULES:
+      1. ONLY document endpoints/APIs explicitly shown in the extracted data
+      2. NEVER use placeholder text like "[Feature Name]", "[endpoint]", or "[Description]"
+      3. If no endpoints are found, write "No API endpoints detected in this repository"
+      4. For Electron apps, document IPC handlers as the API surface
+      5. Use markdown tables with | pipe characters
 
     user_template: |
       Repository: {repo_name}
@@ -552,31 +555,31 @@ prompts:
       {features_summary}
       ```
 
-      Based on the repository structure above, generate an API Contract with ACTUAL endpoints found.
-      Look for route files, controller files, and API handlers in the structure.
+      IMPORTANT: The user message below may contain EXTRACTED API ENDPOINTS data.
+      Use that data to generate the contract. Do NOT invent endpoints - only document what's found.
 
-      Output format (fill with REAL data from the structure, not placeholders):
+      Generate an API Contract using this format:
 
       # {repo_name} - API Contract
 
-      > [Write actual description based on what you see in the repo structure]
+      > Brief description of the API type (REST, GraphQL, IPC, etc.)
 
       ## Authentication
-      | Method | Header | Notes |
-      |--------|--------|-------|
-      [Fill with actual auth methods found, or write "None detected"]
+      | Method | Header/Mechanism | Notes |
+      |--------|------------------|-------|
+      (list actual auth methods, or "None detected")
 
-      ## Endpoints
-      | Method | Path | Handler | Description |
-      |--------|------|---------|-------------|
-      [Fill each row with ACTUAL endpoints from routes/controllers/api folders]
+      ## Endpoints / IPC Handlers
+      | Method/Channel | Path/Handler | Parameters | Returns | Description |
+      |----------------|--------------|------------|---------|-------------|
+      (list actual endpoints from extracted data)
 
-      ## Shared Types
+      ## Request/Response Types
       | Type | Location | Description |
       |------|----------|-------------|
-      [Fill with actual types from types/interfaces folders]
+      (list actual types found)
 
-      CRITICAL: Replace all bracketed placeholders with real data. Never output "[Feature Name]" or similar.
+      REMEMBER: Use ONLY actual endpoint names and paths from the extracted data.
 
   # ==========================================================================
   # REPO-LEVEL EVENTS CONTRACT
@@ -586,8 +589,13 @@ prompts:
     system: |
       {base_system}
 
-      Generate a CONCISE Events Contract aggregating all events across the repository.
-      List only actual events found in the code.
+      Generate an Events Contract documenting ACTUAL events found in the codebase.
+      CRITICAL RULES:
+      1. ONLY document events explicitly found in the code
+      2. NEVER use placeholder text like "[Event Name]" or "[Feature Name]"
+      3. If no events are found, write "No event system detected in this repository"
+      4. Look for EventEmitter, IPC events, WebSocket events, pub/sub patterns
+      5. Use markdown tables with | pipe characters
 
     user_template: |
       Repository: {repo_name}
@@ -602,28 +610,28 @@ prompts:
       {features_summary}
       ```
 
-      Generate a CONCISE Events Contract:
+      Generate an Events Contract using this format:
 
       # {repo_name} - Events Contract
 
-      > Brief description of the event architecture
+      > Brief description of the event architecture (IPC, EventEmitter, WebSocket, etc.)
 
-      ## Event Bus / Message Queue
-      | Provider | Topics/Channels | Notes |
-      |----------|-----------------|-------|
+      ## Event System
+      | Type | Provider | Notes |
+      |------|----------|-------|
+      (describe actual event system used)
 
-      ## Events by Feature
+      ## Events
+      | Event Name | Direction | Payload Type | Handler/Emitter |
+      |------------|-----------|--------------|-----------------|
+      (list actual events found in code)
 
-      ### [Feature Name]
-      | Event | Direction | Payload | Handler |
-      |-------|-----------|---------|---------|
-      (list actual events found)
+      ## IPC Channels (if Electron)
+      | Channel | Direction | Data | Purpose |
+      |---------|-----------|------|---------|
+      (list actual IPC channels)
 
-      ## Cross-Feature Communication
-      | Publisher | Event | Subscribers |
-      |-----------|-------|-------------|
-
-      Only include events actually found in the code.
+      REMEMBER: Only document events that are actually defined in the codebase.
 
   # ==========================================================================
   # REPO-LEVEL INFRA CONTRACT
@@ -633,8 +641,17 @@ prompts:
     system: |
       {base_system}
 
-      Generate a CONCISE Infrastructure Contract aggregating all infra across the repository.
-      List actual env vars, ports, and services found.
+      Generate an Infrastructure Contract documenting ACTUAL infrastructure configuration found in the extracted data.
+
+      ABSOLUTE RULES - VIOLATION MEANS FAILURE:
+      1. Parse the docker-compose.yml content in the user message to find REAL services, ports, and environment variables
+      2. NEVER output placeholder text like "[VAR_NAME]", "[port]", "[Description]", "Initial Template", or "Template only"
+      3. NEVER output "Status: Initial Template" or template instructions
+      4. If docker-compose.yml shows postgres on port 9000, write "postgres | 9000 | PostgreSQL database"
+      5. If docker-compose.yml shows redis on port 9001, write "redis | 9001 | Redis cache"
+      6. Extract ALL services defined in docker-compose: postgres, redis, neo4j, weaviate, kafka, minio, kong, etc.
+      7. Extract environment variables from the service definitions (POSTGRES_USER, NEO4J_AUTH, etc.)
+      8. Use markdown tables with | pipe characters
 
     user_template: |
       Repository: {repo_name}
@@ -649,28 +666,43 @@ prompts:
       {features_summary}
       ```
 
-      Generate a CONCISE Infrastructure Contract:
+      READ THE INFRASTRUCTURE DATA BELOW AND EXTRACT REAL VALUES.
+      The docker-compose.yml content contains all the services, ports, and environment variables.
+
+      Generate an Infrastructure Contract using this format:
 
       # {repo_name} - Infrastructure Contract
 
-      ## Environment Variables
-      | Variable | Required | Default | Description |
-      |----------|----------|---------|-------------|
-      (list actual env vars found in .env.example, config files)
+      > Brief description based on what you see in docker-compose (e.g., "Microservices architecture using Docker with PostgreSQL, Redis, Neo4j, Kafka")
 
       ## Services & Ports
-      | Service | Port | Protocol | Description |
-      |---------|------|----------|-------------|
+      | Service | Port (External:Internal) | Image | Description |
+      |---------|--------------------------|-------|-------------|
+      | postgres | 9000:5432 | postgres:16-alpine | Primary PostgreSQL database |
+      | redis | 9001:6379 | redis:7-alpine | Cache and session store |
+      (continue with ALL services from docker-compose)
 
-      ## External Dependencies
-      | Service | Purpose | Config Location |
-      |---------|---------|-----------------|
+      ## Environment Variables (from docker-compose)
+      | Service | Variable | Value/Reference | Purpose |
+      |---------|----------|-----------------|---------|
+      | postgres | POSTGRES_USER | sb001 | Database user |
+      | postgres | POSTGRES_PASSWORD | sb001 | Database password |
+      (continue with actual env vars from docker-compose)
 
-      ## Deployment
-      | Platform | Config File | Notes |
-      |----------|-------------|-------|
+      ## Infrastructure Components
+      | Component | Type | Purpose |
+      |-----------|------|---------|
+      | PostgreSQL | Database | Primary data store |
+      | Redis | Cache | Session/cache management |
+      | Neo4j | Graph DB | Graph relationships |
+      (based on actual services found)
 
-      Only include actual infrastructure found in the code.
+      ## Docker Profiles
+      | Profile | Services | Purpose |
+      |---------|----------|---------|
+      (list profiles if found in docker-compose)
+
+      CRITICAL: Output REAL data from docker-compose, not templates.
 
   # ==========================================================================
   # REPO-LEVEL ADMIN CONTRACT
@@ -680,8 +712,13 @@ prompts:
     system: |
       {base_system}
 
-      Generate a CONCISE Admin Contract aggregating all admin capabilities.
-      List actual admin features found in the code.
+      Generate an Admin Contract documenting ACTUAL admin capabilities found in the codebase.
+      CRITICAL RULES:
+      1. ONLY document admin features explicitly found in the code
+      2. NEVER use placeholder text like "[Entity]", "[Permission]", or "[Description]"
+      3. If no admin features are found, write "No admin panel detected in this repository"
+      4. Look for admin routes, CRUD operations, role-based access control
+      5. Use markdown tables with | pipe characters
 
     user_template: |
       Repository: {repo_name}
@@ -696,23 +733,28 @@ prompts:
       {features_summary}
       ```
 
-      Generate a CONCISE Admin Contract:
+      Generate an Admin Contract using this format:
 
       # {repo_name} - Admin Contract
 
-      ## Admin Routes
-      | Method | Path | Roles | Description |
-      |--------|------|-------|-------------|
+      > Brief description of admin capabilities
 
-      ## CRUD Operations
-      | Entity | Operations | Permissions |
-      |--------|------------|-------------|
+      ## Admin Routes/Endpoints
+      | Method | Path/Channel | Required Role | Description |
+      |--------|--------------|---------------|-------------|
+      (list actual admin routes found)
 
-      ## Permissions
-      | Permission | Description | Roles |
-      |------------|-------------|-------|
+      ## Managed Entities
+      | Entity | Operations | Access Control |
+      |--------|------------|----------------|
+      (list actual entities with admin CRUD)
 
-      Only include actual admin capabilities found in the code.
+      ## Permissions/Roles
+      | Permission | Description |
+      |------------|-------------|
+      (list actual permissions defined)
+
+      REMEMBER: Only document admin features that are actually implemented.
 
   # ==========================================================================
   # REPO-LEVEL SQL CONTRACT
@@ -722,8 +764,13 @@ prompts:
     system: |
       {base_system}
 
-      Generate a CONCISE SQL Contract aggregating all database operations.
-      List actual queries and tables found in the code.
+      Generate a SQL Contract documenting ACTUAL database queries and operations found in the codebase.
+      CRITICAL RULES:
+      1. ONLY document SQL operations explicitly shown in the extracted data
+      2. NEVER use placeholder text like "[query_name]", "[table]", or "[Description]"
+      3. If no SQL operations are found, write "No SQL operations detected in this repository"
+      4. Document prepared statements, raw queries, and ORM operations
+      5. Use markdown tables with | pipe characters
 
     user_template: |
       Repository: {repo_name}
@@ -738,27 +785,31 @@ prompts:
       {features_summary}
       ```
 
-      Generate a CONCISE SQL Contract:
+      IMPORTANT: The user message below may contain EXTRACTED SCHEMA DATA and SQL statements.
+      Use that data to generate the contract. Do NOT invent queries - only document what's found.
+
+      Generate a SQL Contract using this format:
 
       # {repo_name} - SQL Contract
 
-      ## Tables
-      | Table | Feature | Description |
-      |-------|---------|-------------|
+      > Brief description of database type and query patterns used
 
-      ## Common Queries
-      | Query | Tables | Type | Description |
-      |-------|--------|------|-------------|
+      ## Tables Used
+      | Table | Operations | Description |
+      |-------|------------|-------------|
+      (list actual tables from extracted data)
 
-      ## Stored Procedures
-      | Name | Parameters | Purpose |
-      |------|------------|---------|
+      ## Common Query Patterns
+      | Operation | Table(s) | Description |
+      |-----------|----------|-------------|
+      (list actual query patterns found)
 
-      ## Views
-      | Name | Base Tables | Purpose |
-      |------|-------------|---------|
+      ## Prepared Statements
+      | Name/Location | Query Type | Purpose |
+      |---------------|------------|---------|
+      (list actual prepared statements)
 
-      Only include actual SQL found in the code.
+      REMEMBER: Use ONLY actual query patterns from the extracted data.
 
   # ==========================================================================
   # REPO-LEVEL THIRD PARTY CONTRACT
@@ -768,8 +819,16 @@ prompts:
     system: |
       {base_system}
 
-      Generate a CONCISE Third Party Integrations Contract aggregating all external services.
-      List actual external services/APIs used in the code.
+      Generate a Third Party Integrations Contract documenting ACTUAL external services found in the extracted data.
+
+      ABSOLUTE RULES - VIOLATION MEANS FAILURE:
+      1. Parse the INTEGRATIONS DATA in the user message to find REAL third-party services
+      2. NEVER output placeholder text like "[Service]", "[API]", "[Description]", "Initial Template", or "Template only"
+      3. NEVER output "Status: Initial Template" or template instructions
+      4. If package.json shows "groq-sdk": "^0.x", document Groq as an AI service integration
+      5. If docker-compose shows neo4j, postgres, redis, kafka images - document those
+      6. Extract ALL third-party dependencies: aws-sdk, stripe, sendgrid, firebase, openai, etc.
+      7. Use markdown tables with | pipe characters
 
     user_template: |
       Repository: {repo_name}
@@ -784,23 +843,42 @@ prompts:
       {features_summary}
       ```
 
-      Generate a CONCISE Third Party Integrations Contract:
+      READ THE INTEGRATIONS DATA BELOW AND EXTRACT REAL VALUES.
+      The data contains package.json dependencies and docker-compose services.
+
+      Generate a Third Party Integrations Contract using this format:
 
       # {repo_name} - Third Party Integrations
 
-      ## Services
-      | Service | Purpose | Config Location |
-      |---------|---------|-----------------|
+      > Brief description based on what integrations you find (e.g., "AI services via Groq, graph database via Neo4j, caching via Redis")
 
-      ## APIs
-      | API | Base URL | Auth | Endpoints Used |
-      |-----|----------|------|----------------|
+      ## Infrastructure Services (from Docker)
+      | Service | Image | Purpose | Port |
+      |---------|-------|---------|------|
+      | PostgreSQL | postgres:16-alpine | Primary database | 9000 |
+      | Redis | redis:7-alpine | Cache and sessions | 9001 |
+      | Neo4j | neo4j:5.15-community | Graph database | 9006/9007 |
+      (continue with ALL services from docker-compose)
 
-      ## SDKs
-      | SDK | Version | Purpose |
-      |-----|---------|---------|
+      ## External API Integrations
+      | Service | Package | Purpose | Auth Method |
+      |---------|---------|---------|-------------|
+      | Groq AI | groq-sdk | LLM inference | API Key (GROQ_API_KEY) |
+      | OpenAI | openai | Embeddings | API Key (OPENAI_API_KEY) |
+      (based on actual packages found)
 
-      Only include actual integrations found in the code.
+      ## NPM Dependencies (Third-Party)
+      | Package | Version | Category | Purpose |
+      |---------|---------|----------|---------|
+      (list actual third-party packages from extracted data)
+
+      ## Environment Variables for Integrations
+      | Variable | Service | Purpose |
+      |----------|---------|---------|
+      | GROQ_API_KEY | Groq | AI service authentication |
+      (based on env vars found in docker-compose or .env)
+
+      CRITICAL: Output REAL data from the extracted integrations, not templates.
 
   # ==========================================================================
   # REPO-LEVEL DATABASE SCHEMA CONTRACT
@@ -810,8 +888,13 @@ prompts:
     system: |
       {base_system}
 
-      Generate a CONCISE Database Schema Contract aggregating all tables.
-      List actual tables found - no placeholder examples.
+      Generate a Database Schema Contract documenting ACTUAL tables found in the codebase.
+      CRITICAL RULES:
+      1. ONLY document tables that are explicitly shown in the extracted data
+      2. NEVER use placeholder text like "[table_name]", "[column]", or "[Description]"
+      3. If no tables are found, write "No database tables detected in this repository"
+      4. Extract table names, columns, and types from CREATE TABLE statements
+      5. Use markdown tables with | pipe characters
 
     user_template: |
       Repository: {repo_name}
@@ -826,27 +909,32 @@ prompts:
       {features_summary}
       ```
 
-      Generate a CONCISE Database Schema Contract:
+      IMPORTANT: The user message below contains EXTRACTED SCHEMA DATA and RAW SQL STATEMENTS.
+      Use that data to generate the contract. Do NOT invent tables - only document what's in the data.
+
+      Generate a Database Schema Contract using this format:
 
       # {repo_name} - Database Schema Contract
 
-      ## Tables
-      | Table | Feature | Description |
-      |-------|---------|-------------|
+      > Brief description of database technology used (SQLite, PostgreSQL, etc.)
 
-      ## Relationships
-      | From | To | Type | Foreign Key |
-      |------|------|------|-------------|
+      ## Tables
+
+      For each table found, document:
+      ### [Actual Table Name]
+      | Column | Type | Nullable | Constraints | Description |
+      |--------|------|----------|-------------|-------------|
+      | actual_column | actual_type | YES/NO | constraints | brief description |
 
       ## Indexes
-      | Table | Index | Columns | Type |
-      |-------|-------|---------|------|
+      | Table | Index Name | Columns | Purpose |
+      |-------|------------|---------|---------|
 
-      ## Migrations
-      | File | Description |
-      |------|-------------|
+      ## Relationships
+      | Table | Foreign Key | References | On Delete |
+      |-------|-------------|------------|-----------|
 
-      Only include actual database schema found in the code.
+      REMEMBER: Use ONLY the actual table and column names from the extracted data.
 
   # ==========================================================================
   # REPO-LEVEL FEATURES CONTRACT
@@ -856,8 +944,16 @@ prompts:
     system: |
       {base_system}
 
-      Generate a CONCISE Features Contract listing feature flags and toggles.
-      List actual feature flags found in the code.
+      Generate a Features Contract documenting ACTUAL feature modules found in the extracted data.
+
+      ABSOLUTE RULES - VIOLATION MEANS FAILURE:
+      1. Parse the features_summary JSON to extract REAL feature names, paths, and descriptions
+      2. NEVER output placeholder text like "[Feature]", "[Flag]", "[Description]", "[F-XXX]", "Initial Template", or "Template only"
+      3. NEVER output "Status: Initial Template" or template instructions
+      4. If features_summary shows "Authentication System" with apiFiles: 5, document that EXACTLY
+      5. Each feature in features_summary must appear in your output table
+      6. Use the EXACT feature names from the data (e.g., "User Authentication", "News Content Processing")
+      7. Use markdown tables with | pipe characters
 
     user_template: |
       Repository: {repo_name}
@@ -872,19 +968,41 @@ prompts:
       {features_summary}
       ```
 
-      Generate a CONCISE Features Contract:
+      READ THE FEATURES DATA ABOVE AND EXTRACT REAL VALUES.
+      The features_summary contains all discovered business features with their stats.
+
+      Generate a Features Contract using this format:
 
       # {repo_name} - Features Contract
 
-      ## Feature Flags
-      | Flag | Default | Description |
-      |------|---------|-------------|
+      > Brief description based on the features found (e.g., "Microservices application with {feature_count} business features including authentication, content processing, and API services")
 
-      ## Configuration
-      | Config | Type | Location |
-      |--------|------|----------|
+      ## Feature Modules
+      | ID | Feature | API Files | Schema Files | Test Coverage | Description |
+      |----|---------|-----------|--------------|---------------|-------------|
+      | F-001 | Authentication System | 5 | 3 | Yes | User login, registration, JWT tokens |
+      | F-002 | News Processing | 8 | 2 | Yes | AI-powered content analysis |
+      (MUST include ALL features from features_summary with their ACTUAL counts)
 
-      Only include actual feature flags found in the code.
+      ## Feature Locations
+      | Feature | Primary Path(s) | Technology |
+      |---------|----------------|------------|
+      | Authentication System | backend/src/auth, auth-service | Node.js, JWT |
+      (based on actual paths from features)
+
+      ## Feature Dependencies
+      | Feature | Depends On | Type |
+      |---------|------------|------|
+      | News Processing | Authentication System | Auth required |
+      (infer from feature relationships)
+
+      ## Services per Feature (if applicable)
+      | Feature | Docker Service | Port |
+      |---------|---------------|------|
+      | Authentication | auth-service | 9020 |
+      (based on docker-compose if available)
+
+      CRITICAL: Output REAL feature data from features_summary, not templates.
 
   # ==========================================================================
   # REPO-LEVEL CSS CONTRACT
@@ -894,8 +1012,13 @@ prompts:
     system: |
       {base_system}
 
-      Generate a CONCISE CSS/Design Contract listing design tokens and variables.
-      List actual CSS variables and design tokens found.
+      Generate a CSS/Design Contract documenting ACTUAL design tokens found in the codebase.
+      CRITICAL RULES:
+      1. ONLY document CSS variables and tokens explicitly found in the code
+      2. NEVER use placeholder text like "[token]", "[value]", or "[Description]"
+      3. If no design system is found, write "No design tokens detected in this repository"
+      4. Look for CSS variables, Tailwind config, theme definitions, color palettes
+      5. Use markdown tables with | pipe characters
 
     user_template: |
       Repository: {repo_name}
@@ -910,23 +1033,33 @@ prompts:
       {features_summary}
       ```
 
-      Generate a CONCISE CSS Contract:
+      Generate a CSS/Design Contract using this format:
 
       # {repo_name} - CSS/Design Contract
 
-      ## Design Tokens
+      > Brief description of the design system (Tailwind, CSS Variables, etc.)
+
+      ## Color Palette
+      | Token/Variable | Value | Usage |
+      |----------------|-------|-------|
+      (list actual colors defined)
+
+      ## Typography
       | Token | Value | Usage |
       |-------|-------|-------|
+      (list actual typography tokens)
 
-      ## CSS Variables
-      | Variable | Default | Description |
-      |----------|---------|-------------|
+      ## Spacing/Layout
+      | Token | Value | Usage |
+      |-------|-------|-------|
+      (list actual spacing tokens)
 
       ## Breakpoints
       | Name | Value | Description |
       |------|-------|-------------|
+      (list actual breakpoints)
 
-      Only include actual design tokens found in the code.
+      REMEMBER: Only document design tokens that are actually defined in the codebase.
 
   # ==========================================================================
   # REPO-LEVEL PROMPTS/SKILLS CONTRACT
@@ -936,8 +1069,13 @@ prompts:
     system: |
       {base_system}
 
-      Generate a CONCISE Prompts/Skills Contract documenting AI prompts, skills, and agent configurations.
-      List actual prompt files, YAML configurations, and skill definitions found.
+      Generate a Prompts/Skills Contract documenting ACTUAL AI configurations found in the codebase.
+      CRITICAL RULES:
+      1. ONLY document AI modes, prompts, and skills explicitly shown in the extracted data
+      2. NEVER use placeholder text like "[mode_id]", "[prompt_key]", or "[Description]"
+      3. If no AI config is found, write "No AI prompts or skills detected in this repository"
+      4. Parse YAML/JSON mode configurations to extract actual mode IDs, prompts, and settings
+      5. Use markdown tables with | pipe characters
 
     user_template: |
       Repository: {repo_name}
@@ -952,31 +1090,36 @@ prompts:
       {features_summary}
       ```
 
-      Generate a CONCISE Prompts/Skills Contract:
+      IMPORTANT: The user message below may contain CONFIG FILES with mode/prompt definitions.
+      Use that data to generate the contract. Do NOT invent modes - only document what's found.
+
+      Generate a Prompts/Skills Contract using this format:
 
       # {repo_name} - Prompts & Skills Contract
 
+      > Brief description of the AI integration approach
+
       ## AI Modes
-      | Mode ID | Name | Description | Model |
-      |---------|------|-------------|-------|
+      | Mode ID | Name | Model | Description |
+      |---------|------|-------|-------------|
+      (list actual modes from config files)
 
       ## Prompts
-      | Prompt Key | Purpose | Variables |
-      |------------|---------|-----------|
+      | Prompt Key | Purpose | Variables Used |
+      |------------|---------|----------------|
+      (list actual prompt keys from YAML files)
 
-      ## Skills
-      | Skill ID | Name | Trigger | Description |
-      |----------|------|---------|-------------|
+      ## Skills / Commands
+      | Skill/Command | Trigger | Description |
+      |---------------|---------|-------------|
+      (list actual skills if found)
 
-      ## Agent Configurations
-      | Agent | Type | Purpose |
-      |-------|------|---------|
+      ## Model Configuration
+      | Setting | Value | Purpose |
+      |---------|-------|---------|
+      (list actual model settings)
 
-      ## System Prompts
-      | Context | File | Purpose |
-      |---------|------|---------|
-
-      Only include actual prompts and skills found in config/modes, prompts, or similar directories.
+      REMEMBER: Use ONLY actual mode IDs and prompt keys from the extracted config files.
 
   # ==========================================================================
   # PHASE 4.5: GENERATE ADMIN CONTRACT

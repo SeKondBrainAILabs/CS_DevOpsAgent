@@ -2195,9 +2195,256 @@ export class ContractGenerationService extends BaseService {
         testFiles: f.files.tests.e2e.length + f.files.tests.unit.length + f.files.tests.integration.length,
       }));
 
-      console.log(`[ContractGeneration] Generating single contract: ${contractDef.file}`);
+      console.log(`[ContractGeneration] Generating single contract: ${contractDef.file} for type: ${contractType}`);
+      console.log(`[ContractGeneration] Repo path: ${repoPath}`);
+      console.log(`[ContractGeneration] Features found: ${features.length}`);
 
-      // Generate using AI
+      // Extract additional data based on contract type
+      let extractedData = '';
+
+      // For schema/sql contracts, extract actual database schemas
+      if ((contractType === 'schema' || contractType === 'sql') && this.schemaExtractor) {
+        console.log(`[ContractGeneration] Extracting schema data for ${contractType} contract...`);
+        try {
+          const globSync = await getGlobSync();
+          console.log(`[ContractGeneration] globSync available: ${!!globSync}`);
+          if (globSync) {
+            // Find schema-related files
+            const schemaFiles = globSync('**/*.{ts,js,sql,prisma}', {
+              cwd: repoPath,
+              ignore: ['**/node_modules/**', '**/dist/**', '**/build/**'],
+              absolute: true,
+            }).filter((f: string) =>
+              f.includes('database') || f.includes('schema') || f.includes('model') ||
+              f.includes('migration') || f.includes('Database') || f.includes('Schema') ||
+              f.endsWith('.sql') || f.endsWith('.prisma')
+            ).slice(0, 10); // Limit to 10 files
+
+            console.log(`[ContractGeneration] Found ${schemaFiles.length} schema-related files:`, schemaFiles);
+
+            if (schemaFiles.length > 0) {
+              const schemas = await this.schemaExtractor.extractFromFiles(
+                schemaFiles.map((p: string) => ({ path: p }))
+              );
+              console.log(`[ContractGeneration] Extracted ${schemas.length} schemas`);
+              if (schemas.length > 0) {
+                extractedData = `\n\nEXTRACTED SCHEMA DATA:\n${JSON.stringify(schemas, null, 2)}`;
+              }
+            }
+
+            // Also include raw CREATE TABLE statements
+            const dbServiceFile = schemaFiles.find((f: string) => f.includes('DatabaseService'));
+            console.log(`[ContractGeneration] DatabaseService file: ${dbServiceFile || 'not found'}`);
+            if (dbServiceFile) {
+              const content = await fs.readFile(dbServiceFile, 'utf-8');
+              const createTableMatches = content.match(/CREATE\s+TABLE[^;]+;/gi);
+              console.log(`[ContractGeneration] Found ${createTableMatches?.length || 0} CREATE TABLE statements`);
+              if (createTableMatches) {
+                extractedData += `\n\nRAW SQL STATEMENTS FOUND:\n${createTableMatches.join('\n\n')}`;
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[ContractGeneration] Schema extraction failed:', err);
+        }
+        console.log(`[ContractGeneration] Extracted data length: ${extractedData.length} chars`);
+      }
+
+      // For API contracts, extract actual endpoints
+      if (contractType === 'api' && this.apiExtractor) {
+        try {
+          const globSync = await getGlobSync();
+          if (globSync) {
+            const apiFiles = globSync('**/*.{ts,js}', {
+              cwd: repoPath,
+              ignore: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/*.test.*', '**/*.spec.*'],
+              absolute: true,
+            }).filter(f =>
+              f.includes('route') || f.includes('controller') || f.includes('api') ||
+              f.includes('handler') || f.includes('ipc') || f.includes('Route') ||
+              f.includes('Controller') || f.includes('Handler')
+            ).slice(0, 15);
+
+            if (apiFiles.length > 0) {
+              const endpoints = await this.apiExtractor.extractFromFiles(
+                apiFiles.map(p => ({ path: p }))
+              );
+              if (endpoints.length > 0) {
+                extractedData = `\n\nEXTRACTED API ENDPOINTS:\n${JSON.stringify(endpoints, null, 2)}`;
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[ContractGeneration] API extraction failed:', err);
+        }
+      }
+
+      // For prompts/skills contracts, scan config/modes directory
+      if (contractType === 'prompts') {
+        try {
+          const globSync = await getGlobSync();
+          if (globSync) {
+            const configFiles = globSync('**/*.{yaml,yml,json}', {
+              cwd: repoPath,
+              ignore: ['**/node_modules/**', '**/dist/**'],
+              absolute: true,
+            }).filter(f =>
+              f.includes('mode') || f.includes('prompt') || f.includes('skill') ||
+              f.includes('config') || f.includes('agent')
+            ).slice(0, 10);
+
+            if (configFiles.length > 0) {
+              const configData: string[] = [];
+              for (const file of configFiles) {
+                try {
+                  const content = await fs.readFile(file, 'utf-8');
+                  configData.push(`\n--- ${path.relative(repoPath, file)} ---\n${content.slice(0, 2000)}`);
+                } catch {}
+              }
+              if (configData.length > 0) {
+                extractedData = `\n\nCONFIG FILES FOUND:\n${configData.join('\n')}`;
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[ContractGeneration] Config extraction failed:', err);
+        }
+      }
+
+      // For infra contracts, look for env files and docker configs
+      if (contractType === 'infra') {
+        try {
+          const globSync = await getGlobSync();
+          if (globSync) {
+            // Prioritize docker-compose files first as they contain the most useful infra info
+            const dockerComposeFiles = globSync('**/docker-compose*.{yml,yaml}', {
+              cwd: repoPath,
+              ignore: ['**/node_modules/**', '**/backups/**'],
+              absolute: true,
+            }).slice(0, 3);
+
+            const otherInfraFiles = globSync('**/{.env.example,.env.sample,Dockerfile,*.dockerfile,k8s*.yml,k8s*.yaml}', {
+              cwd: repoPath,
+              ignore: ['**/node_modules/**', '**/backups/**'],
+              absolute: true,
+              dot: true,
+            }).slice(0, 5);
+
+            const infraFiles = [...dockerComposeFiles, ...otherInfraFiles];
+
+            if (infraFiles.length > 0) {
+              const infraData: string[] = [];
+              for (const file of infraFiles) {
+                try {
+                  const content = await fs.readFile(file, 'utf-8');
+                  const fileName = path.relative(repoPath, file);
+                  // Allow full content for docker-compose (up to 15000 chars), limit others
+                  const maxChars = fileName.includes('docker-compose') ? 15000 : 3000;
+                  infraData.push(`\n--- ${fileName} ---\n${content.slice(0, maxChars)}`);
+                } catch {}
+              }
+              if (infraData.length > 0) {
+                extractedData = `\n\nINFRASTRUCTURE FILES FOUND:\n${infraData.join('\n')}`;
+                console.log(`[ContractGeneration] Extracted ${infraFiles.length} infra files, total length: ${extractedData.length}`);
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[ContractGeneration] Infra extraction failed:', err);
+        }
+      }
+
+      // For integrations contract, extract from package.json and find API calls
+      if (contractType === 'integrations') {
+        try {
+          const integrationData: string[] = [];
+
+          // Read package.json for dependencies
+          const packageJsonPath = path.join(repoPath, 'package.json');
+          try {
+            const packageContent = await fs.readFile(packageJsonPath, 'utf-8');
+            const pkg = JSON.parse(packageContent);
+            const allDeps = {
+              ...pkg.dependencies || {},
+              ...pkg.devDependencies || {}
+            };
+
+            // Identify third-party SDK/API packages
+            const thirdPartyIndicators = ['@aws-sdk', '@google', '@azure', 'stripe', 'twilio', 'sendgrid',
+              'firebase', 'redis', 'mongodb', 'postgres', 'mysql', 'kafka', 'neo4j', 'axios', 'node-fetch',
+              'groq', 'openai', 'anthropic', 'weaviate', 'pinecone', 'minio', 'kong'];
+
+            const thirdPartyDeps: Record<string, string> = {};
+            for (const [name, version] of Object.entries(allDeps)) {
+              if (thirdPartyIndicators.some(indicator => name.includes(indicator))) {
+                thirdPartyDeps[name] = version as string;
+              }
+            }
+
+            if (Object.keys(thirdPartyDeps).length > 0) {
+              integrationData.push(`\n--- Third-Party Dependencies (from package.json) ---\n${JSON.stringify(thirdPartyDeps, null, 2)}`);
+            }
+          } catch {}
+
+          // Also check docker-compose for external services
+          const globSync = await getGlobSync();
+          if (globSync) {
+            const dockerComposeFiles = globSync('**/docker-compose*.{yml,yaml}', {
+              cwd: repoPath,
+              ignore: ['**/node_modules/**', '**/backups/**'],
+              absolute: true,
+            }).slice(0, 2);
+
+            for (const file of dockerComposeFiles) {
+              try {
+                const content = await fs.readFile(file, 'utf-8');
+                // Extract service names and images from docker-compose
+                const serviceMatches = content.match(/^\s{2}[\w-]+:\s*$/gm) || [];
+                const imageMatches = content.match(/image:\s*[\w\/:.-]+/g) || [];
+                if (serviceMatches.length > 0 || imageMatches.length > 0) {
+                  integrationData.push(`\n--- Docker Services (from ${path.relative(repoPath, file)}) ---\nServices: ${serviceMatches.map(s => s.trim().replace(':', '')).join(', ')}\nImages: ${imageMatches.map(i => i.replace('image:', '').trim()).join(', ')}`);
+                }
+              } catch {}
+            }
+          }
+
+          if (integrationData.length > 0) {
+            extractedData = `\n\nINTEGRATIONS DATA FOUND:\n${integrationData.join('\n')}`;
+            console.log(`[ContractGeneration] Extracted integrations data, length: ${extractedData.length}`);
+          }
+        } catch (err) {
+          console.warn('[ContractGeneration] Integrations extraction failed:', err);
+        }
+      }
+
+      // For features contract, enhance with actual feature code excerpts
+      if (contractType === 'features' && features.length > 0) {
+        try {
+          const featureData: string[] = [];
+
+          // Include detailed feature info
+          for (const feature of features.slice(0, 10)) {
+            const featureInfo = {
+              name: feature.name,
+              description: feature.description || 'No description',
+              paths: feature.paths || [],
+              apiFiles: feature.files?.api?.slice(0, 5) || [],
+              schemaFiles: feature.files?.schema?.slice(0, 5) || [],
+              hasTests: (feature.files?.tests?.e2e?.length || 0) + (feature.files?.tests?.unit?.length || 0) > 0
+            };
+            featureData.push(`Feature: ${featureInfo.name}\n  Paths: ${featureInfo.paths.join(', ')}\n  API Files: ${featureInfo.apiFiles.length}\n  Schema Files: ${featureInfo.schemaFiles.length}\n  Has Tests: ${featureInfo.hasTests}`);
+          }
+
+          if (featureData.length > 0) {
+            extractedData = `\n\nFEATURE DETAILS:\n${featureData.join('\n\n')}`;
+            console.log(`[ContractGeneration] Extracted ${features.length} features data`);
+          }
+        } catch (err) {
+          console.warn('[ContractGeneration] Features extraction failed:', err);
+        }
+      }
+
+      // Generate using AI with extracted data
       const result = await this.aiService.sendWithMode({
         modeId: 'contract_generator',
         promptKey: contractDef.promptKey,
@@ -2207,10 +2454,18 @@ export class ContractGenerationService extends BaseService {
           features_summary: JSON.stringify(featuresSummary, null, 2),
           feature_count: features.length.toString(),
         },
-        userMessage: `Generate a comprehensive ${contractDef.description} for this repository.`,
+        userMessage: `Generate a comprehensive ${contractDef.description} for this repository.
+
+IMPORTANT: Use the ACTUAL data provided below. Do NOT generate placeholder text like "[table_name]" or "[Feature Name]".
+If no relevant data is found, state "No ${contractType} data detected in this repository."
+${extractedData}`,
       });
 
+      console.log(`[ContractGeneration] AI result success: ${result.success}, has data: ${!!result.data}`);
       if (result.success && result.data) {
+        console.log(`[ContractGeneration] AI response length: ${result.data.length} chars`);
+        console.log(`[ContractGeneration] AI response preview: ${result.data.substring(0, 200)}...`);
+
         // Clean up AI response
         const cleanedContent = this.cleanupAIResponse(result.data);
 
@@ -2222,7 +2477,10 @@ export class ContractGenerationService extends BaseService {
         // Add version header
         const versionHeader = `<!-- Version: ${newVersion} | Generated: ${new Date().toISOString()} -->\n\n`;
         const contentWithVersion = versionHeader + cleanedContent;
+
+        console.log(`[ContractGeneration] Writing to: ${contractPath}`);
         await fs.writeFile(contractPath, contentWithVersion, 'utf-8');
+        console.log(`[ContractGeneration] File written successfully`);
 
         // Save JSON sidecar
         const jsonSidecar = {
@@ -2255,6 +2513,9 @@ export class ContractGenerationService extends BaseService {
       } else {
         const errorMsg = result.error?.message || 'Unknown error';
         console.error(`[ContractGeneration] Failed to generate ${contractDef.file}:`, errorMsg);
+        if (result.error) {
+          console.error(`[ContractGeneration] Full error:`, result.error);
+        }
         return { file: contractDef.file, success: false, error: errorMsg };
       }
     }, 'GENERATE_SINGLE_CONTRACT_ERROR');

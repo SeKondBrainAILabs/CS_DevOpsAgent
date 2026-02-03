@@ -1482,7 +1482,8 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
     async function loadContracts() {
       setLoading(true);
       try {
-        const repoPath = session.repoPath || session.worktreePath;
+        // IMPORTANT: Use worktreePath first (where contracts are actually generated)
+        const repoPath = session.worktreePath || session.repoPath;
 
         // Load contract changes in background (non-blocking)
         if (window.api?.contract?.analyzeCommit && repoPath) {
@@ -2082,24 +2083,31 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
       {/* Generation Progress */}
       {isGenerating && generationProgress && (
         <div className="mx-4 mt-4 p-3 bg-blue-50 border border-blue-200 rounded-xl">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="animate-spin w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full" />
-            <span className="text-sm font-medium text-blue-800">
-              Generating: {generationProgress.currentFeature}
-            </span>
-            {generationProgress.contractType && (
-              <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                generationProgress.contractType === 'markdown' ? 'bg-purple-100 text-purple-700' :
-                generationProgress.contractType === 'json' ? 'bg-green-100 text-green-700' :
-                'bg-orange-100 text-orange-700'
-              }`}>
-                {generationProgress.contractType === 'markdown' ? '📄 Markdown' :
-                 generationProgress.contractType === 'json' ? '📋 JSON' : '👤 Admin'}
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className="animate-spin w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full" />
+              <span className="text-sm font-medium text-blue-800">
+                Processing: <span className="font-semibold">{generationProgress.currentFeature}</span>
               </span>
-            )}
-            <span className="text-xs text-blue-600">
-              ({generationProgress.completed}/{generationProgress.total})
-            </span>
+              {generationProgress.contractType && (
+                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                  generationProgress.contractType === 'markdown' ? 'bg-purple-100 text-purple-700' :
+                  generationProgress.contractType === 'json' ? 'bg-green-100 text-green-700' :
+                  'bg-orange-100 text-orange-700'
+                }`}>
+                  {generationProgress.contractType === 'markdown' ? '📄 Markdown' :
+                   generationProgress.contractType === 'json' ? '📋 JSON' : '👤 Admin'}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-bold text-blue-700">
+                {generationProgress.total > 0 ? Math.round((generationProgress.completed / generationProgress.total) * 100) : 0}%
+              </span>
+              <span className="text-xs text-blue-600">
+                ({generationProgress.completed}/{generationProgress.total} features)
+              </span>
+            </div>
           </div>
           <div className="h-2 bg-blue-100 rounded-full overflow-hidden">
             <div
@@ -2498,6 +2506,7 @@ function extractContractMetrics(content: string, type: string): { label: string;
 interface FeatureContract {
   name: string;
   path: string;
+  jsonPath?: string;
 }
 
 function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
@@ -2566,23 +2575,28 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
     fixtures: 'Test Fixtures',
   };
 
-  const loadContent = async (filePath?: string) => {
+  const loadContent = async (filePath?: string, forceReload = false) => {
     const pathToLoad = filePath || contract.filePath;
-    // Only skip if we're loading the same path and already have content
-    if (content && !filePath && !loading) return;
+    console.log('[ContractCard] loadContent called:', { pathToLoad, forceReload, hasContent: !!content });
+    // Only skip if we're loading the same path and already have content AND not forcing reload
+    if (content && !filePath && !loading && !forceReload) return;
     setLoading(true);
     setError(null);
     try {
+      console.log('[ContractCard] Reading file:', pathToLoad);
       const result = await window.api?.file?.readContent?.(pathToLoad);
+      console.log('[ContractCard] File read result:', { success: result?.success, dataLength: result?.data?.length });
       if (result?.success && result.data) {
         setFileExists(true);
         setRawContent(result.data); // Store raw for JSON view
         // Clean up AI preamble/code from old contracts
         const cleanedContent = cleanupContractContent(result.data);
+        console.log('[ContractCard] Content preview:', result.data.substring(0, 200));
         setContent(cleanedContent);
         setMetrics(extractContractMetrics(cleanedContent, contract.type));
         // Extract version from content (before cleanup to get metadata)
         const version = extractVersionFromContent(result.data);
+        console.log('[ContractCard] Extracted version:', version);
         if (version) {
           setExtractedVersion(version);
         }
@@ -2647,18 +2661,23 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
         }
       }
 
-      // Reload the currently selected content
+      // Force reload the currently selected content (must force to bypass cache)
       setFileExists(true);
+      setContent(null); // Clear existing content first
+      setRawContent(null);
+      setExtractedVersion(null);
+
+      console.log('[ContractCard] Forcing content reload after regeneration...');
       if (selectedFeature === 'repo') {
-        await loadContent(contract.filePath);
+        await loadContent(contract.filePath, true);
       } else {
         const featureContract = featureContracts.find(f => f.name === selectedFeature);
         if (featureContract) {
-          await loadContent(featureContract.path);
+          await loadContent(featureContract.path, true);
         }
       }
 
-      console.log('[ContractCard] All contracts regenerated');
+      console.log('[ContractCard] All contracts regenerated and content reloaded');
     } catch (err) {
       console.error('[ContractCard] Error:', err);
       setError(err instanceof Error ? err.message : 'Failed to generate contracts');
@@ -2672,29 +2691,201 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
     if (discoveredFeatures && discoveredFeatures.length > 0 && repoPath) {
       const features: FeatureContract[] = discoveredFeatures.map(f => ({
         name: f.name,
+        // Feature CONTRACTS.md contains all types - we'll extract the relevant section when loading
         path: `${f.basePath}/CONTRACTS.md`,
+        // Also store the JSON path for structured data
+        jsonPath: `${repoPath}/.S9N_KIT_DevOpsAgent/contracts/features/${f.name}.contracts.json`,
       }));
       setFeatureContracts(features);
     }
-  }, [discoveredFeatures, repoPath]);
+  }, [discoveredFeatures, repoPath, contract.type]);
 
   // Handle feature selection change
   const handleFeatureChange = async (featureName: string) => {
     setSelectedFeature(featureName);
     setContent(null); // Clear current content
+    setRawContent(null);
     setMetrics([]);
     setExtractedVersion(null);
+    setLoading(true);
 
-    if (featureName === 'repo') {
-      // Load repo-level contract
-      await loadContent(contract.filePath);
-    } else {
-      // Load feature-level contract
-      const feature = featureContracts.find(f => f.name === featureName);
-      if (feature) {
-        await loadContent(feature.path);
+    try {
+      if (featureName === 'repo') {
+        // Load repo-level contract
+        await loadContent(contract.filePath, true);
+      } else {
+        // Load feature-level contract - try JSON first for structured data
+        const feature = featureContracts.find(f => f.name === featureName);
+        if (feature?.jsonPath) {
+          // Try to load from JSON file and extract relevant contract type
+          const jsonResult = await window.api?.file?.readContent?.(feature.jsonPath);
+          if (jsonResult?.success && jsonResult.data) {
+            try {
+              const contractData = JSON.parse(jsonResult.data);
+              // Format the JSON data for this specific contract type
+              const formatted = formatContractFromJSON(contractData, contract.type, featureName);
+              if (formatted) {
+                setContent(formatted);
+                setRawContent(jsonResult.data);
+                setFileExists(true);
+                setExtractedVersion(contractData.version || '1.0.0');
+                setLoading(false);
+                return;
+              }
+            } catch (e) {
+              console.warn('[ContractCard] Failed to parse JSON contract:', e);
+            }
+          }
+        }
+        // Fallback to CONTRACTS.md
+        if (feature) {
+          await loadContent(feature.path, true);
+        }
       }
+    } catch (err) {
+      console.error('[ContractCard] Error loading feature contract:', err);
+      setError('Failed to load contract');
+    } finally {
+      setLoading(false);
     }
+  };
+
+  // Format contract data from JSON for a specific contract type
+  const formatContractFromJSON = (data: Record<string, unknown>, contractType: string, featureName: string): string | null => {
+    if (!data) return null;
+
+    const lines: string[] = [];
+    lines.push(`# ${featureName} - ${typeLabels[contractType] || contractType}`);
+    lines.push('');
+    lines.push(`> Version: ${data.version || '1.0.0'} | Generated: ${data.lastGenerated || 'N/A'}`);
+    lines.push('');
+
+    switch (contractType) {
+      case 'api':
+        // Handle actual JSON structure: data.apis.endpoints
+        const apis = data.apis as Record<string, unknown> | undefined;
+        if (apis?.endpoints && Array.isArray(apis.endpoints) && apis.endpoints.length > 0) {
+          lines.push('## API Endpoints');
+          lines.push('');
+          lines.push('| Method | Path | Description | File |');
+          lines.push('|--------|------|-------------|------|');
+          for (const ep of apis.endpoints) {
+            const e = ep as Record<string, string>;
+            const fileName = e.file ? e.file.split('/').pop() : '';
+            lines.push(`| ${e.method || ''} | ${e.path || ''} | ${e.description || ''} | ${fileName} |`);
+          }
+          lines.push('');
+        } else {
+          lines.push('*No API endpoints found for this feature.*');
+          lines.push('');
+        }
+        break;
+
+      case 'schema':
+        // Handle actual JSON structure: data.schemas
+        const schemas = data.schemas as Array<Record<string, unknown>> | undefined;
+        if (schemas && Array.isArray(schemas) && schemas.length > 0) {
+          lines.push('## Database Tables / Schemas');
+          lines.push('');
+          for (const schema of schemas) {
+            const s = schema as Record<string, unknown>;
+            lines.push(`### ${s.name || 'Table'}`);
+            const fileName = typeof s.file === 'string' ? s.file.split('/').pop() : '';
+            lines.push(`- **Type**: ${s.type || 'table'}`);
+            lines.push(`- **File**: ${fileName}`);
+            lines.push('');
+
+            const columns = s.columns as Array<Record<string, unknown>> | undefined;
+            if (columns && Array.isArray(columns) && columns.length > 0) {
+              lines.push('| Column | Type | Nullable | Primary Key |');
+              lines.push('|--------|------|----------|-------------|');
+              for (const col of columns) {
+                const c = col as Record<string, unknown>;
+                lines.push(`| ${c.name || ''} | ${c.type || ''} | ${c.nullable ? 'YES' : 'NO'} | ${c.primaryKey ? '✓' : ''} |`);
+              }
+              lines.push('');
+            }
+          }
+        } else {
+          lines.push('*No database schemas found for this feature.*');
+          lines.push('');
+        }
+        break;
+
+      case 'events':
+        // Handle events - might be in data.events or data.apisExposed.eventsEmitted
+        const events = data.events as Record<string, unknown> | undefined;
+        const eventsEmitted = events?.emitted as Array<Record<string, string>> | undefined;
+        const eventsConsumed = events?.consumed as Array<Record<string, string>> | undefined;
+
+        if (eventsEmitted && eventsEmitted.length > 0) {
+          lines.push('## Events Emitted');
+          lines.push('');
+          lines.push('| Event | Payload | Source |');
+          lines.push('|-------|---------|--------|');
+          for (const ev of eventsEmitted) {
+            lines.push(`| ${ev.event || ev.eventName || ''} | ${ev.payload || ''} | ${ev.from || ev.emittedFrom || ''} |`);
+          }
+          lines.push('');
+        }
+
+        if (eventsConsumed && eventsConsumed.length > 0) {
+          lines.push('## Events Consumed');
+          lines.push('');
+          lines.push('| Event | Handler | File |');
+          lines.push('|-------|---------|------|');
+          for (const ev of eventsConsumed) {
+            lines.push(`| ${ev.event || ev.eventName || ''} | ${ev.handler || ''} | ${ev.file || ''} |`);
+          }
+          lines.push('');
+        }
+
+        if ((!eventsEmitted || eventsEmitted.length === 0) && (!eventsConsumed || eventsConsumed.length === 0)) {
+          lines.push('*No events found for this feature.*');
+          lines.push('');
+        }
+        break;
+
+      case 'integrations':
+        // Handle third-party integrations - might be in data.dependencies.external
+        const deps = data.dependencies as Record<string, unknown> | undefined;
+        const external = deps?.external as string[] | undefined;
+
+        if (external && external.length > 0) {
+          lines.push('## External Dependencies');
+          lines.push('');
+          lines.push('| Package |');
+          lines.push('|---------|');
+          for (const pkg of external) {
+            lines.push(`| ${pkg} |`);
+          }
+          lines.push('');
+        } else {
+          lines.push('*No third-party integrations found for this feature.*');
+          lines.push('');
+        }
+        break;
+
+      default:
+        // Generic format - show overview and any available data
+        if (data.overview) {
+          lines.push(`## Overview`);
+          lines.push('');
+          lines.push(String(data.overview));
+          lines.push('');
+        }
+
+        // Show what data is available
+        const availableKeys = Object.keys(data).filter(k => !['feature', 'version', 'lastGenerated', 'generatorVersion', 'overview'].includes(k));
+        if (availableKeys.length > 0) {
+          lines.push(`## Available Data`);
+          lines.push('');
+          lines.push('This feature contract contains data for: ' + availableKeys.join(', '));
+          lines.push('');
+        }
+    }
+
+    return lines.length > 4 ? lines.join('\n') : null;
   };
 
   const loadDiff = async () => {
@@ -3065,11 +3256,13 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                   </div>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              {/* Right side controls - fixed width to prevent cutoff */}
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {/* Metrics - hidden on very small widths */}
                 {metrics.length > 0 && (
-                  <div className="flex items-center gap-1.5 mr-4">
+                  <div className="hidden sm:flex items-center gap-1.5 mr-2">
                     {metrics.map((m, idx) => (
-                      <span key={idx} className="px-2 py-1 rounded-full text-xs font-medium bg-kanvas-blue/10 text-kanvas-blue">
+                      <span key={idx} className="px-2 py-1 rounded-full text-xs font-medium bg-kanvas-blue/10 text-kanvas-blue whitespace-nowrap">
                         {m.count} {m.label}
                       </span>
                     ))}
@@ -3079,7 +3272,7 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                 <button
                   onClick={handleGenerate}
                   disabled={generating || !repoPath}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors mr-2 ${
+                  className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                     generating || !repoPath
                       ? 'bg-surface-secondary text-text-secondary opacity-50 cursor-not-allowed'
                       : 'bg-kanvas-blue text-white hover:bg-kanvas-blue/90'
@@ -3087,50 +3280,44 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                   title={selectedFeature === 'repo' ? 'Regenerate repo-level contract' : `Regenerate ${selectedFeature} contract`}
                 >
                   {generating ? (
-                    <>
-                      <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                      </svg>
-                      Regenerating...
-                    </>
+                    <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
                   ) : (
-                    <>
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                      </svg>
-                      Regenerate
-                    </>
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
                   )}
                 </button>
                 {/* View Mode Toggle */}
-                <div className="flex items-center rounded-lg border border-border overflow-hidden mr-2">
+                <div className="flex items-center rounded-lg border border-border overflow-hidden">
                   <button
                     onClick={() => setViewMode('markdown')}
-                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                    className={`px-2 py-1.5 text-xs font-medium transition-colors ${
                       viewMode === 'markdown'
                         ? 'bg-kanvas-blue text-white'
                         : 'bg-surface-secondary text-text-secondary hover:text-text-primary'
                     }`}
                     title="Markdown View"
                   >
-                    Markdown
+                    MD
                   </button>
                   <button
                     onClick={() => setViewMode('json')}
-                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                    className={`px-2 py-1.5 text-xs font-medium transition-colors ${
                       viewMode === 'json'
                         ? 'bg-kanvas-blue text-white'
                         : 'bg-surface-secondary text-text-secondary hover:text-text-primary'
                     }`}
-                    title="JSON View"
+                    title="Raw JSON View"
                   >
                     Raw
                   </button>
                 </div>
                 <button
                   onClick={handleOpenInEditor}
-                  className="p-2 rounded-lg hover:bg-surface-secondary transition-colors"
+                  className="p-1.5 rounded-lg hover:bg-surface-secondary transition-colors"
                   title="Open in Editor"
                 >
                   <svg className="w-4 h-4 text-text-secondary" viewBox="0 0 24 24" fill="currentColor">
@@ -3139,9 +3326,10 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                 </button>
                 <button
                   onClick={() => setShowContent(false)}
-                  className="p-2 rounded-lg hover:bg-surface-secondary transition-colors"
+                  className="p-1.5 rounded-lg hover:bg-surface-secondary transition-colors"
+                  title="Close"
                 >
-                  <svg className="w-5 h-5 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-4 h-4 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
@@ -3256,9 +3444,17 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
             </div>
 
             {/* Modal Footer */}
-            <div className="flex items-center justify-between p-4 border-t border-border text-xs text-text-secondary">
-              <span>{selectedFeature === 'repo' ? contract.filePath : featureContracts.find(f => f.name === selectedFeature)?.path || contract.filePath}</span>
-              <span>v{extractedVersion || contract.version} - Last updated {new Date(contract.lastUpdated).toLocaleDateString()}</span>
+            <div className="flex items-center justify-between p-4 border-t border-border text-xs text-text-secondary gap-4">
+              <span className="truncate flex-1">
+                {selectedFeature === 'repo'
+                  ? contract.filePath
+                  : featureContracts.find(f => f.name === selectedFeature)?.jsonPath || featureContracts.find(f => f.name === selectedFeature)?.path || contract.filePath
+                }
+              </span>
+              <span className="flex-shrink-0 whitespace-nowrap">
+                <span className="font-medium text-text-primary">v{extractedVersion || '1.0.0'}</span>
+                {selectedFeature !== 'repo' && <span className="text-kanvas-blue ml-1">({selectedFeature})</span>}
+              </span>
             </div>
           </div>
         </div>
