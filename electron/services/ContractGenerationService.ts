@@ -142,6 +142,7 @@ const CONTRACT_PATTERNS = {
     '**/*.proto',
     '**/routes/**/*.ts', '**/api/**/*.ts', '**/controllers/**/*.ts',
     '**/endpoints/**/*.ts', '**/handlers/**/*.ts',
+    '**/routes/**/*.js', '**/api/**/*.js', '**/controllers/**/*.js',
   ],
   // Schema/Type files
   schema: [
@@ -153,30 +154,51 @@ const CONTRACT_PATTERNS = {
   ],
   // E2E Tests
   e2e: [
-    '**/*.e2e.spec.ts', '**/*.e2e.ts',
+    '**/*.e2e.spec.ts', '**/*.e2e.ts', '**/*.e2e.test.ts',
     '**/e2e/**/*.spec.ts', '**/playwright/**/*.spec.ts',
-    '**/tests/e2e/**/*.ts',
+    '**/tests/e2e/**/*.ts', '**/tests/e2e/**/*.js',
+    '**/*.api.spec.ts', '**/*.e2e.spec.js',
   ],
   // Unit Tests
   unit: [
     '**/*.test.ts', '**/*.test.tsx', '**/*.spec.ts',
     '**/__tests__/**/*.ts', '**/__tests__/**/*.tsx',
+    '**/*.test.js', '**/*.test.jsx', '**/*.spec.js',
+    '**/__tests__/**/*.js', '**/__tests__/**/*.jsx',
   ],
   // Integration Tests
   integration: [
     '**/*.integration.ts', '**/*.integration.spec.ts',
-    '**/tests/integration/**/*.ts',
+    '**/tests/integration/**/*.ts', '**/tests/integration/**/*.js',
+    '**/*.integration.test.ts', '**/*.integration.test.js',
   ],
   // Fixtures
   fixtures: [
-    '**/fixtures/**/*.json', '**/fixtures/**/*.ts',
+    '**/fixtures/**/*.json', '**/fixtures/**/*.ts', '**/fixtures/**/*.js',
     '**/mocks/**/*.ts', '**/__mocks__/**/*.ts',
-    '**/test-data/**/*.json',
+    '**/mocks/**/*.js', '**/__mocks__/**/*.js',
+    '**/test-data/**/*.json', '**/seed/**/*.ts', '**/seed/**/*.js',
+    '**/factories/**/*.ts', '**/factories/**/*.js',
   ],
   // Config
   config: [
     '**/.env.example', '**/config.schema.json', '**/app.config.ts',
-    '**/config/*.ts', '**/config/*.json',
+    '**/config/*.ts', '**/config/*.json', '**/config/*.yaml', '**/config/*.yml',
+    '**/docker-compose.yml', '**/docker-compose.yaml',
+    '**/Dockerfile', '**/Makefile', '**/Taskfile.yml',
+  ],
+  // CSS/Style files
+  css: [
+    '**/*.css', '**/*.scss', '**/*.less', '**/*.styl',
+    '**/tailwind.config.*', '**/.stylelintrc*',
+    '**/*theme*.*', '**/*style*.*',
+  ],
+  // Prompt/Skill/Mode configuration files
+  prompts: [
+    '**/*prompt*.*', '**/*skill*.*',
+    '**/modes/*.yaml', '**/modes/*.yml',
+    '**/prompts/**/*.yaml', '**/prompts/**/*.yml',
+    '**/prompts/**/*.ts', '**/prompts/**/*.json',
   ],
 };
 
@@ -399,6 +421,8 @@ export class ContractGenerationService extends BaseService {
           ...feature.files.tests.integration,
           ...feature.files.fixtures,
           ...feature.files.config,
+          ...(feature.files.css || []),
+          ...(feature.files.prompts || []),
           ...feature.files.other,
         ];
         return allFeatureFiles.some(featureFile => {
@@ -828,7 +852,7 @@ export class ContractGenerationService extends BaseService {
   private async identifyServiceLevelFeatures(
     repoPath: string,
     candidateFolders: string[]
-  ): Promise<Array<{ name: string; category?: string; paths: string[]; description?: string }> | null> {
+  ): Promise<Array<{ name: string; category?: string; paths: string[]; keyFiles?: string[]; description?: string }> | null> {
     // Clear previous AI feature info
     this.aiFeatureInfo.clear();
     this.aiIdentifiedFeaturesList = [];
@@ -875,10 +899,15 @@ export class ContractGenerationService extends BaseService {
             const paths = f.paths || (f.path ? [f.path] : []);
             const normalizedPaths = paths.map((p: string) => p.replace(/^\.?\//, ''));
 
+            // Handle keyFiles - specific files that define this feature
+            const keyFiles = f.keyFiles || [];
+            const normalizedKeyFiles = keyFiles.map((p: string) => p.replace(/^\.?\//, ''));
+
             const feature = {
               name: f.name,
               category: f.category,
               paths: normalizedPaths,
+              keyFiles: normalizedKeyFiles,
               description: f.description,
             };
 
@@ -893,7 +922,7 @@ export class ContractGenerationService extends BaseService {
               });
             }
 
-            console.log(`[ContractGeneration] AI identified service: "${f.name}" (${f.category || 'uncategorized'}) at [${normalizedPaths.join(', ')}]`);
+            console.log(`[ContractGeneration] AI identified service: "${f.name}" (${f.category || 'uncategorized'}) at [${normalizedPaths.join(', ')}] with ${normalizedKeyFiles.length} key files`);
           }
 
           console.log(`[ContractGeneration] Total AI-identified services: ${this.aiIdentifiedFeaturesList.length}`);
@@ -974,24 +1003,87 @@ export class ContractGenerationService extends BaseService {
                 ? path.join(repoPath, firstPath.split('/').slice(0, -1).join('/'))
                 : path.join(repoPath, firstPath);
 
-              // Scan files for this feature (use first path's directory)
+              // Use keyFiles if provided (more specific), otherwise fall back to paths
+              // keyFiles = specific files like "backend/src/routes/auth.ts"
+              // paths = directories like "backend/src/routes"
+              const keyFilePaths = (aiFeature.keyFiles || []).map(p => path.join(repoPath, p));
+              const dirPaths = aiFeature.paths.map(p => path.join(repoPath, p));
+              const specificFiles = keyFilePaths.length > 0 ? keyFilePaths : dirPaths;
+
+              // Scan files for this feature, but filter to only include specificFiles if available
               let files: DiscoveredFeature['files'];
               try {
-                const scanPath = path.join(repoPath, firstPath.split('/')[0]);
-                files = await this.scanFeatureFiles(scanPath, repoPath);
+                const allFiles = await this.scanFeatureFiles(basePath, repoPath);
+
+                // Filter scanned files to match AI-identified files/paths
+                if (keyFilePaths.length > 0) {
+                  // Use keyFiles for precise matching (file-level)
+                  const filterByKeyFiles = (fileList: string[]) => {
+                    return fileList.filter(f => {
+                      const fullPath = path.isAbsolute(f) ? f : path.join(repoPath, f);
+                      const fileName = path.basename(f);
+                      // Match by full path OR by filename (for when paths are relative)
+                      return keyFilePaths.some(kf =>
+                        fullPath === kf ||
+                        fullPath.endsWith(kf) ||
+                        kf.endsWith(fileName) ||
+                        f === kf.replace(repoPath + '/', '')
+                      );
+                    });
+                  };
+                  files = {
+                    api: filterByKeyFiles(allFiles.api),
+                    schema: filterByKeyFiles(allFiles.schema),
+                    tests: {
+                      unit: filterByKeyFiles(allFiles.tests.unit),
+                      integration: filterByKeyFiles(allFiles.tests.integration),
+                      e2e: filterByKeyFiles(allFiles.tests.e2e),
+                    },
+                    fixtures: filterByKeyFiles(allFiles.fixtures),
+                    config: filterByKeyFiles(allFiles.config),
+                    css: filterByKeyFiles(allFiles.css),
+                    prompts: filterByKeyFiles(allFiles.prompts),
+                    other: filterByKeyFiles(allFiles.other),
+                  };
+                } else if (dirPaths.length > 0) {
+                  // Use directory paths for broader matching
+                  const filterByDirPaths = (fileList: string[]) => {
+                    return fileList.filter(f => {
+                      const fullPath = path.isAbsolute(f) ? f : path.join(repoPath, f);
+                      return dirPaths.some(dp => fullPath.startsWith(dp) || f.includes(path.basename(dp)));
+                    });
+                  };
+                  files = {
+                    api: filterByDirPaths(allFiles.api),
+                    schema: filterByDirPaths(allFiles.schema),
+                    tests: {
+                      unit: filterByDirPaths(allFiles.tests.unit),
+                      integration: filterByDirPaths(allFiles.tests.integration),
+                      e2e: filterByDirPaths(allFiles.tests.e2e),
+                    },
+                    fixtures: filterByDirPaths(allFiles.fixtures),
+                    config: filterByDirPaths(allFiles.config),
+                    css: filterByDirPaths(allFiles.css),
+                    prompts: filterByDirPaths(allFiles.prompts),
+                    other: filterByDirPaths(allFiles.other),
+                  };
+                } else {
+                  files = allFiles;
+                }
               } catch {
-                files = { api: [], schema: [], tests: { unit: [], integration: [], e2e: [] }, fixtures: [], config: [], other: [] };
+                files = { api: [], schema: [], tests: { unit: [], integration: [], e2e: [] }, fixtures: [], config: [], css: [], prompts: [], other: [] };
               }
 
               features.push({
                 name: aiFeature.name,
                 description: aiFeature.description,
                 basePath,
+                specificFiles, // Store for contract generation
                 files,
                 contractPatternMatches: files.api.length + files.schema.length + files.other.length,
               });
 
-              console.log(`[ContractGeneration] Created feature: ${aiFeature.name} (${aiFeature.category || 'uncategorized'})`);
+              console.log(`[ContractGeneration] Created feature: ${aiFeature.name} with ${keyFilePaths.length} keyFiles, ${files.api.length} API files (${aiFeature.category || 'uncategorized'})`);
             }
 
             // If we successfully identified features via AI, return them
@@ -1144,6 +1236,8 @@ export class ContractGenerationService extends BaseService {
         existing.files.schema = [...new Set([...existing.files.schema, ...feature.files.schema])];
         existing.files.config = [...new Set([...existing.files.config, ...feature.files.config])];
         existing.files.fixtures = [...new Set([...existing.files.fixtures, ...feature.files.fixtures])];
+        existing.files.css = [...new Set([...(existing.files.css || []), ...(feature.files.css || [])])];
+        existing.files.prompts = [...new Set([...(existing.files.prompts || []), ...(feature.files.prompts || [])])];
         existing.files.other = [...new Set([...existing.files.other, ...feature.files.other])];
         existing.files.tests.unit = [...new Set([...existing.files.tests.unit, ...feature.files.tests.unit])];
         existing.files.tests.e2e = [...new Set([...existing.files.tests.e2e, ...feature.files.tests.e2e])];
@@ -1183,6 +1277,8 @@ export class ContractGenerationService extends BaseService {
       tests: { e2e: [], unit: [], integration: [] },
       fixtures: [],
       config: [],
+      css: [],
+      prompts: [],
       other: [],
     };
 
@@ -1227,6 +1323,12 @@ export class ContractGenerationService extends BaseService {
             case 'config':
               if (!files.config.includes(relativePath)) files.config.push(relativePath);
               break;
+            case 'css':
+              if (!files.css.includes(relativePath)) files.css.push(relativePath);
+              break;
+            case 'prompts':
+              if (!files.prompts.includes(relativePath)) files.prompts.push(relativePath);
+              break;
           }
           }
         } catch {
@@ -1260,7 +1362,9 @@ export class ContractGenerationService extends BaseService {
             files.tests.unit.includes(relativePath) ||
             files.tests.integration.includes(relativePath) ||
             files.fixtures.includes(relativePath) ||
-            files.config.includes(relativePath);
+            files.config.includes(relativePath) ||
+            files.css.includes(relativePath) ||
+            files.prompts.includes(relativePath);
           if (!alreadyCategorized && !files.other.includes(relativePath)) {
             files.other.push(relativePath);
           }
@@ -1304,6 +1408,8 @@ export class ContractGenerationService extends BaseService {
       files.tests.integration.length +
       files.fixtures.length +
       files.config.length +
+      (files.css?.length || 0) +
+      (files.prompts?.length || 0) +
       files.other.length
     );
   }
@@ -1339,6 +1445,8 @@ export class ContractGenerationService extends BaseService {
           },
           fixtures: feature.files.fixtures,
           config: feature.files.config,
+          css: feature.files.css || [],
+          prompts: feature.files.prompts || [],
           other: feature.files.other,
         },
         codeSamples: codeSamples || 'No code samples available',
@@ -1555,6 +1663,12 @@ export class ContractGenerationService extends BaseService {
         ...feature.files.schema,
         ...feature.files.tests.e2e,
         ...feature.files.tests.unit,
+        ...feature.files.tests.integration,
+        ...feature.files.fixtures,
+        ...feature.files.config,
+        ...(feature.files.css || []),
+        ...(feature.files.prompts || []),
+        ...feature.files.other,
       ],
     };
   }
@@ -1808,8 +1922,10 @@ export class ContractGenerationService extends BaseService {
     const versionHeader = `<!-- Version: ${newVersion} | Generated: ${json.lastGenerated} -->\n\n`;
     const markdownWithVersion = versionHeader + markdown;
 
-    // 1. Save Markdown to feature folder
-    const markdownPath = path.join(feature.basePath, 'CONTRACTS.md');
+    // 1. Save Markdown to feature folder with feature name in filename
+    // Sanitize feature name for filename (replace spaces and special chars)
+    const sanitizedName = feature.name.replace(/[^a-zA-Z0-9-_]/g, '_');
+    const markdownPath = path.join(feature.basePath, `CONTRACTS_${sanitizedName}.md`);
     await fs.writeFile(markdownPath, markdownWithVersion, 'utf-8');
     console.log(`[ContractGeneration] Saved markdown v${newVersion}: ${markdownPath}`);
 
@@ -1925,7 +2041,7 @@ export class ContractGenerationService extends BaseService {
           results: features.map(f => ({
             feature: f.name,
             success: true,
-            markdownPath: path.join(f.basePath, 'CONTRACTS.md'),
+            markdownPath: path.join(f.basePath, `CONTRACTS_${f.name.replace(/[^a-zA-Z0-9-_]/g, '_')}.md`),
           })),
           duration: Date.now() - startTime,
         };
@@ -1953,7 +2069,8 @@ export class ContractGenerationService extends BaseService {
 
         // Check if should skip existing (only in non-incremental mode or forceRefresh)
         if (options.skipExisting && !isIncremental) {
-          const existingPath = path.join(feature.basePath, 'CONTRACTS.md');
+          const sanitizedName = feature.name.replace(/[^a-zA-Z0-9-_]/g, '_');
+          const existingPath = path.join(feature.basePath, `CONTRACTS_${sanitizedName}.md`);
           try {
             await fs.access(existingPath);
             results.push({
@@ -2427,7 +2544,7 @@ export class ContractGenerationService extends BaseService {
             const featureInfo = {
               name: feature.name,
               description: feature.description || 'No description',
-              paths: feature.paths || [],
+              paths: feature.basePath ? [feature.basePath] : [],
               apiFiles: feature.files?.api?.slice(0, 5) || [],
               schemaFiles: feature.files?.schema?.slice(0, 5) || [],
               hasTests: (feature.files?.tests?.e2e?.length || 0) + (feature.files?.tests?.unit?.length || 0) > 0

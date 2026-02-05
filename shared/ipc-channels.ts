@@ -88,6 +88,8 @@ export const IPC = {
   // ==========================================================================
   LOG_GET: 'log:get',
   LOG_CLEAR: 'log:clear',
+  LOG_GET_COMMITS: 'log:get-commits',  // Get commits for a session from database
+  LOG_GET_TIMELINE: 'log:get-timeline',  // Get combined activity + commits timeline
   // Events (main → renderer)
   LOG_ENTRY: 'log:entry',
 
@@ -197,6 +199,7 @@ export const IPC = {
   REBASE_WATCHER_STOPPED: 'rebase-watcher:stopped',
   REBASE_REMOTE_CHANGES_DETECTED: 'rebase:remote-changes-detected',
   REBASE_AUTO_COMPLETED: 'rebase:auto-completed',
+  REBASE_ERROR_DETECTED: 'rebase:error-detected',
 
   // ==========================================================================
   // CONTRACT DETECTION CHANNELS
@@ -345,6 +348,9 @@ export const IPC = {
   CONFLICT_APPLY_APPROVED: 'conflict:apply-approved',          // Apply user-approved resolutions
   CONFLICT_ABORT_REBASE: 'conflict:abort-rebase',              // Abort and revert
   CONFLICT_IS_REBASE_IN_PROGRESS: 'conflict:is-rebase-in-progress',
+  // Backup branch management for safe auto-fix
+  CONFLICT_CREATE_BACKUP: 'conflict:create-backup',            // Create backup_kit/<sessionId> branch
+  CONFLICT_DELETE_BACKUP: 'conflict:delete-backup',            // Delete backup branch after success
   // Legacy auto-apply (use with caution)
   CONFLICT_REBASE_WITH_AI: 'conflict:rebase-with-ai',
   // Events

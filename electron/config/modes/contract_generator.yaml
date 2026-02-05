@@ -165,7 +165,13 @@ prompts:
       For each feature, provide:
       - A descriptive business name (e.g., "User Authentication", "News Content Processing")
       - The SPECIFIC path to the feature code (e.g., "backend/src/auth", NOT just "backend")
+      - KEY FILES that define this feature's API (routes, controllers, handlers)
       - A brief description of what it does
+
+      CRITICAL: When multiple features exist in the same directory, use keyFiles to identify
+      which specific files belong to each feature. For example:
+      - "Authentication" might use: auth.routes.ts, auth.controller.ts, login.ts
+      - "User Management" might use: users.routes.ts, users.controller.ts, profile.ts
 
       Return ONLY valid JSON (no explanations):
       ```json
@@ -173,13 +179,15 @@ prompts:
         "features": [
           {
             "name": "User Authentication",
-            "paths": ["backend/src/auth", "firebase/functions/src/auth"],
+            "paths": ["backend/src/routes"],
+            "keyFiles": ["backend/src/routes/auth.ts", "backend/src/routes/login.ts", "backend/src/controllers/authController.ts"],
             "description": "User registration, login, password reset, and session management"
           },
           {
-            "name": "News Content Processing",
-            "paths": ["ai-worker/src/processors"],
-            "description": "AI-powered news article analysis and summarization"
+            "name": "User Profile Management",
+            "paths": ["backend/src/routes"],
+            "keyFiles": ["backend/src/routes/users.ts", "backend/src/routes/profile.ts", "backend/src/controllers/userController.ts"],
+            "description": "User profile CRUD, settings, and preferences"
           }
         ]
       }
@@ -187,6 +195,7 @@ prompts:
 
       IMPORTANT:
       - Return SPECIFIC paths (backend/src/users NOT backend)
+      - Include keyFiles to differentiate features in the same directory
       - Use descriptive BUSINESS names
       - Group related code across folders into single features
       - EXCLUDE: tests, docs, config, scripts, devops, infrastructure folders

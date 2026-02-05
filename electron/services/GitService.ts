@@ -1112,31 +1112,22 @@ export class GitService extends BaseService {
   ): Promise<IpcResult<GitCommitWithFiles[]>> {
     return this.wrap(async () => {
       const currentBranch = await this.git(['branch', '--show-current'], repoPath);
-
-      // Find merge-base to determine where branch diverged
-      let mergeBase: string;
-      try {
-        mergeBase = await this.git(['merge-base', `origin/${baseBranch}`, currentBranch], repoPath);
-      } catch {
-        try {
-          mergeBase = await this.git(['merge-base', baseBranch, currentBranch], repoPath);
-        } catch {
-          // If no merge-base, get all commits up to limit
-          mergeBase = '';
-        }
-      }
-
-      // Get commit log with stats
-      const range = mergeBase ? `${mergeBase}..HEAD` : `-${limit}`;
       const logFormat = '%H|%h|%s|%an|%aI';
 
-      const logOutput = await this.git([
-        'log',
-        range,
-        `--format=${logFormat}`,
-        '--shortstat',
-        `-${limit}`,
-      ], repoPath);
+      // Helper to run git log and parse output
+      const runGitLog = async (range: string): Promise<string> => {
+        return this.git([
+          'log',
+          range,
+          `--format=${logFormat}`,
+          '--shortstat',
+          `-${limit}`,
+        ], repoPath);
+      };
+
+      // Always get recent commits from HEAD - this is what users expect to see in the timeline
+      // The branch comparison approach only shows "new" commits which may be very few after rebasing
+      const logOutput = await runGitLog(`-${limit}`);
 
       const commits: GitCommitWithFiles[] = [];
       const lines = logOutput.split('\n');

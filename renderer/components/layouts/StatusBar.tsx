@@ -19,12 +19,21 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ agent }: StatusBarProps): React.ReactElement {
-  const agentsMap = useAgentStore((state) => state.agents);
   const reportedSessions = useAgentStore((state) => state.reportedSessions);
+  const sessions = useMemo(() => Array.from(reportedSessions.values()), [reportedSessions]);
 
-  const agents = useMemo(() => Array.from(agentsMap.values()), [agentsMap]);
-  const aliveAgents = agents.filter((a) => a.isAlive).length;
-  const totalSessions = reportedSessions.size;
+  // Count unique agents from sessions (sessions are the actual data source)
+  const uniqueAgentCount = useMemo(() => {
+    const agentIds = new Set<string>();
+    for (const session of sessions) {
+      if (session.agentId) agentIds.add(session.agentId);
+    }
+    return agentIds.size;
+  }, [sessions]);
+
+  // Active sessions count
+  const activeSessions = sessions.filter(s => s.status === 'active').length;
+  const totalSessions = sessions.length;
 
   return (
     <div className="h-7 px-4 bg-surface border-t border-border flex items-center gap-4 text-xs">
@@ -40,23 +49,25 @@ export function StatusBar({ agent }: StatusBarProps): React.ReactElement {
 
       <span className="text-border">|</span>
 
-      {/* Agent count */}
-      <span className="flex items-center gap-1.5 text-text-secondary">
-        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-        </svg>
-        <span className="text-text-primary">{aliveAgents}</span>
-        <span>/{agents.length} agents</span>
-      </span>
-
       {/* Session count */}
       <span className="flex items-center gap-1.5 text-text-secondary">
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
         </svg>
-        <span className="text-text-primary">{totalSessions}</span>
-        <span>sessions</span>
+        <span className="text-text-primary">{activeSessions}</span>
+        <span>/{totalSessions} sessions</span>
       </span>
+
+      {/* Agent count */}
+      {uniqueAgentCount > 0 && (
+        <span className="flex items-center gap-1.5 text-text-secondary">
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+          </svg>
+          <span className="text-text-primary">{uniqueAgentCount}</span>
+          <span>agent{uniqueAgentCount !== 1 ? 's' : ''}</span>
+        </span>
+      )}
 
       {/* Selected agent info */}
       {agent && (

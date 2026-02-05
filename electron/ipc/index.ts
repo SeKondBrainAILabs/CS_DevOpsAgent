@@ -227,12 +227,20 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   // ==========================================================================
   // ACTIVITY LOG HANDLERS
   // ==========================================================================
-  ipcMain.handle(IPC.LOG_GET, async (_, sessionId: string, limit?: number) => {
-    return services.activity.getLogs(sessionId, limit);
+  ipcMain.handle(IPC.LOG_GET, async (_, sessionId: string, limit?: number, offset?: number) => {
+    return services.activity.getLogs(sessionId, limit, offset);
   });
 
   ipcMain.handle(IPC.LOG_CLEAR, async (_, sessionId: string) => {
     return services.activity.clearLogs(sessionId);
+  });
+
+  ipcMain.handle(IPC.LOG_GET_COMMITS, async (_, sessionId: string, limit?: number) => {
+    return services.activity.getCommitsForSession(sessionId, limit);
+  });
+
+  ipcMain.handle(IPC.LOG_GET_TIMELINE, async (_, sessionId: string, limit?: number) => {
+    return services.activity.getTimelineForSession(sessionId, limit);
   });
 
   // ==========================================================================

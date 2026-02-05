@@ -296,7 +296,8 @@ export class RebaseWatcherService extends BaseService {
     if (hasNewCommits) {
       console.log(`[RebaseWatcher] Detected ${status.behind} new commits behind ${config.baseBranch} for ${config.sessionId}`);
 
-      // Emit changes detected event
+      // Emit changes detected event - notify UI but do NOT auto-rebase
+      // User should explicitly trigger rebase via the UI
       this.emitToRenderer(IPC.REBASE_REMOTE_CHANGES_DETECTED, {
         sessionId: config.sessionId,
         repoPath: config.repoPath,
@@ -308,8 +309,8 @@ export class RebaseWatcherService extends BaseService {
       // Update last known commit
       state.lastRemoteCommit = status.lastCommit;
 
-      // Auto-rebase if we're behind
-      if (status.behind > 0) {
+      // Only auto-rebase if explicitly forced (user-triggered), not during polling
+      if (forceRebase && status.behind > 0) {
         await this.performAutoRebase(state);
       }
 
@@ -392,6 +393,28 @@ export class RebaseWatcherService extends BaseService {
         // Pause watching on conflict to prevent repeated failures
         state.isPaused = true;
         console.log(`[RebaseWatcher] Auto-rebase failed for ${config.sessionId}, pausing watcher`);
+
+        // Emit rebase error event for UI dialog
+        // Try to get list of conflicted files
+        let conflictedFiles: string[] = [];
+        try {
+          const { exec } = await import('child_process');
+          const { promisify } = await import('util');
+          const execAsync = promisify(exec);
+          const conflictResult = await execAsync('git diff --name-only --diff-filter=U', { cwd: config.repoPath });
+          conflictedFiles = conflictResult.stdout.trim().split('\n').filter(Boolean);
+        } catch {
+          // Ignore errors getting conflict list
+        }
+
+        this.emitToRenderer(IPC.REBASE_ERROR_DETECTED, {
+          sessionId: config.sessionId,
+          repoPath: config.repoPath,
+          baseBranch: config.baseBranch,
+          currentBranch: config.currentBranch,
+          conflictedFiles,
+          errorMessage: rebaseResult.message,
+        });
       }
 
       this.emitStatus(config.sessionId);

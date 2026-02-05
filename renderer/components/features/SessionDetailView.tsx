@@ -3,15 +3,90 @@
  * Shows detailed view of a selected session including prompt, activity, files, and contracts
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { FixedSizeList as List } from 'react-window';
 import type { SessionReport } from '../../../shared/agent-protocol';
 import type { AgentInstance, ContractType, Contract, ActivityLogEntry, DiscoveredFeature } from '../../../shared/types';
+import { computeFeatureFileStats, getFeatureRelativePath, getFileTooltip } from '../../../shared/feature-utils';
 import { useAgentStore } from '../../store/agentStore';
+import { useContractStore } from '../../store/contractStore';
 import { CommitsTab } from './CommitsTab';
 
 type DetailTab = 'prompt' | 'activity' | 'commits' | 'files' | 'contracts' | 'terminal';
+
+// Threshold for switching to virtualized rendering
+const VIRTUALIZATION_LINE_THRESHOLD = 100;
+
+/**
+ * VirtualizedDiff - Renders large diffs with react-window for performance
+ * Falls back to normal rendering for small diffs (<100 lines)
+ */
+function VirtualizedDiff({ diff, maxHeight = 300 }: { diff: string; maxHeight?: number }): React.ReactElement {
+  const lines = useMemo(() => diff.split('\n'), [diff]);
+
+  // Get line class based on diff prefix
+  const getLineClass = (line: string): string => {
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      return 'text-green-600 bg-green-50';
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      return 'text-red-600 bg-red-50';
+    } else if (line.startsWith('@@')) {
+      return 'text-blue-600';
+    }
+    return 'text-text-primary';
+  };
+
+  // Small diffs render normally (better for copy/paste)
+  if (lines.length < VIRTUALIZATION_LINE_THRESHOLD) {
+    return (
+      <pre className="text-xs font-mono whitespace-pre-wrap">
+        {lines.map((line, i) => (
+          <div key={i} className={getLineClass(line)}>{line}</div>
+        ))}
+      </pre>
+    );
+  }
+
+  // Large diffs use virtualization
+  return (
+    <List
+      height={maxHeight}
+      itemCount={lines.length}
+      itemSize={18}
+      width="100%"
+      className="text-xs font-mono"
+    >
+      {({ index, style }) => {
+        const line = lines[index];
+        return (
+          <div style={style} className={`${getLineClass(line)} px-1 truncate`}>
+            {line || '\u00A0'}
+          </div>
+        );
+      }}
+    </List>
+  );
+}
+
+/**
+ * EscapeKeyHandler - Listens for Escape key and calls onEscape callback.
+ * Renders nothing, just attaches/detaches the event listener.
+ */
+function EscapeKeyHandler({ onEscape }: { onEscape: () => void }): null {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onEscape();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onEscape]);
+  return null;
+}
 
 interface SessionDetailViewProps {
   session: SessionReport;
@@ -351,7 +426,11 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
           />
         )}
         {activeTab === 'activity' && (
-          <ActivityTab sessionId={session.sessionId} />
+          <ActivityTab
+            sessionId={session.sessionId}
+            repoPath={session.worktreePath || session.repoPath}
+            baseBranch={session.baseBranch}
+          />
         )}
         {activeTab === 'commits' && (
           <CommitsTab session={session} />
@@ -461,15 +540,24 @@ function InfoCard({ label, value, mono = false }: { label: string; value: string
 }
 
 /**
- * ActivityTab - Shows activity log for this session
+ * ActivityTab - Shows unified timeline for this session
+ * Combines activity logs and commits from database + git history
  * Includes verbose mode toggle to show/hide file changes and debug info
- * Loads historical data from database and shows session resume indicator
  */
-function ActivityTab({ sessionId }: { sessionId: string }): React.ReactElement {
+function ActivityTab({ sessionId, repoPath, baseBranch }: { sessionId: string; repoPath?: string; baseBranch?: string }): React.ReactElement {
   const [verboseMode, setVerboseMode] = useState(false);
   const [historicalLogs, setHistoricalLogs] = useState<ActivityLogEntry[]>([]);
+  const [commits, setCommits] = useState<Array<{
+    hash: string;
+    message: string;
+    timestamp: string;
+    filesChanged: number;
+    additions: number;
+    deletions: number;
+  }>>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [offset, setOffset] = useState(0);
   const PAGE_SIZE = 50;
 
@@ -478,18 +566,61 @@ function ActivityTab({ sessionId }: { sessionId: string }): React.ReactElement {
 
   const recentActivity = useAgentStore((state) => state.recentActivity);
 
-  // Load historical logs from database on mount
+  // Load historical logs and commits from database + git history on mount
   useEffect(() => {
     async function loadHistory() {
       setLoading(true);
       try {
+        // Load activity logs
         if (window.api?.activity?.get) {
-          const result = await window.api.activity.get(sessionId, PAGE_SIZE);
+          const result = await window.api.activity.get(sessionId, PAGE_SIZE, 0);
           if (result.success && result.data) {
             setHistoricalLogs(result.data);
             setHasMore(result.data.length >= PAGE_SIZE);
           }
         }
+
+        // Load commits for this session from database
+        const dbCommits: typeof commits = [];
+        if (window.api?.activity?.getCommits) {
+          const commitResult = await window.api.activity.getCommits(sessionId, 100);
+          if (commitResult.success && commitResult.data) {
+            dbCommits.push(...commitResult.data);
+          }
+        }
+
+        // Also load commits from git history if repoPath is available
+        const gitCommits: typeof commits = [];
+        if (repoPath && window.api?.git?.getCommitHistory) {
+          try {
+            const gitResult = await window.api.git.getCommitHistory(repoPath, baseBranch || 'main', 100);
+            if (gitResult.success && gitResult.data) {
+              // Map git commits to our format
+              for (const gc of gitResult.data) {
+                gitCommits.push({
+                  hash: gc.hash,
+                  message: gc.message,
+                  timestamp: gc.date,
+                  filesChanged: gc.filesChanged,
+                  additions: gc.additions,
+                  deletions: gc.deletions,
+                });
+              }
+            }
+          } catch (gitError) {
+            console.warn('Failed to load git commit history:', gitError);
+          }
+        }
+
+        // Merge commits, avoiding duplicates by hash (prefer git commits as they're more up-to-date)
+        const commitsByHash = new Map<string, typeof commits[0]>();
+        for (const commit of dbCommits) {
+          commitsByHash.set(commit.hash, commit);
+        }
+        for (const commit of gitCommits) {
+          commitsByHash.set(commit.hash, commit);
+        }
+        setCommits(Array.from(commitsByHash.values()));
       } catch (error) {
         console.error('Failed to load activity history:', error);
       } finally {
@@ -497,23 +628,26 @@ function ActivityTab({ sessionId }: { sessionId: string }): React.ReactElement {
       }
     }
     loadHistory();
-  }, [sessionId]);
+  }, [sessionId, repoPath, baseBranch]);
 
-  // Load more historical logs
+  // Load more historical logs with proper offset
   const loadMore = async () => {
     const newOffset = offset + PAGE_SIZE;
+    setLoadingMore(true);
     try {
       if (window.api?.activity?.get) {
-        const result = await window.api.activity.get(sessionId, PAGE_SIZE);
+        const result = await window.api.activity.get(sessionId, PAGE_SIZE, newOffset);
         if (result.success && result.data) {
-          // Filter to get older entries (would need offset support in API)
-          // For now, we just indicate there's more
+          // Append older entries to existing logs
+          setHistoricalLogs(prev => [...prev, ...result.data]);
           setOffset(newOffset);
-          setHasMore(false); // Disable for now until API supports offset
+          setHasMore(result.data.length >= PAGE_SIZE);
         }
       }
     } catch (error) {
       console.error('Failed to load more activity:', error);
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -526,13 +660,49 @@ function ActivityTab({ sessionId }: { sessionId: string }): React.ReactElement {
   const historicalTimestamps = new Set(historicalLogs.map(l => l.timestamp));
   const dedupedLiveActivity = liveActivity.filter(a => !historicalTimestamps.has(a.timestamp));
 
-  // Combine: live entries first (newest), then historical
-  const allActivity = [...dedupedLiveActivity, ...historicalLogs];
+  // Create unified timeline: combine activity logs and commits
+  type TimelineEntry =
+    | { type: 'activity'; data: ActivityLogEntry }
+    | { type: 'commit'; data: { hash: string; message: string; timestamp: string; filesChanged: number; additions: number; deletions: number } };
+
+  const timeline: TimelineEntry[] = [];
+
+  // Add live activity
+  for (const entry of dedupedLiveActivity) {
+    timeline.push({ type: 'activity', data: entry });
+  }
+
+  // Add historical activity
+  for (const entry of historicalLogs) {
+    timeline.push({ type: 'activity', data: entry });
+  }
+
+  // Add commits (avoiding duplicates if they're already in activity as 'commit' type)
+  const commitHashesInActivity = new Set(
+    historicalLogs.filter(l => l.type === 'commit' && l.commitHash).map(l => l.commitHash)
+  );
+  for (const commit of commits) {
+    if (!commitHashesInActivity.has(commit.hash)) {
+      timeline.push({ type: 'commit', data: commit });
+    }
+  }
+
+  // Sort by timestamp (newest first)
+  timeline.sort((a, b) => {
+    const aTime = a.type === 'activity' ? a.data.timestamp : a.data.timestamp;
+    const bTime = b.type === 'activity' ? b.data.timestamp : b.data.timestamp;
+    return new Date(bTime).getTime() - new Date(aTime).getTime();
+  });
 
   // In non-verbose mode, hide file changes to reduce noise
-  const filteredActivity = verboseMode
-    ? allActivity
-    : allActivity.filter(a => a.type !== 'file');
+  const filteredTimeline = verboseMode
+    ? timeline
+    : timeline.filter(entry =>
+        entry.type === 'commit' || (entry.type === 'activity' && entry.data.type !== 'file')
+      );
+
+  // Legacy: for display calculations
+  const allActivity = historicalLogs;
 
   const formatTime = (timestamp: string): string => {
     return new Date(timestamp).toLocaleTimeString('en-US', {
@@ -562,6 +732,7 @@ function ActivityTab({ sessionId }: { sessionId: string }): React.ReactElement {
   };
 
   const fileChangeCount = allActivity.filter(a => a.type === 'file').length;
+  const commitCount = commits.length;
   const historicalCount = historicalLogs.length;
 
   return (
@@ -569,10 +740,15 @@ function ActivityTab({ sessionId }: { sessionId: string }): React.ReactElement {
       {/* Header with verbose toggle */}
       <div className="px-4 py-3 border-b border-border bg-surface flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <span className="text-sm font-medium text-text-primary">Activity Log</span>
+          <span className="text-sm font-medium text-text-primary">Timeline</span>
           <span className="text-xs px-2 py-0.5 rounded-full bg-surface-tertiary text-text-secondary">
-            {filteredActivity.length} events
+            {filteredTimeline.length} events
           </span>
+          {commitCount > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">
+              {commitCount} commits
+            </span>
+          )}
           {!verboseMode && fileChangeCount > 0 && (
             <span className="text-xs text-text-secondary">
               ({fileChangeCount} file changes hidden)
@@ -596,13 +772,13 @@ function ActivityTab({ sessionId }: { sessionId: string }): React.ReactElement {
         </label>
       </div>
 
-      {/* Activity list */}
+      {/* Timeline list */}
       <div className="flex-1 overflow-auto">
         {loading ? (
           <div className="h-full flex items-center justify-center">
             <div className="w-6 h-6 border-2 border-kanvas-blue border-t-transparent rounded-full animate-spin" />
           </div>
-        ) : filteredActivity.length === 0 ? (
+        ) : filteredTimeline.length === 0 ? (
           <div className="h-full flex items-center justify-center">
             <div className="text-center">
               <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-surface-tertiary flex items-center justify-center">
@@ -621,26 +797,57 @@ function ActivityTab({ sessionId }: { sessionId: string }): React.ReactElement {
           </div>
         ) : (
           <div className="divide-y divide-border">
-            {filteredActivity.map((entry, index) => {
-              const style = logTypeStyles[entry.type] || logTypeStyles.info;
-              const isHistorical = entry.timestamp < sessionResumeTime;
-              const isFirstHistorical = isHistorical &&
-                (index === 0 || filteredActivity[index - 1]?.timestamp >= sessionResumeTime);
+            {filteredTimeline.map((entry, index) => {
+              const timestamp = entry.type === 'activity' ? entry.data.timestamp : entry.data.timestamp;
+              const isHistorical = timestamp < sessionResumeTime;
 
-              return (
-                <React.Fragment key={`${entry.timestamp}-${index}`}>
-                  {/* Session resume separator */}
-                  {isFirstHistorical && dedupedLiveActivity.length > 0 && (
-                    <div className="px-4 py-2 bg-surface-secondary border-y border-border">
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1 h-px bg-border" />
-                        <span className="text-xs text-text-secondary font-medium">
-                          Session resumed {formatDate(sessionResumeTime)}
-                        </span>
-                        <div className="flex-1 h-px bg-border" />
+              // Render commit entry
+              if (entry.type === 'commit') {
+                const commit = entry.data;
+                return (
+                  <div
+                    key={`commit-${commit.hash}-${index}`}
+                    className={`px-4 py-3 hover:bg-surface-secondary transition-colors ${
+                      isHistorical ? 'opacity-70' : ''
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="flex-shrink-0 w-6 h-6 rounded-full bg-purple-100 flex items-center justify-center mt-0.5">
+                        <svg className="w-3.5 h-3.5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                            d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <code className="text-xs font-mono text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">
+                            {commit.hash.slice(0, 7)}
+                          </code>
+                          <p className="text-sm text-text-primary break-words flex-1">{commit.message}</p>
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">
+                            Commit
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 mt-1">
+                          <span className="text-xs text-text-secondary">{formatTime(commit.timestamp)}</span>
+                          <span className="text-xs text-text-secondary">
+                            {commit.filesChanged} files
+                          </span>
+                          <span className="text-xs text-green-600">+{commit.additions}</span>
+                          <span className="text-xs text-red-600">-{commit.deletions}</span>
+                        </div>
                       </div>
                     </div>
-                  )}
+                  </div>
+                );
+              }
+
+              // Render activity entry
+              const activityEntry = entry.data;
+              const style = logTypeStyles[activityEntry.type] || logTypeStyles.info;
+
+              return (
+                <React.Fragment key={`activity-${activityEntry.timestamp}-${index}`}>
                   <div
                     className={`px-4 py-3 hover:bg-surface-secondary transition-colors ${
                       isHistorical ? 'opacity-70' : ''
@@ -649,21 +856,21 @@ function ActivityTab({ sessionId }: { sessionId: string }): React.ReactElement {
                     <div className="flex items-start gap-3">
                       <div className={`flex-shrink-0 w-6 h-6 rounded-full ${style.bg} flex items-center justify-center mt-0.5`}>
                         <span className={`text-xs font-bold ${style.color}`}>
-                          {entry.type.charAt(0).toUpperCase()}
+                          {activityEntry.type.charAt(0).toUpperCase()}
                         </span>
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <p className="text-sm text-text-primary break-words flex-1">{entry.message}</p>
+                          <p className="text-sm text-text-primary break-words flex-1">{activityEntry.message}</p>
                           <span className={`text-xs px-1.5 py-0.5 rounded ${style.bg} ${style.color}`}>
                             {style.label}
                           </span>
                         </div>
-                        <span className="text-xs text-text-secondary">{formatTime(entry.timestamp)}</span>
-                        {entry.details && Object.keys(entry.details).length > 0 && (
+                        <span className="text-xs text-text-secondary">{formatTime(activityEntry.timestamp)}</span>
+                        {activityEntry.details && Object.keys(activityEntry.details).length > 0 && (
                           <div className="mt-2 p-2 rounded-lg bg-surface-tertiary">
                             <pre className="text-xs text-text-secondary font-mono whitespace-pre-wrap break-all">
-                              {JSON.stringify(entry.details, null, 2)}
+                              {JSON.stringify(activityEntry.details, null, 2)}
                             </pre>
                           </div>
                         )}
@@ -679,17 +886,25 @@ function ActivityTab({ sessionId }: { sessionId: string }): React.ReactElement {
               <div className="px-4 py-3 text-center">
                 <button
                   onClick={loadMore}
-                  className="text-sm text-kanvas-blue hover:underline"
+                  disabled={loadingMore}
+                  className="text-sm text-kanvas-blue hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Load more history...
+                  {loadingMore ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <div className="w-3 h-3 border border-kanvas-blue border-t-transparent rounded-full animate-spin" />
+                      Loading...
+                    </span>
+                  ) : (
+                    'Load more history...'
+                  )}
                 </button>
               </div>
             )}
 
             {/* Historical data indicator */}
-            {historicalCount > 0 && !hasMore && (
+            {(historicalCount > 0 || commitCount > 0) && !hasMore && (
               <div className="px-4 py-2 text-center text-xs text-text-secondary bg-surface-secondary">
-                Showing {historicalCount} entries from previous sessions
+                Showing {historicalCount} activity entries and {commitCount} commits from session history
               </div>
             )}
           </div>
@@ -1434,24 +1649,13 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
     contractPatternMatches: number;
   }>>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generationProgress, setGenerationProgress] = useState<{
-    total: number;
-    completed: number;
-    currentFeature: string;
-    currentStep: string;
-    errors: string[];
-  } | null>(null);
-  const [generationResult, setGenerationResult] = useState<{
-    generated: number;
-    failed: number;
-    duration: number;
-  } | null>(null);
-  const [activityLogs, setActivityLogs] = useState<Array<{
-    time: string;
-    message: string;
-    type: 'info' | 'success' | 'error';
-  }>>([]);
+  const [discoveryStatus, setDiscoveryStatus] = useState<string>('');
+  // Use global contract store (persists across tab switches)
+  const isGenerating = useContractStore((state) => state.isGenerating);
+  const setIsGenerating = useContractStore((state) => state.setIsGenerating);
+  const generationProgress = useContractStore((state) => state.generationProgress);
+  const generationResult = useContractStore((state) => state.generationResult);
+  const activityLogs = useContractStore((state) => state.activityLogs);
   const [showActivityLog, setShowActivityLog] = useState(true);
   const [expandedFeature, setExpandedFeature] = useState<string | null>(null);
   const [featuresCollapsed, setFeaturesCollapsed] = useState(false);
@@ -1790,54 +1994,9 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
     });
   }, [discoveredFeatures, session.worktreePath, session.repoPath]);
 
-  // Listen for generation progress events
-  useEffect(() => {
-    const unsubProgress = window.api?.contractGeneration?.onProgress((progress) => {
-      setGenerationProgress(progress);
-      // Add activity log entry
-      const time = new Date().toLocaleTimeString();
-      const stepLabels: Record<string, string> = {
-        discovering: 'Discovering features',
-        analyzing: 'Analyzing code',
-        generating: 'Generating contract',
-        saving: 'Saving contract',
-      };
-      const contractTypeLabels: Record<string, string> = {
-        markdown: '📄 Markdown',
-        json: '📋 JSON',
-        admin: '👤 Admin',
-      };
-      const stepLabel = stepLabels[progress.currentStep] || progress.currentStep;
-      const contractTypeLabel = progress.contractType ? ` [${contractTypeLabels[progress.contractType] || progress.contractType}]` : '';
-      setActivityLogs(prev => {
-        const newLog = { time, message: `${stepLabel}${contractTypeLabel}: ${progress.currentFeature}`, type: 'info' as const };
-        // Keep only last 50 logs
-        return [...prev.slice(-49), newLog];
-      });
-    });
-    const unsubComplete = window.api?.contractGeneration?.onComplete((result) => {
-      setIsGenerating(false);
-      setGenerationProgress(null);
-      // Add completion log
-      const time = new Date().toLocaleTimeString();
-      setActivityLogs(prev => [...prev.slice(-49), {
-        time,
-        message: `Completed: ${result.generated} contracts generated, ${result.failed} failed (${(result.duration / 1000).toFixed(1)}s)`,
-        type: result.failed > 0 ? 'error' as const : 'success' as const,
-      }]);
-      setGenerationResult({
-        generated: result.generated,
-        failed: result.failed,
-        duration: result.duration,
-      });
-      // Clear result after 5 seconds
-      setTimeout(() => setGenerationResult(null), 5000);
-    });
-    return () => {
-      unsubProgress?.();
-      unsubComplete?.();
-    };
-  }, []);
+  // NOTE: Contract generation event listeners are now registered at app-level
+  // via useContractGenerationSubscription() hook in App.tsx
+  // This ensures events are captured even when switching tabs
 
   // Get the scan path based on selected option
   const getScanPath = () => {
@@ -1885,17 +2044,24 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
     setIsDiscovering(true);
     setDiscoveredFeatures([]);
     setGenerationResult(null);
+    setDiscoveryStatus('Scanning repository structure...');
 
     try {
       // Use AI to intelligently filter features (true = use LLM to identify actual features)
+      setDiscoveryStatus('Analyzing codebase with AI...');
       const result = await window.api?.contractGeneration?.discoverFeatures(repoPath, true);
       if (result?.success && result.data) {
+        setDiscoveryStatus(`Found ${result.data.length} features! Saving...`);
         setDiscoveredFeatures(result.data);
         // Save discovered features for later
         await window.api?.contractGeneration?.saveDiscoveredFeatures(repoPath, result.data);
+        setDiscoveryStatus('');
+      } else {
+        setDiscoveryStatus('No features found');
       }
     } catch (err) {
       console.error('Failed to discover features:', err);
+      setDiscoveryStatus('Discovery failed');
     } finally {
       setIsDiscovering(false);
     }
@@ -1904,21 +2070,24 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
   // Generate contracts for all discovered features
   // forceRefresh=false (default): Incremental mode - only process features with changes
   // forceRefresh=true: Process all features regardless of changes
+  const clearGenerationResult = useContractStore((state) => state.clearGenerationResult);
   const handleGenerateAll = async (forceRefresh = false) => {
     const repoPath = getScanPath();
     if (!repoPath || isGenerating) return;
 
     setIsGenerating(true);
-    setGenerationResult(null);
+    clearGenerationResult();
 
     try {
+      // Always pass discovered features if available - no need to re-discover
+      // forceRefresh=true just means regenerate ALL features, not just changed ones
       await window.api?.contractGeneration?.generateAll(repoPath, {
         includeCodeSamples: true,
         maxFilesPerFeature: 10,
         preDiscoveredFeatures: discoveredFeatures.length > 0 ? discoveredFeatures : undefined,
         forceRefresh,
       });
-      // Result comes via onComplete event
+      // Result comes via onComplete event (handled in useContractGenerationSubscription)
     } catch (err) {
       console.error('Failed to generate contracts:', err);
       setIsGenerating(false);
@@ -2080,6 +2249,31 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
         </div>
       </div>
 
+      {/* Discovery Progress */}
+      {isDiscovering && (
+        <div className="mx-4 mt-4 p-3 bg-purple-50 border border-purple-200 rounded-xl">
+          <div className="flex items-center gap-3">
+            <span className="animate-spin w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full" />
+            <div className="flex-1">
+              <div className="text-sm font-medium text-purple-800">
+                🔍 Discovering Features
+              </div>
+              <div className="text-xs text-purple-600 mt-0.5">
+                {discoveryStatus || 'Initializing...'}
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="w-2 h-2 bg-purple-400 rounded-full animate-pulse" />
+              <div className="w-2 h-2 bg-purple-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }} />
+              <div className="w-2 h-2 bg-purple-400 rounded-full animate-pulse" style={{ animationDelay: '0.4s' }} />
+            </div>
+          </div>
+          <div className="mt-2 h-1.5 bg-purple-100 rounded-full overflow-hidden">
+            <div className="h-full bg-purple-400 rounded-full animate-pulse" style={{ width: '60%' }} />
+          </div>
+        </div>
+      )}
+
       {/* Generation Progress */}
       {isGenerating && generationProgress && (
         <div className="mx-4 mt-4 p-3 bg-blue-50 border border-blue-200 rounded-xl">
@@ -2151,7 +2345,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
       )}
 
       {/* Discovered Features - Table View */}
-      {discoveredFeatures.length > 0 && !isGenerating && (
+      {discoveredFeatures.length > 0 && (
         <div className="mx-4 mt-4 p-3 bg-surface-secondary rounded-xl border border-border flex flex-col">
           <div className="flex items-center justify-between flex-shrink-0">
             <button
@@ -2185,12 +2379,13 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
                 <tr className="border-b border-border text-left text-text-secondary">
                   <th className="pb-2 pr-4 font-medium">Feature</th>
                   <th className="pb-2 pr-4 font-medium">Location</th>
-                  <th className="pb-2 pr-2 font-medium text-center" title="API files">🔌</th>
-                  <th className="pb-2 pr-2 font-medium text-center" title="Schema files">📐</th>
-                  <th className="pb-2 pr-2 font-medium text-center" title="Events/Config">⚡</th>
+                  <th className="pb-2 pr-2 font-medium text-center" title="API/Route files">🔌</th>
+                  <th className="pb-2 pr-2 font-medium text-center" title="Schema/Type files">📐</th>
+                  <th className="pb-2 pr-2 font-medium text-center" title="Config files">⚡</th>
                   <th className="pb-2 pr-2 font-medium text-center" title="Unit tests">🧪</th>
+                  <th className="pb-2 pr-2 font-medium text-center" title="Integration tests">🔗</th>
                   <th className="pb-2 pr-2 font-medium text-center" title="E2E tests">🎭</th>
-                  <th className="pb-2 font-medium text-center">Files</th>
+                  <th className="pb-2 font-medium text-center" title="Total files across all categories">Total</th>
                 </tr>
               </thead>
               <tbody>
@@ -2237,41 +2432,50 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
                       </td>
                       <td className="py-2 pr-2 text-center">
                         {f.files.api.length > 0 ? (
-                          <span className="text-green-600" title={`${f.files.api.length} API files`}>✓</span>
+                          <span className="text-green-600 font-medium" title={f.files.api.map(p => p.split('/').pop()).join(', ')}>{f.files.api.length}</span>
                         ) : (
                           <span className="text-text-secondary/30">-</span>
                         )}
                       </td>
                       <td className="py-2 pr-2 text-center">
                         {f.files.schema.length > 0 ? (
-                          <span className="text-blue-600" title={`${f.files.schema.length} Schema files`}>✓</span>
+                          <span className="text-blue-600 font-medium" title={f.files.schema.map(p => p.split('/').pop()).join(', ')}>{f.files.schema.length}</span>
                         ) : (
                           <span className="text-text-secondary/30">-</span>
                         )}
                       </td>
                       <td className="py-2 pr-2 text-center">
                         {f.files.config.length > 0 ? (
-                          <span className="text-purple-600" title={`${f.files.config.length} Config/Event files`}>✓</span>
+                          <span className="text-purple-600 font-medium" title={f.files.config.map(p => p.split('/').pop()).join(', ')}>{f.files.config.length}</span>
                         ) : (
                           <span className="text-text-secondary/30">-</span>
                         )}
                       </td>
                       <td className="py-2 pr-2 text-center">
                         {f.files.tests.unit.length > 0 ? (
-                          <span className="text-amber-600" title={`${f.files.tests.unit.length} Unit tests`}>✓</span>
+                          <span className="text-amber-600 font-medium" title={f.files.tests.unit.map(p => p.split('/').pop()).join(', ')}>{f.files.tests.unit.length}</span>
+                        ) : (
+                          <span className="text-text-secondary/30">-</span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-2 text-center">
+                        {f.files.tests.integration.length > 0 ? (
+                          <span className="text-indigo-600 font-medium" title={f.files.tests.integration.map(p => p.split('/').pop()).join(', ')}>{f.files.tests.integration.length}</span>
                         ) : (
                           <span className="text-text-secondary/30">-</span>
                         )}
                       </td>
                       <td className="py-2 pr-2 text-center">
                         {f.files.tests.e2e.length > 0 ? (
-                          <span className="text-cyan-600" title={`${f.files.tests.e2e.length} E2E tests`}>✓</span>
+                          <span className="text-cyan-600 font-medium" title={f.files.tests.e2e.map(p => p.split('/').pop()).join(', ')}>{f.files.tests.e2e.length}</span>
                         ) : (
                           <span className="text-text-secondary/30">-</span>
                         )}
                       </td>
-                      <td className="py-2 text-center text-text-secondary">
-                        {f.contractPatternMatches}
+                      <td className="py-2 text-center text-text-primary font-medium">
+                        {f.files.api.length + f.files.schema.length + f.files.config.length +
+                         f.files.tests.unit.length + f.files.tests.integration.length + f.files.tests.e2e.length +
+                         f.files.fixtures.length + f.files.other.length}
                       </td>
                     </tr>
                   );
@@ -2282,11 +2486,12 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
 
           {/* Legend */}
           <div className="mt-3 pt-2 border-t border-border flex flex-wrap gap-3 text-[10px] text-text-secondary">
-            <span>🔌 API</span>
-            <span>📐 Schema</span>
-            <span>⚡ Events/Config</span>
-            <span>🧪 Unit Tests</span>
-            <span>🎭 E2E Tests</span>
+            <span>🔌 API/Routes</span>
+            <span>📐 Schema/Types</span>
+            <span>⚡ Config</span>
+            <span>🧪 Unit</span>
+            <span>🔗 Integration</span>
+            <span>🎭 E2E</span>
           </div>
           </>
           )}
@@ -2531,7 +2736,14 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
   const [fileExists, setFileExists] = useState<boolean>(true);
   const [generating, setGenerating] = useState(false);
   const [viewMode, setViewMode] = useState<'markdown' | 'json'>('markdown');
+
+  // Use global contract store for generation progress
+  const generationProgress = useContractStore((state) => state.generationProgress);
   const [rawContent, setRawContent] = useState<string | null>(null);
+  const [isTruncated, setIsTruncated] = useState(false);
+
+  // Maximum content size for performance (100KB)
+  const MAX_CONTENT_SIZE = 100 * 1024;
 
   const statusColors: Record<string, string> = {
     active: 'bg-green-100 text-green-700',
@@ -2560,14 +2772,14 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
 
   const typeLabels: Record<string, string> = {
     api: 'API Contract',
-    schema: 'Schema',
-    events: 'Feature Bus',
-    css: 'CSS/Design',
-    features: 'Feature Flags',
+    schema: 'DB Schema',
+    events: 'Events & Messaging',
+    css: 'CSS & Styles',
+    features: 'Features Overview',
     infra: 'Infrastructure',
-    integrations: '3rd Party',
+    integrations: '3rd Party Integrations',
     admin: 'Admin Panel',
-    sql: 'SQL Queries',
+    sql: 'SQL & Migrations',
     prompts: 'Prompts & Skills',
     e2e: 'E2E Tests',
     unit: 'Unit Tests',
@@ -2588,10 +2800,19 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
       console.log('[ContractCard] File read result:', { success: result?.success, dataLength: result?.data?.length });
       if (result?.success && result.data) {
         setFileExists(true);
-        setRawContent(result.data); // Store raw for JSON view
+        // Check if content needs truncation for performance
+        let dataToProcess = result.data;
+        let truncated = false;
+        if (result.data.length > MAX_CONTENT_SIZE) {
+          dataToProcess = result.data.substring(0, MAX_CONTENT_SIZE);
+          truncated = true;
+          console.log('[ContractCard] Content truncated:', result.data.length, '->', MAX_CONTENT_SIZE);
+        }
+        setIsTruncated(truncated);
+        setRawContent(dataToProcess); // Store for JSON view (truncated if needed)
         // Clean up AI preamble/code from old contracts
-        const cleanedContent = cleanupContractContent(result.data);
-        console.log('[ContractCard] Content preview:', result.data.substring(0, 200));
+        const cleanedContent = cleanupContractContent(dataToProcess);
+        console.log('[ContractCard] Content preview:', dataToProcess.substring(0, 200));
         setContent(cleanedContent);
         setMetrics(extractContractMetrics(cleanedContent, contract.type));
         // Extract version from content (before cleanup to get metadata)
@@ -2668,13 +2889,11 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
       setExtractedVersion(null);
 
       console.log('[ContractCard] Forcing content reload after regeneration...');
-      if (selectedFeature === 'repo') {
-        await loadContent(contract.filePath, true);
+      // Always reload consolidated view
+      if (featureContracts.length > 0) {
+        await loadConsolidatedContract();
       } else {
-        const featureContract = featureContracts.find(f => f.name === selectedFeature);
-        if (featureContract) {
-          await loadContent(featureContract.path, true);
-        }
+        await loadContent(contract.filePath, true);
       }
 
       console.log('[ContractCard] All contracts regenerated and content reloaded');
@@ -2689,16 +2908,569 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
   // Load feature contracts related to this contract type
   useEffect(() => {
     if (discoveredFeatures && discoveredFeatures.length > 0 && repoPath) {
-      const features: FeatureContract[] = discoveredFeatures.map(f => ({
-        name: f.name,
-        // Feature CONTRACTS.md contains all types - we'll extract the relevant section when loading
-        path: `${f.basePath}/CONTRACTS.md`,
-        // Also store the JSON path for structured data
-        jsonPath: `${repoPath}/.S9N_KIT_DevOpsAgent/contracts/features/${f.name}.contracts.json`,
-      }));
+      const features: FeatureContract[] = discoveredFeatures.map(f => {
+        // Sanitize feature name for filename (same as backend)
+        const sanitizedName = f.name.replace(/[^a-zA-Z0-9-_]/g, '_');
+        return {
+          name: f.name,
+          // Feature contracts now have unique filenames per feature
+          path: `${f.basePath}/CONTRACTS_${sanitizedName}.md`,
+          // Also store the JSON path for structured data
+          jsonPath: `${repoPath}/.S9N_KIT_DevOpsAgent/contracts/features/${f.name}.contracts.json`,
+        };
+      });
       setFeatureContracts(features);
     }
   }, [discoveredFeatures, repoPath, contract.type]);
+
+  // Load consolidated contract by merging all feature contracts
+  const loadConsolidatedContract = async () => {
+    if (featureContracts.length === 0) {
+      // No features discovered, show empty state
+      setContent('# Consolidated API Contract\n\nNo features discovered yet. Run feature discovery first to generate feature-level contracts.');
+      setFileExists(true);
+      setLoading(false);
+      return;
+    }
+
+    const mergedSections: string[] = [];
+    mergedSections.push(`# ${contract.name} - Consolidated View`);
+    mergedSections.push('');
+    mergedSections.push(`> Merged from ${featureContracts.length} feature contracts | Generated: ${new Date().toISOString()}`);
+    mergedSections.push('');
+
+    let totalEndpoints = 0;
+    let totalTypes = 0;
+    let loadedFeatures = 0;
+
+    // Collect JSON data for raw view
+    const consolidatedJson: Record<string, unknown> = {
+      contractType: contract.type,
+      contractName: contract.name,
+      generatedAt: new Date().toISOString(),
+      features: {} as Record<string, unknown>,
+    };
+
+    // Track seen data fingerprints to detect and skip duplicates across features
+    const seenSourceFileHashes = new Set<string>();
+    const sharedDataSections: string[] = [];
+
+    // Load and merge each feature's contract
+    for (const feature of featureContracts) {
+      try {
+        // Try JSON first for structured data
+        if (feature.jsonPath) {
+          const jsonResult = await window.api?.file?.readContent?.(feature.jsonPath);
+          if (jsonResult?.success && jsonResult.data) {
+            try {
+              const contractData = JSON.parse(jsonResult.data);
+
+              // Collect for raw JSON view
+              (consolidatedJson.features as Record<string, unknown>)[feature.name] = contractData;
+
+              // Extract data based on contract type
+              // JSON structure: apis.endpoints[], apis.exports[], schemas[] (flat array)
+              const apis = contractData.apis || contractData.apiContract || {};
+              const schemasArr = Array.isArray(contractData.schemas) ? contractData.schemas
+                : (contractData.schemas?.tables || contractData.schemas?.models || []);
+              let hasData = false;
+
+              // Deduplication: skip features with identical source files to avoid repetition
+              const dataFingerprint = JSON.stringify((contractData.sourceFiles || []).sort());
+              const isDataDuplicate = seenSourceFileHashes.has(dataFingerprint);
+
+              // Skip duplicates entirely (don't show header or "shares codebase" message)
+              if (isDataDuplicate) {
+                continue;
+              }
+              seenSourceFileHashes.add(dataFingerprint);
+
+              // Build feature content into a buffer - only add to merged if it has data
+              const featureBuffer: string[] = [];
+              featureBuffer.push(`---`);
+              featureBuffer.push(`## ${feature.name}`);
+              featureBuffer.push('');
+
+              if (contract.type === 'api') {
+                if (apis.endpoints && apis.endpoints.length > 0) {
+                  featureBuffer.push('### Endpoints');
+                  featureBuffer.push('');
+                  featureBuffer.push('| Method | Path | Description |');
+                  featureBuffer.push('|--------|------|-------------|');
+                  for (const ep of apis.endpoints) {
+                    featureBuffer.push(`| ${ep.method || 'GET'} | ${ep.path || ep.route || 'N/A'} | ${ep.description || '-'} |`);
+                    totalEndpoints++;
+                  }
+                  featureBuffer.push('');
+                  hasData = true;
+                }
+                if (apis.exports && apis.exports.length > 0) {
+                  featureBuffer.push(`### Exports (${apis.exports.length})`);
+                  featureBuffer.push('');
+                  featureBuffer.push('| Name | Type | File |');
+                  featureBuffer.push('|------|------|------|');
+                  for (const exp of apis.exports.slice(0, 20)) {
+                    const fileName = exp.file?.split('/').pop() || '-';
+                    featureBuffer.push(`| ${exp.name} | ${exp.type || '-'} | ${fileName} |`);
+                  }
+                  if (apis.exports.length > 20) {
+                    featureBuffer.push(`| ... | ... | *${apis.exports.length - 20} more* |`);
+                  }
+                  featureBuffer.push('');
+                  hasData = true;
+                }
+                if (apis.authentication) {
+                  featureBuffer.push(`**Authentication:** ${apis.authentication.method || apis.authentication}`);
+                  featureBuffer.push('');
+                }
+              } else if (contract.type === 'schema') {
+                if (schemasArr.length > 0) {
+                  featureBuffer.push(`### Tables/Models (${schemasArr.length})`);
+                  featureBuffer.push('');
+                  featureBuffer.push('| Name | Type | Columns | Source |');
+                  featureBuffer.push('|------|------|---------|--------|');
+                  for (const schema of schemasArr) {
+                    const colCount = schema.columns?.length || schema.properties?.length || 0;
+                    const fileName = schema.file?.split('/').pop() || '-';
+                    featureBuffer.push(`| **${schema.name}** | ${schema.type || 'table'} | ${colCount} | ${fileName} |`);
+                    totalTypes++;
+                  }
+                  featureBuffer.push('');
+                  hasData = true;
+                }
+              } else if (contract.type === 'events') {
+                // Events from apis.exports - filter for event-related types
+                const allExports = apis.exports || [];
+                const eventExports = allExports.filter((exp: Record<string, string>) => {
+                  const name = (exp.name || '').toLowerCase();
+                  return name.includes('event') || name.includes('payload') ||
+                    name.includes('emit') || name.includes('listener') ||
+                    name.includes('handler') || name.includes('subscribe') ||
+                    name.includes('publish') || name.includes('bus') ||
+                    name.includes('pulse') || name.includes('hook') ||
+                    (exp.type === 'const' && name.includes('_'));
+                });
+
+                if (eventExports.length > 0) {
+                  featureBuffer.push(`### Event Types & Payloads (${eventExports.length})`);
+                  featureBuffer.push('');
+                  featureBuffer.push('| Name | Type | File |');
+                  featureBuffer.push('|------|------|------|');
+                  for (const exp of eventExports.slice(0, 30)) {
+                    const fileName = exp.file?.split('/').pop() || '-';
+                    featureBuffer.push(`| ${exp.name} | ${exp.type || '-'} | ${fileName} |`);
+                  }
+                  if (eventExports.length > 30) {
+                    featureBuffer.push(`| ... | ... | *${eventExports.length - 30} more* |`);
+                  }
+                  featureBuffer.push('');
+                  hasData = true;
+                }
+
+                // Also check for dedicated events data
+                const eventData = contractData.events as Record<string, unknown> | undefined;
+                if (eventData) {
+                  const emitted = eventData.emitted as Array<Record<string, string>> | undefined;
+                  if (emitted && emitted.length > 0) {
+                    featureBuffer.push(`### Events Emitted (${emitted.length})`);
+                    featureBuffer.push('');
+                    featureBuffer.push('| Event | Payload | Source |');
+                    featureBuffer.push('|-------|---------|--------|');
+                    for (const ev of emitted) {
+                      featureBuffer.push(`| ${ev.event || ev.eventName || ''} | ${ev.payload || ''} | ${ev.from || ev.emittedFrom || ''} |`);
+                    }
+                    featureBuffer.push('');
+                    hasData = true;
+                  }
+                }
+              } else if (contract.type === 'features') {
+                // Features contract: describe what the feature does
+                // Derive description from endpoints, exports, and dependencies
+                const srcFiles = contractData.sourceFiles as string[] | undefined;
+                const featExports = (apis.exports || []) as Array<Record<string, string>>;
+                const featEndpoints = (apis.endpoints || []) as Array<Record<string, string>>;
+                const featDeps = contractData.dependencies as string[] | undefined;
+                const tc = contractData.testCoverage as Record<string, { count: number; files: string[] }> | undefined;
+
+                // Derive stack type from source file paths
+                const stackTypes: string[] = [];
+                if (srcFiles) {
+                  const paths = srcFiles.map((f: string) => f.toLowerCase());
+                  if (paths.some(p => p.startsWith('backend/') || p.includes('/routes/') || p.includes('/controllers/'))) stackTypes.push('Backend Service');
+                  if (paths.some(p => p.startsWith('frontend/') || p.startsWith('web-app/') || p.includes('/components/'))) stackTypes.push('Frontend App');
+                  if (paths.some(p => p.startsWith('ai-worker/') || p.includes('/handlers/'))) stackTypes.push('AI Worker');
+                  if (paths.some(p => p.startsWith('packages/') || p.startsWith('shared/'))) stackTypes.push('Shared Package');
+                  if (paths.some(p => p.startsWith('extension/') || p.includes('browser'))) stackTypes.push('Browser Extension');
+                  if (paths.some(p => p.includes('docker') || p.includes('Dockerfile'))) stackTypes.push('Containerized');
+                }
+
+                // Build feature description
+                const descParts: string[] = [];
+                if (stackTypes.length > 0) descParts.push(stackTypes.join(' + '));
+                if (featEndpoints.length > 0) descParts.push(`${featEndpoints.length} API endpoints`);
+                const funcExports = featExports.filter(e => e.type === 'function');
+                if (funcExports.length > 0) descParts.push(`${funcExports.length} exported functions`);
+                if (schemasArr.length > 0) descParts.push(`${schemasArr.length} DB tables`);
+                if (featDeps && featDeps.length > 0) descParts.push(`uses ${featDeps.slice(0, 5).join(', ')}${featDeps.length > 5 ? '...' : ''}`);
+
+                if (descParts.length > 0) {
+                  featureBuffer.push(`> ${descParts.join(' | ')}`);
+                  featureBuffer.push('');
+                }
+
+                // Show key functions
+                if (funcExports.length > 0) {
+                  featureBuffer.push(`### Key Functions (${funcExports.length})`);
+                  featureBuffer.push('');
+                  featureBuffer.push('| Function | File |');
+                  featureBuffer.push('|----------|------|');
+                  for (const exp of funcExports.slice(0, 10)) {
+                    const fileName = exp.file?.split('/').pop() || '-';
+                    featureBuffer.push(`| \`${exp.name}()\` | ${fileName} |`);
+                  }
+                  if (funcExports.length > 10) {
+                    featureBuffer.push(`| ... | *${funcExports.length - 10} more* |`);
+                  }
+                  featureBuffer.push('');
+                  hasData = true;
+                }
+                // Show test summary
+                if (tc) {
+                  const uCount = tc.unit?.count || 0;
+                  const iCount = tc.integration?.count || 0;
+                  const eCount = tc.e2e?.count || 0;
+                  if (uCount + iCount + eCount > 0) {
+                    featureBuffer.push(`**Tests:** ${uCount} unit, ${iCount} integration, ${eCount} e2e`);
+                    featureBuffer.push('');
+                    hasData = true;
+                  }
+                }
+                // Show source file count if nothing else
+                if (!hasData && srcFiles && srcFiles.length > 0) {
+                  featureBuffer.push(`**Source files:** ${srcFiles.length}`);
+                  featureBuffer.push('');
+                  hasData = true;
+                }
+              } else if (contract.type === 'integrations') {
+                // Show external dependencies
+                const deps = contractData.dependencies as string[] | undefined;
+                if (deps && deps.length > 0) {
+                  featureBuffer.push(`### Dependencies (${deps.length})`);
+                  featureBuffer.push('');
+                  featureBuffer.push('| Package |');
+                  featureBuffer.push('|---------|');
+                  for (const dep of deps) {
+                    featureBuffer.push(`| \`${dep}\` |`);
+                  }
+                  featureBuffer.push('');
+                  hasData = true;
+                }
+              } else if (contract.type === 'infra') {
+                // Derive stack classification from source file paths
+                const infraSrcFiles = contractData.sourceFiles as string[] | undefined;
+                if (infraSrcFiles && infraSrcFiles.length > 0) {
+                  const paths = infraSrcFiles.map((f: string) => f.toLowerCase());
+                  const stackInfo: string[] = [];
+                  if (paths.some(p => p.startsWith('backend/'))) stackInfo.push('Backend');
+                  if (paths.some(p => p.startsWith('frontend/') || p.startsWith('web-app/'))) stackInfo.push('Frontend');
+                  if (paths.some(p => p.startsWith('ai-worker/'))) stackInfo.push('AI Worker');
+                  if (paths.some(p => p.startsWith('packages/'))) stackInfo.push('Shared Package');
+                  if (paths.some(p => p.startsWith('extension/'))) stackInfo.push('Browser Extension');
+                  const hasDocker = paths.some(p => p.includes('docker') || p.includes('Dockerfile'));
+                  const hasPrisma = paths.some(p => p.includes('prisma'));
+                  const hasDb = schemasArr.length > 0 || paths.some(p => p.includes('.sql') || p.includes('migration'));
+
+                  if (stackInfo.length > 0 || hasDocker || hasDb) {
+                    featureBuffer.push(`### Stack`);
+                    featureBuffer.push('');
+                    if (stackInfo.length > 0) featureBuffer.push(`- **Type:** ${stackInfo.join(', ')}`);
+                    if (hasDocker) featureBuffer.push(`- **Container:** Yes (Docker)`);
+                    if (hasDb) featureBuffer.push(`- **Database:** ${hasPrisma ? 'Prisma ORM' : 'SQL'}`);
+                    featureBuffer.push('');
+                    hasData = true;
+                  }
+                }
+                // Show runtime dependencies
+                const infraDeps = contractData.dependencies as string[] | undefined;
+                if (infraDeps && infraDeps.length > 0) {
+                  featureBuffer.push(`### Runtime Dependencies (${infraDeps.length})`);
+                  featureBuffer.push('');
+                  for (const dep of infraDeps) {
+                    featureBuffer.push(`- \`${dep}\``);
+                  }
+                  featureBuffer.push('');
+                  hasData = true;
+                }
+                // Show database tables
+                if (schemasArr.length > 0) {
+                  featureBuffer.push(`### Database Tables (${schemasArr.length})`);
+                  featureBuffer.push('');
+                  featureBuffer.push('| Table | Type |');
+                  featureBuffer.push('|-------|------|');
+                  for (const s of schemasArr.slice(0, 20)) {
+                    featureBuffer.push(`| ${s.name} | ${s.type || 'table'} |`);
+                  }
+                  if (schemasArr.length > 20) {
+                    featureBuffer.push(`| ... | *${schemasArr.length - 20} more* |`);
+                  }
+                  featureBuffer.push('');
+                  hasData = true;
+                }
+                // Show config/infra files
+                if (infraSrcFiles && infraSrcFiles.length > 0) {
+                  const configFiles = infraSrcFiles.filter((f: string) => {
+                    const name = f.toLowerCase();
+                    return name.includes('config') || name.includes('.env') || name.includes('docker') ||
+                      name.includes('yaml') || name.includes('yml') || name.includes('makefile') ||
+                      name.includes('package.json') || name.includes('tsconfig') ||
+                      name.includes('prisma') || name.includes('migration');
+                  });
+                  if (configFiles.length > 0) {
+                    featureBuffer.push(`### Config & Migration Files (${configFiles.length})`);
+                    featureBuffer.push('');
+                    for (const f of configFiles) {
+                      featureBuffer.push(`- \`${f.split('/').pop()}\``);
+                    }
+                    featureBuffer.push('');
+                    hasData = true;
+                  }
+                }
+              } else if (contract.type === 'sql') {
+                // SQL contract: Show migration/SQL files and table names
+                const sqlSrcFiles = contractData.sourceFiles as string[] | undefined;
+                if (sqlSrcFiles && sqlSrcFiles.length > 0) {
+                  const migrationFiles = sqlSrcFiles.filter((f: string) => {
+                    const name = f.toLowerCase();
+                    return name.includes('migration') || name.endsWith('.sql') ||
+                      name.includes('seed') || name.includes('query') || name.includes('queries') ||
+                      name.includes('prisma');
+                  });
+                  if (migrationFiles.length > 0) {
+                    featureBuffer.push(`### Migration & SQL Files (${migrationFiles.length})`);
+                    featureBuffer.push('');
+                    for (const f of migrationFiles) {
+                      featureBuffer.push(`- \`${f.split('/').pop()}\``);
+                    }
+                    featureBuffer.push('');
+                    hasData = true;
+                  }
+                }
+                // Show table names (without column details - Schema contract has those)
+                if (schemasArr.length > 0) {
+                  featureBuffer.push(`### Tables Used (${schemasArr.length})`);
+                  featureBuffer.push('');
+                  for (const s of schemasArr) {
+                    const colCount = (s.columns as unknown[])?.length || 0;
+                    featureBuffer.push(`- **${s.name}** (${s.type || 'table'}${colCount > 0 ? `, ${colCount} columns` : ''})`);
+                  }
+                  featureBuffer.push('');
+                  hasData = true;
+                }
+              } else if (contract.type === 'admin') {
+                // Show admin actions: first check for adminContract field, then derive from endpoints
+                const adminData = contractData.adminContract as Record<string, unknown> | undefined;
+                if (adminData) {
+                  const entities = adminData.entities as Array<Record<string, unknown>> | undefined;
+                  if (entities && entities.length > 0) {
+                    featureBuffer.push(`### Admin Entities (${entities.length})`);
+                    featureBuffer.push('');
+                    featureBuffer.push('| Entity | Operations |');
+                    featureBuffer.push('|--------|------------|');
+                    for (const ent of entities) {
+                      const ops = Array.isArray(ent.operations) ? (ent.operations as string[]).join(', ') : '-';
+                      featureBuffer.push(`| **${ent.name}** | ${ops} |`);
+                    }
+                    featureBuffer.push('');
+                    hasData = true;
+                  }
+                  const adminRoutes = adminData.adminRoutes as Array<Record<string, unknown>> | undefined;
+                  if (adminRoutes && adminRoutes.length > 0) {
+                    featureBuffer.push(`### Admin Routes (${adminRoutes.length})`);
+                    featureBuffer.push('');
+                    featureBuffer.push('| Method | Path | Roles |');
+                    featureBuffer.push('|--------|------|-------|');
+                    for (const r of adminRoutes) {
+                      const roles = Array.isArray(r.roles) ? (r.roles as string[]).join(', ') : '-';
+                      featureBuffer.push(`| ${r.method || ''} | ${r.path || ''} | ${roles} |`);
+                    }
+                    featureBuffer.push('');
+                    hasData = true;
+                  }
+                  const perms = adminData.permissions as string[] | undefined;
+                  if (perms && perms.length > 0) {
+                    featureBuffer.push(`### Permissions (${perms.length})`);
+                    featureBuffer.push('');
+                    for (const p of perms) {
+                      featureBuffer.push(`- \`${p}\``);
+                    }
+                    featureBuffer.push('');
+                    hasData = true;
+                  }
+                }
+                // Derive admin needs from endpoints (CRUD operations on data entities)
+                if (!hasData && apis.endpoints && Array.isArray(apis.endpoints) && apis.endpoints.length > 0) {
+                  const allEps = apis.endpoints as Array<Record<string, string>>;
+                  const entityMap = new Map<string, Set<string>>();
+                  for (const ep of allEps) {
+                    const pathParts = (ep.path || '').split('/').filter(Boolean);
+                    const resource = pathParts.find((p: string) => p !== 'api' && p !== 'v1' && !p.startsWith(':')) || ep.path;
+                    if (resource) {
+                      if (!entityMap.has(resource)) entityMap.set(resource, new Set());
+                      entityMap.get(resource)!.add(ep.method || 'GET');
+                    }
+                  }
+                  if (entityMap.size > 0) {
+                    featureBuffer.push(`### Admin Panel Actions`);
+                    featureBuffer.push('');
+                    featureBuffer.push('| Resource | Operations |');
+                    featureBuffer.push('|----------|------------|');
+                    for (const [resource, methods] of entityMap) {
+                      featureBuffer.push(`| **${resource}** | ${Array.from(methods).join(', ')} |`);
+                    }
+                    featureBuffer.push('');
+                    hasData = true;
+                  }
+                }
+              } else if (contract.type === 'e2e' || contract.type === 'unit' || contract.type === 'integration') {
+                // Show test coverage for the specific test type
+                const tcData = contractData.testCoverage as Record<string, { count: number; files: string[] }> | undefined;
+                const testKey = contract.type === 'e2e' ? 'e2e' : contract.type === 'unit' ? 'unit' : 'integration';
+                const tLabel = contract.type === 'e2e' ? 'E2E' : contract.type === 'unit' ? 'Unit' : 'Integration';
+                const testInfo = tcData?.[testKey];
+                if (testInfo && testInfo.count > 0) {
+                  featureBuffer.push(`### ${tLabel} Tests (${testInfo.count})`);
+                  featureBuffer.push('');
+                  for (const f of testInfo.files.slice(0, 15)) {
+                    featureBuffer.push(`- \`${f.split('/').pop()}\``);
+                  }
+                  if (testInfo.files.length > 15) {
+                    featureBuffer.push(`- *...${testInfo.files.length - 15} more*`);
+                  }
+                  featureBuffer.push('');
+                  hasData = true;
+                }
+              } else if (contract.type === 'fixtures') {
+                // Show fixture files from sourceFiles
+                const allSrc = contractData.sourceFiles as string[] | undefined;
+                if (allSrc && allSrc.length > 0) {
+                  const fixtures = allSrc.filter((f: string) => {
+                    const name = f.toLowerCase();
+                    return name.includes('fixture') || name.includes('mock') || name.includes('seed') || name.includes('factory');
+                  });
+                  if (fixtures.length > 0) {
+                    featureBuffer.push(`### Fixture Files (${fixtures.length})`);
+                    featureBuffer.push('');
+                    for (const f of fixtures) {
+                      featureBuffer.push(`- \`${f.split('/').pop()}\``);
+                    }
+                    featureBuffer.push('');
+                    hasData = true;
+                  }
+                }
+              } else if (contract.type === 'css') {
+                // Show CSS/style related source files
+                const allSrc = contractData.sourceFiles as string[] | undefined;
+                if (allSrc && allSrc.length > 0) {
+                  const cssFiles = allSrc.filter((f: string) => {
+                    const name = f.toLowerCase();
+                    return name.endsWith('.css') || name.endsWith('.scss') || name.endsWith('.less') ||
+                      name.endsWith('.styl') || name.includes('theme') || name.includes('style') ||
+                      name.includes('tailwind');
+                  });
+                  if (cssFiles.length > 0) {
+                    featureBuffer.push(`### Style Files (${cssFiles.length})`);
+                    featureBuffer.push('');
+                    for (const f of cssFiles) {
+                      featureBuffer.push(`- \`${f.split('/').pop()}\``);
+                    }
+                    featureBuffer.push('');
+                    hasData = true;
+                  }
+                }
+              } else if (contract.type === 'prompts') {
+                // Show prompt/skill related source files
+                const allSrc = contractData.sourceFiles as string[] | undefined;
+                if (allSrc && allSrc.length > 0) {
+                  const promptFiles = allSrc.filter((f: string) => {
+                    const name = f.toLowerCase();
+                    return name.includes('prompt') || name.includes('skill') || name.includes('mode') ||
+                      name.endsWith('.yaml') || name.endsWith('.yml') || name.includes('agent');
+                  });
+                  if (promptFiles.length > 0) {
+                    featureBuffer.push(`### Prompt & Config Files (${promptFiles.length})`);
+                    featureBuffer.push('');
+                    for (const f of promptFiles) {
+                      featureBuffer.push(`- \`${f.split('/').pop()}\``);
+                    }
+                    featureBuffer.push('');
+                    hasData = true;
+                  }
+                }
+              }
+
+              // Only add feature to output if it has actual data - skip empty features entirely
+              if (hasData) {
+                mergedSections.push(...featureBuffer);
+              } else {
+                // Don't show the feature at all if it has no data for this contract type
+                continue;
+              }
+
+              // Count types if available
+              if (apis.requestTypes) totalTypes += apis.requestTypes.length;
+              if (apis.responseTypes) totalTypes += apis.responseTypes.length;
+
+              loadedFeatures++;
+              continue;
+            } catch (e) {
+              console.warn(`[ContractCard] Failed to parse JSON for ${feature.name}:`, e);
+            }
+          }
+        }
+
+        // Fallback to markdown file
+        const mdResult = await window.api?.file?.readContent?.(feature.path);
+        if (mdResult?.success && mdResult.data) {
+          mergedSections.push(`---`);
+          mergedSections.push(`## ${feature.name}`);
+          mergedSections.push('');
+          // Include the markdown content (but remove its own header)
+          const cleanedMd = mdResult.data.replace(/^#\s+.*$/m, '').trim();
+          mergedSections.push(cleanedMd);
+          mergedSections.push('');
+          loadedFeatures++;
+        }
+      } catch (err) {
+        console.warn(`[ContractCard] Failed to load contract for ${feature.name}:`, err);
+      }
+    }
+
+    // Add summary at the top
+    if (loadedFeatures > 0) {
+      const summaryIndex = 4; // After the header
+      mergedSections.splice(summaryIndex, 0,
+        `**Summary:** ${loadedFeatures} features, ${totalEndpoints} endpoints, ${totalTypes} types`,
+        ''
+      );
+    }
+
+    if (loadedFeatures === 0) {
+      mergedSections.push('No feature contracts have been generated yet. Generate contracts for individual features first.');
+    }
+
+    // Set raw JSON for the Raw view toggle
+    consolidatedJson.summary = {
+      loadedFeatures,
+      totalEndpoints,
+      totalTypes,
+    };
+    setRawContent(JSON.stringify(consolidatedJson, null, 2));
+
+    setContent(mergedSections.join('\n'));
+    setFileExists(true);
+    setExtractedVersion('consolidated');
+    setLoading(false);
+  };
 
   // Handle feature selection change
   const handleFeatureChange = async (featureName: string) => {
@@ -2711,14 +3483,19 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
 
     try {
       if (featureName === 'repo') {
-        // Load repo-level contract
-        await loadContent(contract.filePath, true);
+        // Load consolidated view - merge all feature contracts
+        await loadConsolidatedContract();
       } else {
         // Load feature-level contract - try JSON first for structured data
         const feature = featureContracts.find(f => f.name === featureName);
+        console.log('[ContractCard] Loading feature:', featureName, 'found:', feature);
+        console.log('[ContractCard] JSON path:', feature?.jsonPath);
+        console.log('[ContractCard] MD path:', feature?.path);
+
         if (feature?.jsonPath) {
           // Try to load from JSON file and extract relevant contract type
           const jsonResult = await window.api?.file?.readContent?.(feature.jsonPath);
+          console.log('[ContractCard] JSON result:', jsonResult?.success, 'length:', jsonResult?.data?.length);
           if (jsonResult?.success && jsonResult.data) {
             try {
               const contractData = JSON.parse(jsonResult.data);
@@ -2813,51 +3590,90 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
         break;
 
       case 'events':
-        // Handle events - might be in data.events or data.apisExposed.eventsEmitted
+        // Events from apis.exports - filter for event-related types
+        const evApis = data.apis as Record<string, unknown> | undefined;
+        const allEvExports = (evApis?.exports || []) as Array<Record<string, string>>;
+        const eventExports = allEvExports.filter(exp => {
+          const name = (exp.name || '').toLowerCase();
+          return name.includes('event') || name.includes('payload') ||
+            name.includes('emit') || name.includes('listener') ||
+            name.includes('handler') || name.includes('subscribe') ||
+            name.includes('publish') || name.includes('bus') ||
+            name.includes('pulse') || name.includes('hook') ||
+            (exp.type === 'const' && name.includes('_'));
+        });
+
+        if (eventExports.length > 0) {
+          lines.push('## Event Types & Payloads');
+          lines.push('');
+          lines.push('| Name | Type | File |');
+          lines.push('|------|------|------|');
+          for (const exp of eventExports) {
+            const fileName = exp.file?.split('/').pop() || '-';
+            lines.push(`| ${exp.name} | ${exp.type || '-'} | ${fileName} |`);
+          }
+          lines.push('');
+        }
+
+        // Also check for dedicated events data
         const events = data.events as Record<string, unknown> | undefined;
-        const eventsEmitted = events?.emitted as Array<Record<string, string>> | undefined;
-        const eventsConsumed = events?.consumed as Array<Record<string, string>> | undefined;
-
-        if (eventsEmitted && eventsEmitted.length > 0) {
-          lines.push('## Events Emitted');
-          lines.push('');
-          lines.push('| Event | Payload | Source |');
-          lines.push('|-------|---------|--------|');
-          for (const ev of eventsEmitted) {
-            lines.push(`| ${ev.event || ev.eventName || ''} | ${ev.payload || ''} | ${ev.from || ev.emittedFrom || ''} |`);
+        if (events) {
+          const eventsEmitted = events.emitted as Array<Record<string, string>> | undefined;
+          if (eventsEmitted && eventsEmitted.length > 0) {
+            lines.push('## Events Emitted');
+            lines.push('');
+            lines.push('| Event | Payload | Source |');
+            lines.push('|-------|---------|--------|');
+            for (const ev of eventsEmitted) {
+              lines.push(`| ${ev.event || ev.eventName || ''} | ${ev.payload || ''} | ${ev.from || ev.emittedFrom || ''} |`);
+            }
+            lines.push('');
           }
-          lines.push('');
+          const eventsConsumed = events.consumed as Array<Record<string, string>> | undefined;
+          if (eventsConsumed && eventsConsumed.length > 0) {
+            lines.push('## Events Consumed');
+            lines.push('');
+            lines.push('| Event | Handler | File |');
+            lines.push('|-------|---------|------|');
+            for (const ev of eventsConsumed) {
+              lines.push(`| ${ev.event || ev.eventName || ''} | ${ev.handler || ''} | ${ev.file || ''} |`);
+            }
+            lines.push('');
+          }
         }
 
-        if (eventsConsumed && eventsConsumed.length > 0) {
-          lines.push('## Events Consumed');
-          lines.push('');
-          lines.push('| Event | Handler | File |');
-          lines.push('|-------|---------|------|');
-          for (const ev of eventsConsumed) {
-            lines.push(`| ${ev.event || ev.eventName || ''} | ${ev.handler || ''} | ${ev.file || ''} |`);
+        // Fallback: show all exports if no event-specific data found
+        if (eventExports.length === 0 && !events) {
+          if (allEvExports.length > 0) {
+            lines.push('## Exports');
+            lines.push('');
+            lines.push('| Name | Type | File |');
+            lines.push('|------|------|------|');
+            for (const exp of allEvExports.slice(0, 20)) {
+              const fileName = exp.file?.split('/').pop() || '-';
+              lines.push(`| ${exp.name} | ${exp.type || '-'} | ${fileName} |`);
+            }
+            if (allEvExports.length > 20) {
+              lines.push(`| ... | ... | *${allEvExports.length - 20} more* |`);
+            }
+            lines.push('');
+          } else {
+            lines.push('*No events found for this feature.*');
+            lines.push('');
           }
-          lines.push('');
-        }
-
-        if ((!eventsEmitted || eventsEmitted.length === 0) && (!eventsConsumed || eventsConsumed.length === 0)) {
-          lines.push('*No events found for this feature.*');
-          lines.push('');
         }
         break;
 
       case 'integrations':
-        // Handle third-party integrations - might be in data.dependencies.external
-        const deps = data.dependencies as Record<string, unknown> | undefined;
-        const external = deps?.external as string[] | undefined;
-
-        if (external && external.length > 0) {
+        // Handle dependencies - data.dependencies is string[]
+        const depsArr = data.dependencies as string[] | undefined;
+        if (depsArr && Array.isArray(depsArr) && depsArr.length > 0) {
           lines.push('## External Dependencies');
           lines.push('');
           lines.push('| Package |');
           lines.push('|---------|');
-          for (const pkg of external) {
-            lines.push(`| ${pkg} |`);
+          for (const pkg of depsArr) {
+            lines.push(`| \`${pkg}\` |`);
           }
           lines.push('');
         } else {
@@ -2865,6 +3681,379 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
           lines.push('');
         }
         break;
+
+      case 'features': {
+        // Features contract: describe what the feature does
+        const featApis = data.apis as Record<string, unknown> | undefined;
+        const featExports = (featApis?.exports || []) as Array<Record<string, string>>;
+        const featEndpoints = (featApis?.endpoints || []) as Array<Record<string, string>>;
+        const featFunctions = featExports.filter(exp => exp.type === 'function');
+        const featDepsArr = data.dependencies as string[] | undefined;
+        const srcFiles = data.sourceFiles as string[] | undefined;
+        const tc = data.testCoverage as Record<string, { count: number; files: string[] }> | undefined;
+        let featHasData = false;
+
+        // Derive stack type from source file paths
+        if (srcFiles && srcFiles.length > 0) {
+          const paths = srcFiles.map((f: string) => f.toLowerCase());
+          const stackTypes: string[] = [];
+          if (paths.some(p => p.startsWith('backend/') || p.includes('/routes/') || p.includes('/controllers/'))) stackTypes.push('Backend Service');
+          if (paths.some(p => p.startsWith('frontend/') || p.startsWith('web-app/') || p.includes('/components/'))) stackTypes.push('Frontend App');
+          if (paths.some(p => p.startsWith('ai-worker/') || p.includes('/handlers/'))) stackTypes.push('AI Worker');
+          if (paths.some(p => p.startsWith('packages/') || p.startsWith('shared/'))) stackTypes.push('Shared Package');
+          if (paths.some(p => p.startsWith('extension/') || p.includes('browser'))) stackTypes.push('Browser Extension');
+
+          const summaryParts: string[] = [];
+          if (stackTypes.length > 0) summaryParts.push(stackTypes.join(' + '));
+          if (featEndpoints.length > 0) summaryParts.push(`${featEndpoints.length} endpoints`);
+          if (featFunctions.length > 0) summaryParts.push(`${featFunctions.length} functions`);
+          if (srcFiles.length > 0) summaryParts.push(`${srcFiles.length} source files`);
+
+          if (summaryParts.length > 0) {
+            lines.push(`> ${summaryParts.join(' | ')}`);
+            lines.push('');
+            featHasData = true;
+          }
+        }
+
+        // Show key functions
+        if (featFunctions.length > 0) {
+          lines.push('## Key Functions');
+          lines.push('');
+          lines.push('| Function | File |');
+          lines.push('|----------|------|');
+          for (const exp of featFunctions.slice(0, 15)) {
+            const fileName = exp.file?.split('/').pop() || '-';
+            lines.push(`| \`${exp.name}()\` | ${fileName} |`);
+          }
+          if (featFunctions.length > 15) {
+            lines.push(`| ... | *${featFunctions.length - 15} more* |`);
+          }
+          lines.push('');
+          featHasData = true;
+        }
+        // Show dependencies
+        if (featDepsArr && featDepsArr.length > 0) {
+          lines.push(`## Dependencies`);
+          lines.push('');
+          lines.push(`${featDepsArr.map(d => `\`${d}\``).join(', ')}`);
+          lines.push('');
+          featHasData = true;
+        }
+        // Show test summary
+        if (tc) {
+          const uCount = tc.unit?.count || 0;
+          const iCount = tc.integration?.count || 0;
+          const eCount = tc.e2e?.count || 0;
+          if (uCount + iCount + eCount > 0) {
+            lines.push(`## Tests`);
+            lines.push('');
+            lines.push(`${uCount} unit, ${iCount} integration, ${eCount} e2e`);
+            lines.push('');
+            featHasData = true;
+          }
+        }
+        if (!featHasData) {
+          lines.push('*No feature data available. Regenerate contracts to populate.*');
+          lines.push('');
+        }
+        break;
+      }
+
+      case 'sql': {
+        // SQL contract: Show migration files and table names (without column details)
+        // Schema contract shows table structures with columns; SQL shows queries/migrations
+        let sqlHasData = false;
+        const sqlSrcFiles = data.sourceFiles as string[] | undefined;
+        if (sqlSrcFiles && sqlSrcFiles.length > 0) {
+          const migFiles = sqlSrcFiles.filter((f: string) => {
+            const name = f.toLowerCase();
+            return name.includes('migration') || name.endsWith('.sql') ||
+              name.includes('seed') || name.includes('query') || name.includes('queries') ||
+              name.includes('prisma');
+          });
+          if (migFiles.length > 0) {
+            lines.push('## Migration & SQL Files');
+            lines.push('');
+            for (const f of migFiles) {
+              lines.push(`- \`${f.split('/').pop()}\``);
+            }
+            lines.push('');
+            sqlHasData = true;
+          }
+        }
+        const sqlSchemas = data.schemas as Array<Record<string, unknown>> | undefined;
+        if (sqlSchemas && Array.isArray(sqlSchemas) && sqlSchemas.length > 0) {
+          lines.push(`## Tables Used (${sqlSchemas.length})`);
+          lines.push('');
+          for (const s of sqlSchemas) {
+            const colCount = (s.columns as unknown[])?.length || 0;
+            lines.push(`- **${s.name}** (${s.type || 'table'}${colCount > 0 ? `, ${colCount} columns` : ''})`);
+          }
+          lines.push('');
+          sqlHasData = true;
+        }
+        if (!sqlHasData) {
+          lines.push('*No SQL/migration files found for this feature.*');
+          lines.push('');
+        }
+        break;
+      }
+
+      case 'admin': {
+        // Show admin contract data if available, otherwise derive from endpoints
+        const adminData = data.adminContract as Record<string, unknown> | undefined;
+        let adminHasData = false;
+        if (adminData) {
+          const entities = adminData.entities as Array<Record<string, unknown>> | undefined;
+          if (entities && entities.length > 0) {
+            lines.push('## Admin Entities');
+            lines.push('');
+            lines.push('| Entity | Operations |');
+            lines.push('|--------|------------|');
+            for (const ent of entities) {
+              const ops = Array.isArray(ent.operations) ? (ent.operations as string[]).join(', ') : '-';
+              lines.push(`| **${ent.name}** | ${ops} |`);
+            }
+            lines.push('');
+            adminHasData = true;
+          }
+          const adminRoutes = adminData.adminRoutes as Array<Record<string, unknown>> | undefined;
+          if (adminRoutes && adminRoutes.length > 0) {
+            lines.push('## Admin Routes');
+            lines.push('');
+            lines.push('| Method | Path | Roles |');
+            lines.push('|--------|------|-------|');
+            for (const r of adminRoutes) {
+              const roles = Array.isArray(r.roles) ? (r.roles as string[]).join(', ') : '-';
+              lines.push(`| ${r.method || ''} | ${r.path || ''} | ${roles} |`);
+            }
+            lines.push('');
+            adminHasData = true;
+          }
+          const perms = adminData.permissions as string[] | undefined;
+          if (perms && perms.length > 0) {
+            lines.push('## Permissions');
+            lines.push('');
+            for (const p of perms) {
+              lines.push(`- \`${p}\``);
+            }
+            lines.push('');
+            adminHasData = true;
+          }
+        }
+        // Derive admin actions from endpoints if no adminContract field
+        if (!adminHasData) {
+          const adminApis = data.apis as Record<string, unknown> | undefined;
+          if (adminApis?.endpoints && Array.isArray(adminApis.endpoints) && adminApis.endpoints.length > 0) {
+            const allEps = adminApis.endpoints as Array<Record<string, string>>;
+            // Group endpoints by resource to show manageable entities
+            const entityMap = new Map<string, Set<string>>();
+            for (const ep of allEps) {
+              const pathParts = (ep.path || '').split('/').filter(Boolean);
+              const resource = pathParts.find((p: string) => p !== 'api' && p !== 'v1' && !p.startsWith(':')) || ep.path;
+              if (resource) {
+                if (!entityMap.has(resource)) entityMap.set(resource, new Set());
+                entityMap.get(resource)!.add(ep.method || 'GET');
+              }
+            }
+            lines.push('## Admin Panel Actions');
+            lines.push('');
+            lines.push('| Resource | Operations |');
+            lines.push('|----------|------------|');
+            for (const [resource, methods] of entityMap) {
+              lines.push(`| **${resource}** | ${Array.from(methods).join(', ')} |`);
+            }
+            lines.push('');
+          } else {
+            lines.push('*No admin actions identified for this feature.*');
+            lines.push('');
+          }
+        }
+        break;
+      }
+
+      case 'e2e':
+      case 'unit':
+      case 'integration': {
+        // Show test coverage for the specific test type
+        const tcData = data.testCoverage as Record<string, { count: number; files: string[] }> | undefined;
+        const tKey = contractType === 'e2e' ? 'e2e' : contractType === 'unit' ? 'unit' : 'integration';
+        const tLabel = contractType === 'e2e' ? 'E2E' : contractType === 'unit' ? 'Unit' : 'Integration';
+        const tInfo = tcData?.[tKey];
+        if (tInfo && tInfo.count > 0) {
+          lines.push(`## ${tLabel} Tests (${tInfo.count})`);
+          lines.push('');
+          for (const f of tInfo.files.slice(0, 20)) {
+            lines.push(`- \`${f.split('/').pop()}\``);
+          }
+          if (tInfo.files.length > 20) {
+            lines.push(`- *...${tInfo.files.length - 20} more*`);
+          }
+          lines.push('');
+        } else {
+          lines.push(`*No ${tLabel.toLowerCase()} tests found for this feature.*`);
+          lines.push('');
+        }
+        break;
+      }
+
+      case 'infra': {
+        // Show infrastructure: stack type, dependencies, database tables, config files
+        let infraHasData = false;
+        const infraSrcFiles = data.sourceFiles as string[] | undefined;
+        const infraSchemas = data.schemas as Array<Record<string, unknown>> | undefined;
+
+        // Derive stack classification
+        if (infraSrcFiles && infraSrcFiles.length > 0) {
+          const paths = infraSrcFiles.map((f: string) => f.toLowerCase());
+          const stackTypes: string[] = [];
+          if (paths.some(p => p.startsWith('backend/') || p.includes('/routes/'))) stackTypes.push('Backend');
+          if (paths.some(p => p.startsWith('frontend/') || p.startsWith('web-app/'))) stackTypes.push('Frontend');
+          if (paths.some(p => p.startsWith('ai-worker/'))) stackTypes.push('AI Worker');
+          if (paths.some(p => p.startsWith('packages/'))) stackTypes.push('Shared Package');
+          if (paths.some(p => p.startsWith('extension/'))) stackTypes.push('Browser Extension');
+          const hasDocker = paths.some(p => p.includes('docker') || p.includes('Dockerfile'));
+          const hasPrisma = paths.some(p => p.includes('prisma'));
+          const hasDb = (infraSchemas && infraSchemas.length > 0) || paths.some(p => p.includes('.sql') || p.includes('migration'));
+
+          if (stackTypes.length > 0 || hasDocker || hasDb) {
+            lines.push('## Stack');
+            lines.push('');
+            if (stackTypes.length > 0) lines.push(`- **Type:** ${stackTypes.join(', ')}`);
+            if (hasDocker) lines.push(`- **Container:** Yes (Docker)`);
+            if (hasDb) lines.push(`- **Database:** ${hasPrisma ? 'Prisma ORM' : 'SQL'}`);
+            lines.push('');
+            infraHasData = true;
+          }
+        }
+
+        const infraDepsArr = data.dependencies as string[] | undefined;
+        if (infraDepsArr && infraDepsArr.length > 0) {
+          lines.push('## Runtime Dependencies');
+          lines.push('');
+          for (const dep of infraDepsArr) {
+            lines.push(`- \`${dep}\``);
+          }
+          lines.push('');
+          infraHasData = true;
+        }
+        if (infraSchemas && Array.isArray(infraSchemas) && infraSchemas.length > 0) {
+          lines.push(`## Database Tables (${infraSchemas.length})`);
+          lines.push('');
+          lines.push('| Table | Type |');
+          lines.push('|-------|------|');
+          for (const s of infraSchemas.slice(0, 20)) {
+            lines.push(`| ${s.name} | ${s.type || 'table'} |`);
+          }
+          if (infraSchemas.length > 20) {
+            lines.push(`| ... | *${infraSchemas.length - 20} more* |`);
+          }
+          lines.push('');
+          infraHasData = true;
+        }
+        if (infraSrcFiles && infraSrcFiles.length > 0) {
+          const configFiles = infraSrcFiles.filter((f: string) => {
+            const name = f.toLowerCase();
+            return name.includes('config') || name.includes('.env') || name.includes('docker') ||
+              name.includes('yaml') || name.includes('yml') || name.includes('makefile') ||
+              name.includes('package.json') || name.includes('tsconfig') ||
+              name.includes('prisma') || name.includes('migration');
+          });
+          if (configFiles.length > 0) {
+            lines.push(`## Config & Migration Files (${configFiles.length})`);
+            lines.push('');
+            for (const f of configFiles) {
+              lines.push(`- \`${f.split('/').pop()}\``);
+            }
+            lines.push('');
+            infraHasData = true;
+          }
+        }
+        if (!infraHasData) {
+          lines.push('*No infrastructure data found for this feature.*');
+          lines.push('');
+        }
+        break;
+      }
+
+      case 'fixtures': {
+        const allSrcFiles = data.sourceFiles as string[] | undefined;
+        if (allSrcFiles && allSrcFiles.length > 0) {
+          const fixtureFiles = allSrcFiles.filter((f: string) => {
+            const name = f.toLowerCase();
+            return name.includes('fixture') || name.includes('mock') || name.includes('seed') || name.includes('factory');
+          });
+          if (fixtureFiles.length > 0) {
+            lines.push(`## Fixture Files (${fixtureFiles.length})`);
+            lines.push('');
+            for (const f of fixtureFiles) {
+              lines.push(`- \`${f.split('/').pop()}\``);
+            }
+            lines.push('');
+          } else {
+            lines.push('*No fixture files found for this feature.*');
+            lines.push('');
+          }
+        } else {
+          lines.push('*No fixture files found for this feature.*');
+          lines.push('');
+        }
+        break;
+      }
+
+      case 'css': {
+        const cssSrcFiles = data.sourceFiles as string[] | undefined;
+        if (cssSrcFiles && cssSrcFiles.length > 0) {
+          const cssFiles = cssSrcFiles.filter((f: string) => {
+            const name = f.toLowerCase();
+            return name.endsWith('.css') || name.endsWith('.scss') || name.endsWith('.less') ||
+              name.endsWith('.styl') || name.includes('theme') || name.includes('style') ||
+              name.includes('tailwind');
+          });
+          if (cssFiles.length > 0) {
+            lines.push(`## Style Files (${cssFiles.length})`);
+            lines.push('');
+            for (const f of cssFiles) {
+              lines.push(`- \`${f.split('/').pop()}\``);
+            }
+            lines.push('');
+          } else {
+            lines.push('*No CSS/style files found for this feature.*');
+            lines.push('');
+          }
+        } else {
+          lines.push('*No CSS/style files found for this feature.*');
+          lines.push('');
+        }
+        break;
+      }
+
+      case 'prompts': {
+        const promptSrcFiles = data.sourceFiles as string[] | undefined;
+        if (promptSrcFiles && promptSrcFiles.length > 0) {
+          const promptFiles = promptSrcFiles.filter((f: string) => {
+            const name = f.toLowerCase();
+            return name.includes('prompt') || name.includes('skill') || name.includes('mode') ||
+              name.endsWith('.yaml') || name.endsWith('.yml') || name.includes('agent');
+          });
+          if (promptFiles.length > 0) {
+            lines.push(`## Prompt & Config Files (${promptFiles.length})`);
+            lines.push('');
+            for (const f of promptFiles) {
+              lines.push(`- \`${f.split('/').pop()}\``);
+            }
+            lines.push('');
+          } else {
+            lines.push('*No prompt/skill files found for this feature.*');
+            lines.push('');
+          }
+        } else {
+          lines.push('*No prompt/skill files found for this feature.*');
+          lines.push('');
+        }
+        break;
+      }
 
       default:
         // Generic format - show overview and any available data
@@ -2928,12 +4117,15 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
     await window.api?.shell?.openVSCode?.(dir);
   };
 
-  // Load metrics on mount (for collapsed state display)
+  // Load content on mount or when feature contracts change
   useEffect(() => {
-    if (!content && !loading) {
+    // Always prefer consolidated view when feature contracts are available
+    if (featureContracts.length > 0) {
+      loadConsolidatedContract();
+    } else if (!content && !loading) {
       loadContent();
     }
-  }, []); // Run once on mount
+  }, [featureContracts]); // Re-run when feature contracts are loaded
 
   // Load diff when expanded and has changes
   useEffect(() => {
@@ -3188,21 +4380,7 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                         Loading diff...
                       </div>
                     ) : diff ? (
-                      <pre className="text-xs font-mono whitespace-pre-wrap">
-                        {diff.split('\n').map((line, i) => {
-                          let className = 'text-text-primary';
-                          if (line.startsWith('+') && !line.startsWith('+++')) {
-                            className = 'text-green-600 bg-green-50';
-                          } else if (line.startsWith('-') && !line.startsWith('---')) {
-                            className = 'text-red-600 bg-red-50';
-                          } else if (line.startsWith('@@')) {
-                            className = 'text-blue-600';
-                          }
-                          return (
-                            <div key={i} className={className}>{line}</div>
-                          );
-                        })}
-                      </pre>
+                      <VirtualizedDiff diff={diff} maxHeight={280} />
                     ) : (
                       <div className="text-xs text-text-secondary">
                         No diff available. Changes may be committed already.
@@ -3216,7 +4394,8 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
         )}
       </div>
 
-      {/* Contract Content Modal */}
+      {/* Contract Content Modal - Escape key handler */}
+      {showContent && <EscapeKeyHandler onEscape={() => setShowContent(false)} />}
       {showContent && (
         <div
           className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
@@ -3236,23 +4415,12 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                   <h3 className="font-semibold text-text-primary">{contract.name}</h3>
                   <p className="text-xs text-text-secondary">{typeLabels[contract.type]}</p>
                 </div>
-                {/* Feature Dropdown */}
+                {/* Consolidated badge */}
                 {featureContracts.length > 0 && (
                   <div className="ml-4">
-                    <select
-                      value={selectedFeature}
-                      onChange={(e) => handleFeatureChange(e.target.value)}
-                      className="px-3 py-1.5 text-xs rounded-lg border border-border bg-surface-secondary text-text-primary
-                        focus:outline-none focus:ring-2 focus:ring-kanvas-blue/50"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <option value="repo">Repo-Level (Consolidated)</option>
-                      <optgroup label="Feature-Level Contracts">
-                        {featureContracts.map(f => (
-                          <option key={f.name} value={f.name}>{f.name}</option>
-                        ))}
-                      </optgroup>
-                    </select>
+                    <span className="px-3 py-1.5 text-xs rounded-lg border border-border bg-surface-secondary text-text-primary">
+                      Repo-Level (Consolidated)
+                    </span>
                   </div>
                 )}
               </div>
@@ -3277,7 +4445,7 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                       ? 'bg-surface-secondary text-text-secondary opacity-50 cursor-not-allowed'
                       : 'bg-kanvas-blue text-white hover:bg-kanvas-blue/90'
                   }`}
-                  title={selectedFeature === 'repo' ? 'Regenerate repo-level contract' : `Regenerate ${selectedFeature} contract`}
+                  title="Regenerate consolidated contract"
                 >
                   {generating ? (
                     <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
@@ -3339,17 +4507,43 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
             {/* Modal Content */}
             <div className="flex-1 overflow-auto p-4">
               {loading || generating ? (
-                <div className="flex flex-col items-center justify-center h-32 gap-4">
+                <div className="flex flex-col items-center justify-center h-40 gap-4">
                   <div className="flex items-center gap-2 text-text-secondary">
                     <svg className="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    {generating ? 'Generating contract...' : 'Loading contract...'}
+                    {generating ? (
+                      <span>
+                        {generationProgress?.currentFeature
+                          ? `Generating: ${generationProgress.currentFeature}`
+                          : 'Starting generation...'}
+                      </span>
+                    ) : 'Loading contract...'}
                   </div>
-                  {generating && (
+                  {generating && generationProgress && (
+                    <div className="w-full max-w-md space-y-2">
+                      <div className="flex justify-between text-xs text-text-secondary">
+                        <span>{generationProgress.completed} of {generationProgress.total} features</span>
+                        <span>{generationProgress.total > 0 ? Math.round((generationProgress.completed / generationProgress.total) * 100) : 0}%</span>
+                      </div>
+                      <div className="w-full h-2 bg-surface-secondary rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-kanvas-blue rounded-full transition-all duration-300"
+                          style={{ width: `${generationProgress.total > 0 ? (generationProgress.completed / generationProgress.total) * 100 : 5}%` }}
+                        />
+                      </div>
+                      {generationProgress.contractType && (
+                        <div className="text-xs text-center text-text-secondary">
+                          Step: {generationProgress.contractType === 'markdown' ? '📄 Markdown' :
+                                 generationProgress.contractType === 'json' ? '📋 JSON' : '👤 Admin'}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {generating && !generationProgress && (
                     <div className="w-64 h-2 bg-surface-secondary rounded-full overflow-hidden">
-                      <div className="h-full bg-kanvas-blue rounded-full animate-pulse" style={{ width: '60%' }}></div>
+                      <div className="h-full bg-kanvas-blue rounded-full animate-pulse" style={{ width: '30%' }}></div>
                     </div>
                   )}
                 </div>
@@ -3366,7 +4560,17 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                   </div>
                 </div>
               ) : content ? (
-                viewMode === 'markdown' ? (
+                <>
+                  {/* Truncation warning */}
+                  {isTruncated && (
+                    <div className="p-2 bg-yellow-50 border border-yellow-200 text-yellow-700 text-xs rounded-lg mb-3 flex items-center gap-2">
+                      <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                      </svg>
+                      <span>Content truncated for performance (file &gt;100KB). Open in editor to view full file.</span>
+                    </div>
+                  )}
+                  {viewMode === 'markdown' ? (
                   <div className="prose prose-sm dark:prose-invert max-w-none select-text
                     prose-headings:text-text-primary prose-p:text-text-secondary
                     prose-table:border-collapse prose-table:w-full prose-table:my-4
@@ -3435,7 +4639,8 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                     style={{ userSelect: 'text', WebkitUserSelect: 'text' }}>
                     {rawContent || content}
                   </pre>
-                )
+                )}
+                </>
               ) : (
                 <div className="flex items-center justify-center h-32 text-text-secondary">
                   No content available
@@ -3446,14 +4651,11 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
             {/* Modal Footer */}
             <div className="flex items-center justify-between p-4 border-t border-border text-xs text-text-secondary gap-4">
               <span className="truncate flex-1">
-                {selectedFeature === 'repo'
-                  ? contract.filePath
-                  : featureContracts.find(f => f.name === selectedFeature)?.jsonPath || featureContracts.find(f => f.name === selectedFeature)?.path || contract.filePath
-                }
+                {contract.filePath}
               </span>
               <span className="flex-shrink-0 whitespace-nowrap">
                 <span className="font-medium text-text-primary">v{extractedVersion || '1.0.0'}</span>
-                {selectedFeature !== 'repo' && <span className="text-kanvas-blue ml-1">({selectedFeature})</span>}
+                {featureContracts.length > 0 && <span className="text-kanvas-blue ml-1">(consolidated)</span>}
               </span>
             </div>
           </div>

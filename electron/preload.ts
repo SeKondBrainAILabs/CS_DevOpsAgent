@@ -378,11 +378,34 @@ const api = {
   // ACTIVITY LOG API
   // ==========================================================================
   activity: {
-    get: (sessionId: string, limit?: number): Promise<IpcResult<ActivityLogEntry[]>> =>
-      ipcRenderer.invoke(IPC.LOG_GET, sessionId, limit),
+    get: (sessionId: string, limit?: number, offset?: number): Promise<IpcResult<ActivityLogEntry[]>> =>
+      ipcRenderer.invoke(IPC.LOG_GET, sessionId, limit, offset),
 
     clear: (sessionId: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.LOG_CLEAR, sessionId),
+
+    getCommits: (sessionId: string, limit?: number): Promise<IpcResult<Array<{
+      hash: string;
+      message: string;
+      timestamp: string;
+      filesChanged: number;
+      additions: number;
+      deletions: number;
+    }>>> =>
+      ipcRenderer.invoke(IPC.LOG_GET_COMMITS, sessionId, limit),
+
+    getTimeline: (sessionId: string, limit?: number): Promise<IpcResult<Array<{
+      type: 'activity' | 'commit';
+      timestamp: string;
+      data: ActivityLogEntry | {
+        hash: string;
+        message: string;
+        filesChanged: number;
+        additions: number;
+        deletions: number;
+      };
+    }>>> =>
+      ipcRenderer.invoke(IPC.LOG_GET_TIMELINE, sessionId, limit),
 
     onLog: (callback: (entry: ActivityLogEntry) => void): (() => void) => {
       const handler = (_event: IpcRendererEvent, entry: ActivityLogEntry) => callback(entry);
@@ -1782,6 +1805,92 @@ const api = {
      */
     openFolder: (): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.DEBUG_LOG_OPEN_FOLDER),
+  },
+
+  // ==========================================================================
+  // CONFLICT RESOLUTION API
+  // AI-powered conflict analysis and resolution with user approval
+  // ==========================================================================
+  conflict: {
+    /**
+     * Generate AI resolution previews for conflicted files
+     */
+    generatePreviews: (repoPath: string, targetBranch: string): Promise<IpcResult<Array<{
+      filePath: string;
+      oursContent: string;
+      theirsContent: string;
+      resolvedContent: string;
+      resolution: 'ours' | 'theirs' | 'merged';
+    }>>> =>
+      ipcRenderer.invoke(IPC.CONFLICT_GENERATE_PREVIEWS, repoPath, targetBranch),
+
+    /**
+     * Apply user-approved conflict resolutions
+     */
+    applyApproved: (repoPath: string, previews: Array<{
+      filePath: string;
+      resolvedContent: string;
+      approved: boolean;
+    }>): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.CONFLICT_APPLY_APPROVED, repoPath, previews),
+
+    /**
+     * Abort rebase and restore previous state
+     */
+    abortRebase: (repoPath: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.CONFLICT_ABORT_REBASE, repoPath),
+
+    /**
+     * Check if a rebase is currently in progress
+     */
+    isRebaseInProgress: (repoPath: string): Promise<IpcResult<boolean>> =>
+      ipcRenderer.invoke(IPC.CONFLICT_IS_REBASE_IN_PROGRESS, repoPath),
+
+    /**
+     * Create a backup branch before applying AI changes
+     * Branch name: backup_kit/<sessionId>
+     */
+    createBackup: (repoPath: string, sessionId: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.CONFLICT_CREATE_BACKUP, repoPath, sessionId),
+
+    /**
+     * Delete backup branch after successful resolution
+     */
+    deleteBackup: (repoPath: string, sessionId: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.CONFLICT_DELETE_BACKUP, repoPath, sessionId),
+
+    // Events
+    onPreviewsReady: (callback: (data: {
+      repoPath: string;
+      previews: Array<{ filePath: string; resolution: string }>;
+    }) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, data: {
+        repoPath: string;
+        previews: Array<{ filePath: string; resolution: string }>;
+      }) => callback(data);
+      ipcRenderer.on(IPC.CONFLICT_PREVIEWS_READY, handler);
+      return () => ipcRenderer.removeListener(IPC.CONFLICT_PREVIEWS_READY, handler);
+    },
+
+    onRebaseErrorDetected: (callback: (data: {
+      sessionId: string;
+      repoPath: string;
+      baseBranch: string;
+      currentBranch: string;
+      conflictedFiles: string[];
+      errorMessage: string;
+    }) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, data: {
+        sessionId: string;
+        repoPath: string;
+        baseBranch: string;
+        currentBranch: string;
+        conflictedFiles: string[];
+        errorMessage: string;
+      }) => callback(data);
+      ipcRenderer.on(IPC.REBASE_ERROR_DETECTED, handler);
+      return () => ipcRenderer.removeListener(IPC.REBASE_ERROR_DETECTED, handler);
+    },
   },
 
   };

@@ -17,10 +17,13 @@ import { NewSessionWizard } from './components/features/NewSessionWizard';
 import { CloseSessionDialog } from './components/features/CloseSessionDialog';
 import { SettingsModal } from './components/features/SettingsModal';
 import { CreateAgentWizard } from './components/features/CreateAgentWizard';
+import { RebaseMergeErrorDialog } from './components/features/RebaseMergeErrorDialog';
 import { useAgentStore, selectAgentList, selectSessionById } from './store/agentStore';
 import { useUIStore } from './store/uiStore';
+import { useConflictStore } from './store/conflictStore';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useAgentSubscription } from './hooks/useAgentSubscription';
+import { useContractGenerationSubscription } from './hooks/useContractGenerationSubscription';
 import type { SessionReport } from '../shared/agent-protocol';
 
 export default function App(): React.ReactElement {
@@ -48,6 +51,31 @@ export default function App(): React.ReactElement {
 
   // Subscribe to agent events from main process
   useAgentSubscription();
+
+  // Subscribe to contract generation events at app-level (persists across tab switches)
+  useContractGenerationSubscription();
+
+  // Conflict resolution store
+  const showConflictDialog = useConflictStore((state) => state.showDialog);
+
+  // Subscribe to rebase/merge error events
+  useEffect(() => {
+    const unsubscribe = window.api?.conflict?.onRebaseErrorDetected?.((data) => {
+      console.log('[App] Rebase error detected:', data);
+      showConflictDialog({
+        sessionId: data.sessionId,
+        repoPath: data.repoPath,
+        baseBranch: data.baseBranch,
+        currentBranch: data.currentBranch,
+        conflictedFiles: data.conflictedFiles,
+        errorMessage: data.errorMessage,
+      });
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [showConflictDialog]);
 
   // Initialize agent listener on mount
   useEffect(() => {
@@ -181,6 +209,9 @@ export default function App(): React.ReactElement {
       {showCreateAgentWizard && (
         <CreateAgentWizard onClose={() => setShowCreateAgentWizard(false)} />
       )}
+
+      {/* Rebase/Merge Error Dialog - shown when conflict is detected */}
+      <RebaseMergeErrorDialog />
     </div>
   );
 }

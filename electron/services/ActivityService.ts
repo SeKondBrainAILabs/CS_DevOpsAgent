@@ -220,4 +220,88 @@ export class ActivityService extends BaseService {
       return { totalLogs: 0, sessionsWithLogs: 0 };
     }
   }
+
+  /**
+   * Get commits for a session from database
+   */
+  getCommitsForSession(sessionId: string, limit = 100): IpcResult<Array<{
+    hash: string;
+    message: string;
+    timestamp: string;
+    filesChanged: number;
+    additions: number;
+    deletions: number;
+  }>> {
+    try {
+      const commits = databaseService.getCommitsForSession(sessionId, limit);
+      return this.success(commits);
+    } catch (error) {
+      console.warn('[ActivityService] Failed to get commits for session:', error);
+      return this.success([]);
+    }
+  }
+
+  /**
+   * Get unified timeline for a session (activity logs + commits merged chronologically)
+   * This provides a complete view of all session activity in one place
+   */
+  getTimelineForSession(sessionId: string, limit = 200): IpcResult<Array<{
+    type: 'activity' | 'commit';
+    timestamp: string;
+    data: ActivityLogEntry | {
+      hash: string;
+      message: string;
+      filesChanged: number;
+      additions: number;
+      deletions: number;
+    };
+  }>> {
+    try {
+      // Get activity logs
+      const logs = databaseService.getActivityLogs(sessionId, limit);
+
+      // Get commits
+      const commits = databaseService.getCommitsForSession(sessionId, limit);
+
+      // Merge into unified timeline
+      const timeline: Array<{
+        type: 'activity' | 'commit';
+        timestamp: string;
+        data: ActivityLogEntry | {
+          hash: string;
+          message: string;
+          filesChanged: number;
+          additions: number;
+          deletions: number;
+        };
+      }> = [];
+
+      // Add activity entries
+      for (const log of logs) {
+        timeline.push({
+          type: 'activity',
+          timestamp: log.timestamp,
+          data: log,
+        });
+      }
+
+      // Add commit entries
+      for (const commit of commits) {
+        timeline.push({
+          type: 'commit',
+          timestamp: commit.timestamp,
+          data: commit,
+        });
+      }
+
+      // Sort by timestamp (newest first)
+      timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+      // Limit total
+      return this.success(timeline.slice(0, limit));
+    } catch (error) {
+      console.warn('[ActivityService] Failed to get timeline:', error);
+      return this.success([]);
+    }
+  }
 }

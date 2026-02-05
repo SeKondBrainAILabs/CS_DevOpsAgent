@@ -81,35 +81,43 @@ export function AgentList(): React.ReactElement {
     [reportedSessions, selectedAgentType]
   );
 
-  // Group agents by type
+  // Group by agent type - derive from sessions (the accurate data source)
   const agentGroups = useMemo(() => {
     const groups = new Map<AgentType, AgentTypeGroup>();
+    const sessions = Array.from(reportedSessions.values());
 
-    for (const agent of agents) {
-      const existing = groups.get(agent.agentType);
+    // Build groups from sessions (source of truth)
+    for (const session of sessions) {
+      const agentType = session.agentType as AgentType;
+      if (!agentType) continue;
+
+      const existing = groups.get(agentType);
+      const repoPath = session.repoPath || session.worktreePath;
+      const repoName = repoPath?.split('/').pop() || '';
+      const isActive = session.status === 'active';
+
       if (existing) {
-        existing.agents.push(agent);
-        existing.totalSessions += agent.sessions.length;
-        if (agent.isAlive) existing.aliveCount++;
-        if (agent.repoPath && !existing.repos.includes(agent.repoPath)) {
-          existing.repos.push(agent.repoPath);
+        existing.totalSessions++;
+        if (isActive) existing.aliveCount++;
+        if (repoName && !existing.repos.includes(repoName)) {
+          existing.repos.push(repoName);
         }
-        if (agent.lastHeartbeat && (!existing.latestHeartbeat || agent.lastHeartbeat > existing.latestHeartbeat)) {
-          existing.latestHeartbeat = agent.lastHeartbeat;
+        if (session.updated && (!existing.latestHeartbeat || session.updated > existing.latestHeartbeat)) {
+          existing.latestHeartbeat = session.updated;
         }
       } else {
-        groups.set(agent.agentType, {
-          agentType: agent.agentType,
-          agents: [agent],
-          totalSessions: agent.sessions.length,
-          aliveCount: agent.isAlive ? 1 : 0,
-          latestHeartbeat: agent.lastHeartbeat,
-          repos: agent.repoPath ? [agent.repoPath] : [],
+        groups.set(agentType, {
+          agentType,
+          agents: [], // Not used anymore, kept for type compatibility
+          totalSessions: 1,
+          aliveCount: isActive ? 1 : 0,
+          latestHeartbeat: session.updated,
+          repos: repoName ? [repoName] : [],
         });
       }
     }
 
-    // Filter out agents with 0 sessions, then sort
+    // Sort by active count, then by name
     return Array.from(groups.values())
       .filter(group => group.totalSessions > 0)
       .sort((a, b) => {
@@ -118,7 +126,7 @@ export function AgentList(): React.ReactElement {
           AGENT_TYPE_NAMES[b.agentType] || b.agentType
         );
       });
-  }, [agents]);
+  }, [reportedSessions]);
 
   if (!isInitialized) {
     return (
@@ -132,8 +140,8 @@ export function AgentList(): React.ReactElement {
 
   const totalSessions = agentGroups.reduce((sum, g) => sum + g.totalSessions, 0);
 
-  // Show empty state if no agents OR all agents have 0 sessions
-  if (agents.length === 0 || agentGroups.length === 0) {
+  // Show empty state if no sessions
+  if (reportedSessions.size === 0 || agentGroups.length === 0) {
     return (
       <div className="text-center py-12">
         <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-surface-tertiary flex items-center justify-center">

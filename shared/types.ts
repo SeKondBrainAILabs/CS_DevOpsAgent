@@ -603,6 +603,7 @@ export interface DiscoveredFeature {
   name: string;
   description?: string; // AI-generated description of the feature
   basePath: string;
+  specificFiles?: string[]; // AI-identified specific files for this feature (filters what gets scanned)
   files: {
     api: string[];      // API routes, OpenAPI, GraphQL, etc.
     schema: string[];   // Types, interfaces, database schemas
@@ -613,6 +614,8 @@ export interface DiscoveredFeature {
     };
     fixtures: string[];
     config: string[];
+    css: string[];      // CSS, SCSS, style files
+    prompts: string[];  // Prompt templates, skill configs, mode YAML files
     other: string[];
   };
   contractPatternMatches: number; // How many contract patterns matched
