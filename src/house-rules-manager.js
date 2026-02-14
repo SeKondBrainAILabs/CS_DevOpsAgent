@@ -22,7 +22,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Version of our house rules sections
-const HOUSERULES_VERSION = '1.3.0';
+const HOUSERULES_VERSION = '2.0.0';
 
 // Managed sections with their content
 const MANAGED_SECTIONS = {

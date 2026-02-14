@@ -1127,6 +1127,56 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   });
 
   // ==========================================================================
+  // VERSION MANAGEMENT HANDLERS
+  // ==========================================================================
+  ipcMain.handle(IPC.VERSION_GET, (_, repoPath: string) => {
+    return services.version.getRepoVersion(repoPath);
+  });
+
+  ipcMain.handle(IPC.VERSION_BUMP, (_, repoPath: string, component: 'major' | 'minor' | 'patch') => {
+    return services.version.bumpVersion(repoPath, component);
+  });
+
+  ipcMain.handle(IPC.VERSION_GET_SETTINGS, (_, repoPath: string) => {
+    return services.version.getSettings(repoPath);
+  });
+
+  ipcMain.handle(IPC.VERSION_SET_SETTINGS, (_, repoPath: string, settings: { autoVersionBump: boolean }) => {
+    return services.version.setSettings(repoPath, settings);
+  });
+
+  // ==========================================================================
+  // AUTO-UPDATE HANDLERS
+  // ==========================================================================
+  ipcMain.handle(IPC.UPDATE_CHECK, async () => {
+    return { success: true, data: await services.autoUpdate.checkForUpdates() };
+  });
+
+  ipcMain.handle(IPC.UPDATE_DOWNLOAD, async () => {
+    try {
+      await services.autoUpdate.downloadUpdate();
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'DOWNLOAD_FAILED',
+          message: error instanceof Error ? error.message : 'Download failed',
+        },
+      };
+    }
+  });
+
+  ipcMain.handle(IPC.UPDATE_INSTALL, () => {
+    services.autoUpdate.installUpdate();
+    return { success: true };
+  });
+
+  ipcMain.handle(IPC.UPDATE_GET_STATUS, () => {
+    return { success: true, data: services.autoUpdate.getStatus() };
+  });
+
+  // ==========================================================================
   // APP HANDLERS
   // ==========================================================================
   ipcMain.handle(IPC.APP_GET_VERSION, () => {

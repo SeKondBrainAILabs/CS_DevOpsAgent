@@ -250,6 +250,37 @@ export interface Credentials {
 }
 
 // =============================================================================
+// VERSION MANAGEMENT TYPES
+// =============================================================================
+
+export interface RepoVersionInfo {
+  version: string;
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+export interface RepoVersionSettings {
+  autoVersionBump: boolean;
+}
+
+// =============================================================================
+// APP UPDATE TYPES
+// =============================================================================
+
+export interface AppUpdateInfo {
+  currentVersion: string;
+  latestVersion?: string;
+  updateAvailable: boolean;
+  downloading: boolean;
+  downloaded: boolean;
+  progress?: { percent: number; transferred: number; total: number };
+  error?: string;
+  releaseNotes?: string;
+  releaseDate?: string;
+}
+
+// =============================================================================
 // IPC RESULT TYPES
 // =============================================================================
 

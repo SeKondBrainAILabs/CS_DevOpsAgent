@@ -104,6 +104,15 @@ async function createWindow(): Promise<void> {
     setTimeout(async () => {
       await checkForOrphanedSessions(services);
     }, 1500);
+
+    // Check for app updates after startup (only runs in production)
+    setTimeout(() => {
+      if (services?.autoUpdate) {
+        services.autoUpdate.checkForUpdates().catch((err) => {
+          console.warn('[Main] Auto-update check failed:', err);
+        });
+      }
+    }, 3000);
   });
 
   // Load the app

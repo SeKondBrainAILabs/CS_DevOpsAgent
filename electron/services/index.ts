@@ -25,6 +25,8 @@ import { MergeService } from './MergeService';
 import { HeartbeatService } from './HeartbeatService';
 import { CommitAnalysisService } from './CommitAnalysisService';
 import { DebugLogService } from './DebugLogService';
+import { VersionService } from './VersionService';
+import { AutoUpdateService } from './AutoUpdateService';
 import { databaseService } from './DatabaseService';
 import {
   initializeAnalysisServices,
@@ -60,6 +62,8 @@ export interface Services {
   heartbeat: HeartbeatService;
   commitAnalysis: CommitAnalysisService;
   debugLog: DebugLogService;
+  version: VersionService;
+  autoUpdate: AutoUpdateService;
   // Analysis services (Phase 1)
   astParser: ASTParserService;
   repositoryAnalysis: RepositoryAnalysisService;
@@ -181,6 +185,16 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   const commitAnalysis = new CommitAnalysisService();
   commitAnalysis.setAIService(ai);
 
+  // Initialize Version service
+  // For repo-level version management (read, bump, settings)
+  const version = new VersionService();
+
+  // Initialize AutoUpdate service
+  // For checking/downloading/installing app updates via GitHub Releases
+  const autoUpdate = new AutoUpdateService();
+  autoUpdate.setMainWindow(mainWindow);
+  autoUpdate.initialize();
+
   // Initialize Analysis services
   // For AST parsing, repository analysis, and API extraction
   const analysisServices = await initializeAnalysisServices();
@@ -225,6 +239,8 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     heartbeat,
     commitAnalysis,
     debugLog,
+    version,
+    autoUpdate,
     // Analysis services (Phase 1)
     astParser: analysisServices.astParser,
     repositoryAnalysis: analysisServices.repositoryAnalysis,
@@ -299,6 +315,8 @@ export { MergeService } from './MergeService';
 export { HeartbeatService } from './HeartbeatService';
 export { CommitAnalysisService } from './CommitAnalysisService';
 export { DebugLogService } from './DebugLogService';
+export { VersionService } from './VersionService';
+export { AutoUpdateService } from './AutoUpdateService';
 export { databaseService } from './DatabaseService';
 // Analysis services (Phase 1 + Phase 2 + Phase 3)
 export {

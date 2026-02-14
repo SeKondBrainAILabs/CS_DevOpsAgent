@@ -1,5 +1,8 @@
 # Claude House Rules for CS_DevOpsAgent
 
+> **NOTE:** The canonical houserules are now in the project root: `houserules.md` (v2.0.0, 2026-02-14).
+> This file is kept for backwards compatibility but the root `houserules.md` is the authoritative source.
+
 ## 🚨 CRITICAL: File Coordination Protocol (MUST FOLLOW)
 
 **IMPORTANT: Always check the house rules at the beginning of each session!**

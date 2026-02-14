@@ -1,4 +1,8 @@
-# House Rules for DevOps Agent (Structured Organization)
+# House Rules for DevOps Agent (Structured Organization) - DEPRECATED
+
+> **DEPRECATED:** This file has been superseded by `houserules.md` v2.0.0 (2026-02-14).
+> The main `houserules.md` now includes all structured organization rules, contract system,
+> Kanvas architecture, and compaction-safe design. Please refer to `houserules.md` instead.
 
 **IMPORTANT: This project uses structured folder organization for NEW code only.**
 - **Existing files**: Stay in their current locations - DO NOT move them

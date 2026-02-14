@@ -370,6 +370,28 @@ export const IPC = {
   DEBUG_LOG_OPEN_FOLDER: 'debug-log:open-folder',
 
   // ==========================================================================
+  // VERSION MANAGEMENT CHANNELS
+  // ==========================================================================
+  VERSION_GET: 'version:get',
+  VERSION_BUMP: 'version:bump',
+  VERSION_GET_SETTINGS: 'version:get-settings',
+  VERSION_SET_SETTINGS: 'version:set-settings',
+
+  // ==========================================================================
+  // AUTO-UPDATE CHANNELS
+  // ==========================================================================
+  UPDATE_CHECK: 'update:check',
+  UPDATE_DOWNLOAD: 'update:download',
+  UPDATE_INSTALL: 'update:install',
+  UPDATE_GET_STATUS: 'update:get-status',
+  // Events (main → renderer)
+  UPDATE_AVAILABLE: 'update:available',
+  UPDATE_NOT_AVAILABLE: 'update:not-available',
+  UPDATE_PROGRESS: 'update:progress',
+  UPDATE_DOWNLOADED: 'update:downloaded',
+  UPDATE_ERROR: 'update:error',
+
+  // ==========================================================================
   // APP CHANNELS
   // ==========================================================================
   APP_GET_VERSION: 'app:getVersion',
@@ -433,6 +455,11 @@ export const REQUEST_CHANNELS = [
   IPC.RECENT_REPOS_ADD,
   IPC.RECENT_REPOS_REMOVE,
   IPC.APP_GET_VERSION,
+  // Version management channels
+  IPC.VERSION_GET,
+  IPC.VERSION_BUMP,
+  IPC.VERSION_GET_SETTINGS,
+  IPC.VERSION_SET_SETTINGS,
   // Analysis channels
   IPC.ANALYSIS_SCAN_REPO,
   IPC.ANALYSIS_PARSE_FILE,
@@ -474,6 +501,11 @@ export const REQUEST_CHANNELS = [
   IPC.CONFLICT_ABORT_REBASE,
   IPC.CONFLICT_IS_REBASE_IN_PROGRESS,
   IPC.CONFLICT_REBASE_WITH_AI,
+  // Auto-update channels
+  IPC.UPDATE_CHECK,
+  IPC.UPDATE_DOWNLOAD,
+  IPC.UPDATE_INSTALL,
+  IPC.UPDATE_GET_STATUS,
 ] as const;
 
 export const EVENT_CHANNELS = [
@@ -506,4 +538,10 @@ export const EVENT_CHANNELS = [
   IPC.CONFLICT_RESOLUTION_COMPLETE,
   IPC.CONFLICT_PREVIEWS_READY,
   IPC.CONFLICT_APPROVAL_REQUIRED,
+  // Auto-update events
+  IPC.UPDATE_AVAILABLE,
+  IPC.UPDATE_NOT_AVAILABLE,
+  IPC.UPDATE_PROGRESS,
+  IPC.UPDATE_DOWNLOADED,
+  IPC.UPDATE_ERROR,
 ] as const;

@@ -24,6 +24,9 @@ import type {
   AppConfig,
   Credentials,
   IpcResult,
+  RepoVersionInfo,
+  RepoVersionSettings,
+  AppUpdateInfo,
 } from '../shared/types';
 import type {
   AgentInfo,
@@ -563,6 +566,23 @@ const api = {
     quit: (): void => {
       ipcRenderer.send(IPC.APP_QUIT);
     },
+  },
+
+  // ==========================================================================
+  // VERSION MANAGEMENT API
+  // ==========================================================================
+  version: {
+    getRepoVersion: (repoPath: string): Promise<IpcResult<RepoVersionInfo>> =>
+      ipcRenderer.invoke(IPC.VERSION_GET, repoPath),
+
+    bump: (repoPath: string, component: 'major' | 'minor' | 'patch'): Promise<IpcResult<RepoVersionInfo>> =>
+      ipcRenderer.invoke(IPC.VERSION_BUMP, repoPath, component),
+
+    getSettings: (repoPath: string): Promise<IpcResult<RepoVersionSettings>> =>
+      ipcRenderer.invoke(IPC.VERSION_GET_SETTINGS, repoPath),
+
+    setSettings: (repoPath: string, settings: RepoVersionSettings): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.VERSION_SET_SETTINGS, repoPath, settings),
   },
 
   // ==========================================================================
@@ -1890,6 +1910,53 @@ const api = {
       }) => callback(data);
       ipcRenderer.on(IPC.REBASE_ERROR_DETECTED, handler);
       return () => ipcRenderer.removeListener(IPC.REBASE_ERROR_DETECTED, handler);
+    },
+  },
+
+  // ==========================================================================
+  // AUTO-UPDATE API
+  // ==========================================================================
+  update: {
+    check: (): Promise<IpcResult<AppUpdateInfo>> =>
+      ipcRenderer.invoke(IPC.UPDATE_CHECK),
+
+    download: (): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.UPDATE_DOWNLOAD),
+
+    install: (): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.UPDATE_INSTALL),
+
+    getStatus: (): Promise<IpcResult<AppUpdateInfo>> =>
+      ipcRenderer.invoke(IPC.UPDATE_GET_STATUS),
+
+    onAvailable: (callback: (info: AppUpdateInfo) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, info: AppUpdateInfo) => callback(info);
+      ipcRenderer.on(IPC.UPDATE_AVAILABLE, handler);
+      return () => ipcRenderer.removeListener(IPC.UPDATE_AVAILABLE, handler);
+    },
+
+    onNotAvailable: (callback: (info: AppUpdateInfo) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, info: AppUpdateInfo) => callback(info);
+      ipcRenderer.on(IPC.UPDATE_NOT_AVAILABLE, handler);
+      return () => ipcRenderer.removeListener(IPC.UPDATE_NOT_AVAILABLE, handler);
+    },
+
+    onProgress: (callback: (info: AppUpdateInfo) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, info: AppUpdateInfo) => callback(info);
+      ipcRenderer.on(IPC.UPDATE_PROGRESS, handler);
+      return () => ipcRenderer.removeListener(IPC.UPDATE_PROGRESS, handler);
+    },
+
+    onDownloaded: (callback: (info: AppUpdateInfo) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, info: AppUpdateInfo) => callback(info);
+      ipcRenderer.on(IPC.UPDATE_DOWNLOADED, handler);
+      return () => ipcRenderer.removeListener(IPC.UPDATE_DOWNLOADED, handler);
+    },
+
+    onError: (callback: (info: AppUpdateInfo) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, info: AppUpdateInfo) => callback(info);
+      ipcRenderer.on(IPC.UPDATE_ERROR, handler);
+      return () => ipcRenderer.removeListener(IPC.UPDATE_ERROR, handler);
     },
   },
 

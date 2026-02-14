@@ -36,6 +36,11 @@ nsis:
   installerIcon: resources/icon.ico
   uninstallerIcon: resources/icon.ico
   differentialPackage: true
+publish:
+  provider: github
+  owner: SeKondBrainAILabs
+  repo: CS_DevOpsAgent
+  releaseType: release
 dmg:
   contents:
     - x: 130

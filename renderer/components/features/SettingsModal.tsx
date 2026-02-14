@@ -3,8 +3,9 @@
  * Application settings, credentials, and maintenance
  */
 
-import React, { useState, useEffect } from 'react';
-import type { AppConfig, AgentType } from '../../../shared/types';
+import React, { useState, useEffect, useMemo } from 'react';
+import type { AppConfig, AgentType, RepoVersionInfo, RepoVersionSettings, AppUpdateInfo } from '../../../shared/types';
+import { useAgentStore } from '../../store/agentStore';
 
 interface SettingsModalProps {
   onClose: () => void;
@@ -55,6 +56,31 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
   const [isExporting, setIsExporting] = useState(false);
   const [isClearingLogs, setIsClearingLogs] = useState(false);
 
+  // Version management state
+  const [selectedRepoPath, setSelectedRepoPath] = useState<string>('');
+  const [repoVersion, setRepoVersion] = useState<RepoVersionInfo | null>(null);
+  const [versionError, setVersionError] = useState<string>('');
+  const [versionSettings, setVersionSettings] = useState<RepoVersionSettings>({ autoVersionBump: true });
+  const [isBumping, setIsBumping] = useState(false);
+
+  // Auto-update state
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+
+  // Derive unique repos from reported sessions
+  const reportedSessions = useAgentStore((s) => s.reportedSessions);
+  const selectedSessionId = useAgentStore((s) => s.selectedSessionId);
+  const uniqueRepos = useMemo(() => {
+    const repos = new Map<string, string>(); // repoPath -> repoName
+    reportedSessions.forEach((session) => {
+      if (session.repoPath && !repos.has(session.repoPath)) {
+        const name = session.repoPath.split('/').pop() || session.repoPath;
+        repos.set(session.repoPath, name);
+      }
+    });
+    return repos;
+  }, [reportedSessions]);
+
   // Load settings
   useEffect(() => {
     window.api.config.getAll().then((result) => {
@@ -72,7 +98,93 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
     window.api.app.getVersion().then((version) => {
       setAppVersion(version);
     });
+
+    // Load current update status
+    window.api.update?.getStatus?.().then((result) => {
+      if (result?.success && result.data) {
+        setUpdateInfo(result.data);
+      }
+    });
+
+    // Listen for update events
+    const unsubs = [
+      window.api.update?.onAvailable?.((info) => setUpdateInfo(info)),
+      window.api.update?.onNotAvailable?.((info) => { setUpdateInfo(info); setIsCheckingUpdate(false); }),
+      window.api.update?.onProgress?.((info) => setUpdateInfo(info)),
+      window.api.update?.onDownloaded?.((info) => setUpdateInfo(info)),
+      window.api.update?.onError?.((info) => { setUpdateInfo(info); setIsCheckingUpdate(false); }),
+    ];
+    return () => { unsubs.forEach((fn) => fn?.()); };
   }, []);
+
+  // Auto-select repo from currently selected session, or first available
+  useEffect(() => {
+    if (selectedRepoPath) return; // already selected
+    // Try to use the currently selected session's repo
+    if (selectedSessionId) {
+      const session = reportedSessions.get(selectedSessionId);
+      if (session?.repoPath) {
+        setSelectedRepoPath(session.repoPath);
+        return;
+      }
+    }
+    // Fall back to first available repo
+    const firstRepo = uniqueRepos.keys().next().value;
+    if (firstRepo) {
+      setSelectedRepoPath(firstRepo);
+    }
+  }, [selectedSessionId, reportedSessions, uniqueRepos, selectedRepoPath]);
+
+  // Fetch version and settings when selectedRepoPath changes
+  useEffect(() => {
+    if (!selectedRepoPath) {
+      setRepoVersion(null);
+      setVersionError('');
+      return;
+    }
+    setVersionError('');
+    window.api.version.getRepoVersion(selectedRepoPath).then((result) => {
+      if (result.success && result.data) {
+        setRepoVersion(result.data);
+        setVersionError('');
+      } else {
+        setRepoVersion(null);
+        setVersionError(result.error?.code === 'NO_PACKAGE_JSON' ? 'No package.json found' : (result.error?.message || 'Failed to read version'));
+      }
+    });
+    window.api.version.getSettings(selectedRepoPath).then((result) => {
+      if (result.success && result.data) {
+        setVersionSettings(result.data);
+      }
+    });
+  }, [selectedRepoPath]);
+
+  const handleBump = async (component: 'major' | 'minor' | 'patch') => {
+    if (!selectedRepoPath || isBumping) return;
+    setIsBumping(true);
+    setMessage(null);
+    try {
+      const result = await window.api.version.bump(selectedRepoPath, component);
+      if (result.success && result.data) {
+        setRepoVersion(result.data);
+        setMessage({ type: 'success', text: `Version bumped to ${result.data.version}` });
+      } else {
+        setMessage({ type: 'error', text: result.error?.message || 'Failed to bump version' });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to bump version' });
+    } finally {
+      setIsBumping(false);
+    }
+  };
+
+  const handleAutoVersionBumpToggle = async (enabled: boolean) => {
+    const newSettings = { ...versionSettings, autoVersionBump: enabled };
+    setVersionSettings(newSettings);
+    if (selectedRepoPath) {
+      await window.api.version.setSettings(selectedRepoPath, newSettings);
+    }
+  };
 
   const handleSaveGeneral = async () => {
     if (!config) return;
@@ -305,21 +417,173 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
         <div className="p-4 space-y-4">
           {activeTab === 'general' && config && (
             <>
-              {/* Version Info */}
-              <div className="bg-surface-tertiary rounded-lg p-3 mb-4 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-xs text-gray-500 uppercase tracking-wide">Kanvas Version</div>
-                    <div className="text-sm font-mono text-gray-300 mt-1">{appVersion || 'Loading...'}</div>
+              {/* Repo Version Management */}
+              <div className="bg-surface-tertiary rounded-lg p-3 mb-4 space-y-3">
+                <div className="text-xs text-gray-500 uppercase tracking-wide">Repo Version</div>
+
+                {uniqueRepos.size === 0 ? (
+                  <div className="text-sm text-gray-400">No repos connected</div>
+                ) : (
+                  <>
+                    {/* Repo selector (only if multiple repos) */}
+                    {uniqueRepos.size > 1 && (
+                      <select
+                        value={selectedRepoPath}
+                        onChange={(e) => setSelectedRepoPath(e.target.value)}
+                        className="select text-sm w-full"
+                      >
+                        {Array.from(uniqueRepos.entries()).map(([repoPath, name]) => (
+                          <option key={repoPath} value={repoPath}>{name}</option>
+                        ))}
+                      </select>
+                    )}
+
+                    {/* Version display or error */}
+                    {versionError ? (
+                      <div className="text-sm text-gray-400">{versionError}</div>
+                    ) : repoVersion ? (
+                      <>
+                        <div className="flex items-center justify-between">
+                          <span className="text-lg font-mono font-semibold text-gray-100">{repoVersion.version}</span>
+                          <span className="text-xs text-gray-500 truncate ml-2">
+                            {uniqueRepos.get(selectedRepoPath) || selectedRepoPath.split('/').pop()}
+                          </span>
+                        </div>
+
+                        {/* Bump buttons */}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleBump('patch')}
+                            disabled={isBumping}
+                            className="flex-1 py-1.5 px-2 rounded bg-surface-secondary hover:bg-surface-primary border border-border text-sm text-gray-200 transition-colors disabled:opacity-50"
+                          >
+                            <div className="font-medium">Patch</div>
+                            <div className="text-xs text-gray-500 font-mono">
+                              {repoVersion.major}.{repoVersion.minor}.{repoVersion.patch + 1}
+                            </div>
+                          </button>
+                          <button
+                            onClick={() => handleBump('minor')}
+                            disabled={isBumping}
+                            className="flex-1 py-1.5 px-2 rounded bg-surface-secondary hover:bg-surface-primary border border-border text-sm text-gray-200 transition-colors disabled:opacity-50"
+                          >
+                            <div className="font-medium">Minor</div>
+                            <div className="text-xs text-gray-500 font-mono">
+                              {repoVersion.major}.{repoVersion.minor + 1}.0
+                            </div>
+                          </button>
+                          <button
+                            onClick={() => handleBump('major')}
+                            disabled={isBumping}
+                            className="flex-1 py-1.5 px-2 rounded bg-surface-secondary hover:bg-surface-primary border border-border text-sm text-gray-200 transition-colors disabled:opacity-50"
+                          >
+                            <div className="font-medium">Major</div>
+                            <div className="text-xs text-gray-500 font-mono">
+                              {repoVersion.major + 1}.0.0
+                            </div>
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-sm text-gray-400">Loading...</div>
+                    )}
+
+                    {/* Separator */}
+                    <div className="border-t border-border" />
+
+                    {/* Auto version bump toggle */}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm text-gray-200">Auto version bump</div>
+                        <div className="text-xs text-gray-500">Bump on daily rollover</div>
+                      </div>
+                      <button
+                        onClick={() => handleAutoVersionBumpToggle(!versionSettings.autoVersionBump)}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                          versionSettings.autoVersionBump ? 'bg-accent' : 'bg-gray-600'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+                            versionSettings.autoVersionBump ? 'translate-x-[18px]' : 'translate-x-[2px]'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {/* Kanvas Dashboard version + update section */}
+                <div className="pt-1 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-500">
+                      Kanvas Dashboard v{appVersion || '...'}
+                    </span>
+
+                    {/* Update actions */}
+                    {updateInfo?.downloaded ? (
+                      <button
+                        onClick={() => window.api.update?.install?.()}
+                        className="px-2 py-0.5 text-xs rounded bg-green-600 hover:bg-green-700 text-white transition-colors"
+                      >
+                        Restart to Update
+                      </button>
+                    ) : updateInfo?.downloading ? (
+                      <span className="text-xs text-accent">
+                        Downloading... {updateInfo.progress ? `${Math.round(updateInfo.progress.percent)}%` : ''}
+                      </span>
+                    ) : updateInfo?.updateAvailable ? (
+                      <button
+                        onClick={async () => {
+                          try { await window.api.update?.download?.(); } catch {}
+                        }}
+                        className="px-2 py-0.5 text-xs rounded bg-accent hover:bg-accent/80 text-white transition-colors"
+                      >
+                        Download v{updateInfo.latestVersion}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={async () => {
+                          setIsCheckingUpdate(true);
+                          setMessage(null);
+                          try {
+                            const result = await window.api.update?.check?.();
+                            if (result?.success && result.data) {
+                              setUpdateInfo(result.data);
+                              if (!result.data.updateAvailable) {
+                                setMessage({ type: 'success', text: 'You are on the latest version' });
+                              }
+                            }
+                          } catch {
+                            setMessage({ type: 'error', text: 'Update check failed' });
+                          } finally {
+                            setIsCheckingUpdate(false);
+                          }
+                        }}
+                        disabled={isCheckingUpdate}
+                        className="px-2 py-0.5 text-xs rounded bg-surface-secondary hover:bg-surface-primary border border-border text-gray-300 transition-colors disabled:opacity-50"
+                      >
+                        {isCheckingUpdate ? 'Checking...' : 'Check for Updates'}
+                      </button>
+                    )}
                   </div>
-                  <span className="badge badge-primary">Dashboard</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-xs text-gray-500 uppercase tracking-wide">Agent Version</div>
-                    <div className="text-sm font-mono text-gray-300 mt-1">{appVersion || 'Loading...'}</div>
-                  </div>
-                  <span className="badge badge-success">CLI Agent</span>
+
+                  {/* Update error */}
+                  {updateInfo?.error && (
+                    <div className="text-xs text-red-400">
+                      Update error: {updateInfo.error}
+                    </div>
+                  )}
+
+                  {/* Download progress bar */}
+                  {updateInfo?.downloading && updateInfo.progress && (
+                    <div className="w-full bg-surface-secondary rounded-full h-1.5">
+                      <div
+                        className="bg-accent h-1.5 rounded-full transition-all"
+                        style={{ width: `${updateInfo.progress.percent}%` }}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
 
