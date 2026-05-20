@@ -224,7 +224,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
   }, [fallbackParent, refreshWorkspaces]);
 
   return (
-    <div className="flex-1 flex flex-col bg-surface" data-testid="workspace-browser">
+    <div className="flex-1 h-full min-h-0 flex flex-col bg-surface" data-testid="workspace-browser">
       {/* Header */}
       <div className="flex items-center gap-2 p-4 border-b border-border">
         <h1 className="text-lg font-semibold text-text-primary">Workspaces</h1>
@@ -289,7 +289,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
       </div>
 
       {/* Body */}
-      <div className="flex-1 overflow-auto p-4">
+      <div className="flex-1 min-h-0 overflow-auto p-4">
         {error && (
           <div className="mb-3 p-2 bg-red-500/10 border border-red-500/30 rounded text-red-500 text-sm">
             {error}
