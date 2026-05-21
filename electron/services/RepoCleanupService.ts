@@ -210,9 +210,26 @@ export class RepoCleanupService extends BaseService {
 
       // 1. Remove orphaned worktrees
       if (removeWorktrees) {
-        emitProgress('Removing orphaned worktrees...');
-        await this.gitService.pruneWorktrees(plan.repoPath);
-        result.worktreesRemoved = plan.worktreesToRemove.length;
+        emitProgress('Removing abandoned worktrees...');
+        for (const worktree of plan.worktreesToRemove) {
+          try {
+            const removeResult = await this.gitService.removeWorktreeByPath(plan.repoPath, worktree.path);
+            if (removeResult.success) {
+              result.worktreesRemoved += 1;
+            } else {
+              result.errors.push(
+                removeResult.error?.message || `Failed to remove worktree: ${worktree.path}`
+              );
+            }
+          } catch (error) {
+            result.errors.push(`Error removing worktree ${worktree.path}: ${error}`);
+          }
+        }
+
+        const pruneResult = await this.gitService.pruneWorktrees(plan.repoPath);
+        if (!pruneResult.success) {
+          result.errors.push(pruneResult.error?.message || 'Failed to prune worktree references');
+        }
       }
 
       // 2. Merge completed branches (in order)

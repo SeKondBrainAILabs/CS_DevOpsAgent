@@ -587,6 +587,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.git.pruneWorktrees(repoPath);
   });
 
+  ipcMain.handle(IPC.GIT_REMOVE_WORKTREE_PATH, async (_, repoPath: string, worktreePath: string) => {
+    return services.git.removeWorktreeByPath(repoPath, worktreePath);
+  });
+
   ipcMain.handle(IPC.GIT_DELETE_BRANCH, async (_, repoPath: string, branchName: string, deleteRemote?: boolean) => {
     return services.git.deleteBranch(repoPath, branchName, deleteRemote);
   });

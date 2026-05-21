@@ -64,6 +64,8 @@ const mockApi = {
     }),
     listBranchesForRepo: createMockFn({ success: true, data: [] }),
     listWorktrees: createMockFn({ success: true, data: [] }),
+    pruneWorktrees: createMockFn({ success: true }),
+    removeWorktreeByPath: createMockFn({ success: true }),
   },
   instance: {
     create: createMockFn({ success: true, data: {} }),

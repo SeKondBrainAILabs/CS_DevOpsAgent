@@ -853,6 +853,32 @@ export class GitService extends BaseService {
   }
 
   /**
+   * Remove a specific worktree by path (repo-path based cleanup flow).
+   * If the path no longer exists on disk, prune stale references instead.
+   */
+  async removeWorktreeByPath(repoPath: string, worktreePath: string): Promise<IpcResult<void>> {
+    return this.wrap(async () => {
+      const resolvedRepoPath = path.resolve(repoPath);
+      const resolvedWorktreePath = path.resolve(worktreePath);
+      if (resolvedRepoPath === resolvedWorktreePath) {
+        throw new Error('Refusing to remove primary worktree');
+      }
+
+      if (existsSync(worktreePath)) {
+        await this.git(['worktree', 'remove', worktreePath, '--force'], repoPath);
+      }
+
+      await this.git(['worktree', 'prune'], repoPath);
+
+      for (const [key, value] of worktreePaths.entries()) {
+        if (path.resolve(value.worktreePath) === resolvedWorktreePath) {
+          worktreePaths.delete(key);
+        }
+      }
+    }, 'GIT_REMOVE_WORKTREE_BY_PATH_FAILED');
+  }
+
+  /**
    * Delete a branch (local and optionally remote)
    */
   async deleteBranch(repoPath: string, branchName: string, deleteRemote = false): Promise<IpcResult<void>> {

@@ -141,6 +141,12 @@ const api = {
     listWorktrees: (repoPath: string): Promise<IpcResult<Array<{ path: string; branch: string; head: string; bare: boolean }>>> =>
       ipcRenderer.invoke(IPC.GIT_LIST_WORKTREES, repoPath),
 
+    pruneWorktrees: (repoPath: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.GIT_PRUNE_WORKTREES, repoPath),
+
+    removeWorktreeByPath: (repoPath: string, worktreePath: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.GIT_REMOVE_WORKTREE_PATH, repoPath, worktreePath),
+
     getChangedFiles: (repoPath: string, baseBranch?: string): Promise<IpcResult<Array<{
       path: string;
       status: string;
