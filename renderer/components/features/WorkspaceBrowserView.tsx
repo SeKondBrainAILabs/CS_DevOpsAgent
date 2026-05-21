@@ -11,6 +11,7 @@ import type {
   DiscoveredRepo,
   Workspace,
   WorkspaceRepoChangeEvent,
+  StorageMetricsOverview,
 } from '../../../shared/types';
 import {
   DEFAULT_REPO_SORT_KEY,
@@ -20,6 +21,27 @@ import {
 import { RepoStatusCard, type RepoStatusBlock } from './RepoStatusCard';
 import { AddWorkspaceDialog } from './AddWorkspaceDialog';
 import { useUIStore } from '../../store/uiStore';
+function formatGiB(bytes: number): string {
+  const gib = bytes / (1024 ** 3);
+  return `${gib.toFixed(2)} GiB`;
+}
+
+function basenameFromPath(repoPath: string): string {
+  return repoPath.split('/').filter(Boolean).pop() ?? repoPath;
+}
+
+function formatDaysOld(days: number | null): string {
+  if (days === null) return 'age unknown';
+  if (days <= 0) return '<1 day old';
+  if (days === 1) return '1 day old';
+  return `${days} days old`;
+}
+
+function formatAbandonedReason(
+  reason: StorageMetricsOverview['local']['abandonedWorktrees'][number]['reason']
+): string {
+  return reason === 'missing-path' ? 'missing path' : 'stale + no active session';
+}
 
 export function WorkspaceBrowserView(): React.ReactElement {
   const openCreateAgentWizardForRepo = useUIStore((s) => s.openCreateAgentWizardForRepo);
@@ -32,6 +54,10 @@ export function WorkspaceBrowserView(): React.ReactElement {
   const [showAdd, setShowAdd] = useState(false);
   const [filter, setFilter] = useState('');
   const [sortKey, setSortKey] = useState<RepoSortKey>(DEFAULT_REPO_SORT_KEY);
+  const [storageMetrics, setStorageMetrics] = useState<StorageMetricsOverview | null>(null);
+  const [storageMetricsLoading, setStorageMetricsLoading] = useState(false);
+  const [storageMetricsError, setStorageMetricsError] = useState<string | null>(null);
+  const [storageMetricsRefreshNonce, setStorageMetricsRefreshNonce] = useState(0);
   /** Per-repoPath status block — populated lazily as we learn about repos. */
   const [statusByPath, setStatusByPath] = useState<Record<string, RepoStatusBlock>>({});
 
@@ -193,6 +219,46 @@ export function WorkspaceBrowserView(): React.ReactElement {
   const showingFallback = workspaces.length === 0 && recentReposFallback.length > 0;
   const sourceRepos = showingFallback ? recentReposFallback : repos;
 
+  useEffect(() => {
+    let cancelled = false;
+    const repoPaths = [...new Set(sourceRepos.map((repo) => repo.path))];
+
+    if (repoPaths.length === 0) {
+      setStorageMetrics(null);
+      setStorageMetricsError(null);
+      setStorageMetricsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadStorageMetrics = async (): Promise<void> => {
+      setStorageMetricsLoading(true);
+      setStorageMetricsError(null);
+      try {
+        const result = await window.api.cleanup.getStorageMetrics(repoPaths);
+        if (cancelled) return;
+        if (result.success && result.data) {
+          setStorageMetrics(result.data);
+        } else {
+          setStorageMetrics(null);
+          setStorageMetricsError(result.error?.message || 'Failed to load storage metrics');
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setStorageMetrics(null);
+        setStorageMetricsError(error instanceof Error ? error.message : 'Failed to load storage metrics');
+      } finally {
+        if (!cancelled) setStorageMetricsLoading(false);
+      }
+    };
+
+    void loadStorageMetrics();
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceRepos, storageMetricsRefreshNonce]);
+
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
     const list = q
@@ -290,6 +356,130 @@ export function WorkspaceBrowserView(): React.ReactElement {
 
       {/* Body */}
       <div className="flex-1 min-h-0 overflow-auto p-4">
+        {sourceRepos.length > 0 && (
+          <div
+            className="mb-4 p-3 border border-border rounded-lg bg-surface-secondary"
+            data-testid="storage-metrics-panel"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-sm font-semibold text-text-primary">Disk &amp; Docker usage</h2>
+              <button
+                type="button"
+                onClick={() => setStorageMetricsRefreshNonce((n) => n + 1)}
+                disabled={storageMetricsLoading}
+                className="text-xs px-2 py-1 border border-border rounded text-text-primary hover:bg-surface-tertiary disabled:opacity-50"
+                data-testid="refresh-storage-metrics"
+              >
+                {storageMetricsLoading ? 'Refreshing…' : 'Refresh'}
+              </button>
+            </div>
+
+            {storageMetricsLoading && (
+              <p className="text-xs text-text-secondary">Analyzing Docker and local storage usage…</p>
+            )}
+
+            {!storageMetricsLoading && storageMetricsError && (
+              <p className="text-xs text-red-500" data-testid="storage-metrics-error">
+                {storageMetricsError}
+              </p>
+            )}
+
+            {!storageMetricsLoading && storageMetrics && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                  <div>
+                    <p className="text-xs font-medium text-text-primary mb-1">Docker</p>
+                    {storageMetrics.docker.available ? (
+                      <div className="space-y-1 text-xs text-text-secondary">
+                        <p data-testid="docker-images-metric">
+                          {`${formatGiB(storageMetrics.docker.images.sizeBytes)} images (${storageMetrics.docker.images.reclaimablePercent ?? 0}% of total)`}
+                        </p>
+                        <p data-testid="docker-volumes-metric">
+                          {`${formatGiB(storageMetrics.docker.localVolumes.sizeBytes)} local volumes (${storageMetrics.docker.localVolumes.reclaimablePercent ?? 0}% unused)`}
+                        </p>
+                        <p data-testid="docker-build-cache-metric">
+                          {`${formatGiB(storageMetrics.docker.buildCache.sizeBytes)} build cache`}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-text-secondary">
+                        Docker metrics unavailable{storageMetrics.docker.error ? `: ${storageMetrics.docker.error}` : ''}
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-medium text-text-primary mb-1">Local storage</p>
+                    <div className="space-y-1 text-xs text-text-secondary">
+                      <p data-testid="local-node-modules-metric">
+                        {`${formatGiB(storageMetrics.local.nodeModulesTotalBytes)} node_modules (${storageMetrics.local.nodeModulesByRepo.length} repos)`}
+                      </p>
+                      <p data-testid="local-python-metric">
+                        {`${formatGiB(storageMetrics.local.pythonEnvsTotalBytes)} python envs (${storageMetrics.local.pythonEnvsByRepo.length} repos)`}
+                      </p>
+                    </div>
+
+                    {(storageMetrics.local.nodeModulesByRepo.length > 0 || storageMetrics.local.pythonEnvsByRepo.length > 0) && (
+                      <div className="mt-2 text-[11px] text-text-secondary space-y-1">
+                        {storageMetrics.local.nodeModulesByRepo.slice(0, 3).map((entry) => (
+                          <p key={`node-${entry.repoPath}`}>
+                            {`node_modules: ${basenameFromPath(entry.repoPath)} — ${formatGiB(entry.bytes)}`}
+                          </p>
+                        ))}
+                        {storageMetrics.local.pythonEnvsByRepo.slice(0, 3).map((entry) => (
+                          <p key={`py-${entry.repoPath}`}>
+                            {`python envs: ${basenameFromPath(entry.repoPath)} — ${formatGiB(entry.bytes)}`}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {storageMetrics.local.reclaimableByRepo.length > 0 && (
+                  <div
+                    className="pt-2 border-t border-border"
+                    data-testid="reclaimable-ranking-section"
+                  >
+                    <p className="text-xs font-medium text-text-primary mb-1">Reclaimable space ranking</p>
+                    <div className="space-y-1 text-xs text-text-secondary">
+                      {storageMetrics.local.reclaimableByRepo.slice(0, 5).map((entry, index) => (
+                        <p
+                          key={`reclaim-${entry.repoPath}`}
+                          data-testid={`reclaimable-ranking-row-${index}`}
+                        >
+                          {`${index + 1}. ${basenameFromPath(entry.repoPath)} — ${formatGiB(entry.totalReclaimableBytes)} reclaimable`}
+                          {` (node_modules ${formatGiB(entry.nodeModulesBytes)}, python ${formatGiB(entry.pythonEnvsBytes)}, abandoned worktrees ${entry.abandonedWorktreeCount})`}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div
+                  className="pt-2 border-t border-border"
+                  data-testid="abandoned-worktrees-section"
+                >
+                  <p className="text-xs font-medium text-text-primary mb-1">Abandoned worktrees</p>
+                  {storageMetrics.local.abandonedWorktrees.length === 0 ? (
+                    <p className="text-xs text-text-secondary">No abandoned worktrees detected.</p>
+                  ) : (
+                    <div className="space-y-1 text-xs text-text-secondary">
+                      {storageMetrics.local.abandonedWorktrees.slice(0, 5).map((entry, index) => (
+                        <p
+                          key={`abandoned-${entry.worktreePath}-${index}`}
+                          data-testid={`abandoned-worktree-row-${index}`}
+                        >
+                          {`${basenameFromPath(entry.repoPath)}:${entry.branch} — ${formatAbandonedReason(entry.reason)} • ${entry.exists ? formatDaysOld(entry.daysSinceLastTouched) : 'missing path'} • ${formatGiB(entry.bytes)}`}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {error && (
           <div className="mb-3 p-2 bg-red-500/10 border border-red-500/30 rounded text-red-500 text-sm">
             {error}

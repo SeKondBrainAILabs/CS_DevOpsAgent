@@ -515,6 +515,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.repoCleanup.cleanupKanvasDirectory(repoPath);
   });
 
+  ipcMain.handle(IPC.CLEANUP_GET_STORAGE_METRICS, async (_, repoPaths: string[]) => {
+    return services.repoCleanup.getStorageMetrics(repoPaths);
+  });
+
   // ==========================================================================
   // GIT REBASE HANDLERS
   // ==========================================================================

@@ -36,6 +36,7 @@ import type {
   RepoVersionInfo,
   RepoVersionSettings,
   AppUpdateInfo,
+  StorageMetricsOverview,
 } from '../shared/types';
 import type {
   AgentInfo,
@@ -839,6 +840,9 @@ const api = {
       removedActivityFiles: number;
     }>> =>
       ipcRenderer.invoke(IPC.CLEANUP_KANVAS, repoPath),
+
+    getStorageMetrics: (repoPaths: string[]): Promise<IpcResult<StorageMetricsOverview>> =>
+      ipcRenderer.invoke(IPC.CLEANUP_GET_STORAGE_METRICS, repoPaths),
 
     onProgress: (callback: (data: { message: string; result: unknown }) => void): (() => void) => {
       const handler = (_event: IpcRendererEvent, data: { message: string; result: unknown }) => callback(data);

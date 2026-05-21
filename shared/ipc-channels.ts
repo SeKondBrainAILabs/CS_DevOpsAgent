@@ -192,6 +192,7 @@ export const IPC = {
   CLEANUP_EXECUTE: 'cleanup:execute',
   CLEANUP_QUICK: 'cleanup:quick',
   CLEANUP_KANVAS: 'cleanup:kanvas',
+  CLEANUP_GET_STORAGE_METRICS: 'cleanup:get-storage-metrics',
   // Events
   CLEANUP_PROGRESS: 'cleanup:progress',
 

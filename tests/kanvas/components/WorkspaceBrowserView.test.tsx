@@ -61,6 +61,55 @@ beforeEach(() => {
     success: true,
     data: 0,
   } as never);
+  (mockApi.cleanup.getStorageMetrics as jest.Mock).mockResolvedValue({
+    success: true,
+    data: {
+      fetchedAt: new Date().toISOString(),
+      docker: {
+        available: true,
+        images: { sizeBytes: 19.88 * 1024 ** 3, reclaimableBytes: 10.74 * 1024 ** 3, reclaimablePercent: 54 },
+        localVolumes: { sizeBytes: 26.38 * 1024 ** 3, reclaimableBytes: 26.38 * 1024 ** 3, reclaimablePercent: 100 },
+        buildCache: { sizeBytes: 21.73 * 1024 ** 3, reclaimableBytes: 0, reclaimablePercent: 0 },
+      },
+      local: {
+        scannedRepoCount: 2,
+        nodeModulesTotalBytes: 4 * 1024 ** 3,
+        pythonEnvsTotalBytes: 2 * 1024 ** 3,
+        nodeModulesByRepo: [{ repoPath: '/Users/me/work/alpha', bytes: 4 * 1024 ** 3, paths: ['/Users/me/work/alpha/node_modules'] }],
+        pythonEnvsByRepo: [{ repoPath: '/Users/me/work/zed', bytes: 2 * 1024 ** 3, paths: ['/Users/me/work/zed/.venv'] }],
+        abandonedWorktrees: [
+          {
+            repoPath: '/Users/me/work/zed',
+            worktreePath: '/Users/me/worktrees/zed-feature-cleanup',
+            branch: 'feature/cleanup',
+            bytes: 3 * 1024 ** 3,
+            exists: true,
+            lastTouchedAt: '2026-05-01T00:00:00.000Z',
+            daysSinceLastTouched: 20,
+            reason: 'stale-no-session',
+          },
+        ],
+        reclaimableByRepo: [
+          {
+            repoPath: '/Users/me/work/zed',
+            totalReclaimableBytes: 5 * 1024 ** 3,
+            nodeModulesBytes: 0,
+            pythonEnvsBytes: 2 * 1024 ** 3,
+            abandonedWorktreeBytes: 3 * 1024 ** 3,
+            abandonedWorktreeCount: 1,
+          },
+          {
+            repoPath: '/Users/me/work/alpha',
+            totalReclaimableBytes: 4 * 1024 ** 3,
+            nodeModulesBytes: 4 * 1024 ** 3,
+            pythonEnvsBytes: 0,
+            abandonedWorktreeBytes: 0,
+            abandonedWorktreeCount: 0,
+          },
+        ],
+      },
+    },
+  } as never);
 });
 
 describe('WorkspaceBrowserView — empty state', () => {
@@ -106,6 +155,25 @@ describe('WorkspaceBrowserView — happy path', () => {
       const grid = screen.getByTestId('repo-grid');
       expect(within(grid).getAllByTestId('repo-status-card')).toHaveLength(2);
     });
+  });
+
+  it('renders read-only Docker and local storage metrics panel', async () => {
+    render(<WorkspaceBrowserView />);
+    await waitFor(() => {
+      expect(screen.getByTestId('storage-metrics-panel')).toBeInTheDocument();
+      expect(screen.getByTestId('docker-images-metric')).toHaveTextContent(/images/i);
+      expect(screen.getByTestId('docker-volumes-metric')).toHaveTextContent(/local volumes/i);
+      expect(screen.getByTestId('docker-build-cache-metric')).toHaveTextContent(/build cache/i);
+      expect(screen.getByTestId('local-node-modules-metric')).toHaveTextContent(/node_modules/i);
+      expect(screen.getByTestId('local-python-metric')).toHaveTextContent(/python envs/i);
+      expect(screen.getByTestId('reclaimable-ranking-section')).toBeInTheDocument();
+      expect(screen.getByTestId('reclaimable-ranking-row-0')).toHaveTextContent(/zed/i);
+      expect(screen.getByTestId('abandoned-worktrees-section')).toBeInTheDocument();
+      expect(screen.getByTestId('abandoned-worktree-row-0')).toHaveTextContent(/feature\/cleanup/i);
+    });
+    expect(mockApi.cleanup.getStorageMetrics).toHaveBeenCalledWith(
+      expect.arrayContaining(['/Users/me/work/zed', '/Users/me/work/alpha'])
+    );
   });
 
   it('starts the filesystem watcher for the active workspace', async () => {

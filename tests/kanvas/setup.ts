@@ -140,6 +140,69 @@ const mockApi = {
     setWorktreeMode: createMockFn({ success: true }),
     getActiveSessionCount: createMockFn({ success: true, data: 0 }),
   },
+  cleanup: {
+    analyze: createMockFn({
+      success: true,
+      data: {
+        repoPath: '/test/repo',
+        worktreesToRemove: [],
+        branchesToDelete: [],
+        branchesToMerge: [],
+        estimatedActions: 0,
+      },
+    }),
+    execute: createMockFn({
+      success: true,
+      data: {
+        success: true,
+        worktreesRemoved: 0,
+        branchesDeleted: 0,
+        branchesMerged: 0,
+        errors: [],
+      },
+    }),
+    quick: createMockFn({
+      success: true,
+      data: {
+        worktreesPruned: true,
+        kanvasCleanup: {
+          removedSessionFiles: 0,
+          removedAgentFiles: 0,
+          removedActivityFiles: 0,
+        },
+      },
+    }),
+    kanvas: createMockFn({
+      success: true,
+      data: {
+        removedSessionFiles: 0,
+        removedAgentFiles: 0,
+        removedActivityFiles: 0,
+      },
+    }),
+    getStorageMetrics: createMockFn({
+      success: true,
+      data: {
+        fetchedAt: '2026-05-21T00:00:00.000Z',
+        docker: {
+          available: true,
+          images: { sizeBytes: 0, reclaimableBytes: 0, reclaimablePercent: 0 },
+          localVolumes: { sizeBytes: 0, reclaimableBytes: 0, reclaimablePercent: 0 },
+          buildCache: { sizeBytes: 0, reclaimableBytes: 0, reclaimablePercent: 0 },
+        },
+        local: {
+          scannedRepoCount: 0,
+          nodeModulesTotalBytes: 0,
+          pythonEnvsTotalBytes: 0,
+          nodeModulesByRepo: [],
+          pythonEnvsByRepo: [],
+          abandonedWorktrees: [],
+          reclaimableByRepo: [],
+        },
+      },
+    }),
+    onProgress: (jest.fn() as MockFn).mockReturnValue(() => {}),
+  },
   workspace: {
     list: createMockFn({ success: true, data: [] }),
     get: createMockFn({ success: false, error: { code: 'WORKSPACE_NOT_FOUND', message: 'not found' } }),
