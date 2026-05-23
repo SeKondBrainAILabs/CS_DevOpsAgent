@@ -36,6 +36,7 @@ import type {
   RepoVersionInfo,
   RepoVersionSettings,
   AppUpdateInfo,
+  StorageMetricsOverview,
 } from '../shared/types';
 import type {
   AgentInfo,
@@ -139,6 +140,12 @@ const api = {
     /** Worktree list keyed on repoPath (Day 2). */
     listWorktrees: (repoPath: string): Promise<IpcResult<Array<{ path: string; branch: string; head: string; bare: boolean }>>> =>
       ipcRenderer.invoke(IPC.GIT_LIST_WORKTREES, repoPath),
+
+    pruneWorktrees: (repoPath: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.GIT_PRUNE_WORKTREES, repoPath),
+
+    removeWorktreeByPath: (repoPath: string, worktreePath: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.GIT_REMOVE_WORKTREE_PATH, repoPath, worktreePath),
 
     getChangedFiles: (repoPath: string, baseBranch?: string): Promise<IpcResult<Array<{
       path: string;
@@ -839,6 +846,9 @@ const api = {
       removedActivityFiles: number;
     }>> =>
       ipcRenderer.invoke(IPC.CLEANUP_KANVAS, repoPath),
+
+    getStorageMetrics: (repoPaths: string[]): Promise<IpcResult<StorageMetricsOverview>> =>
+      ipcRenderer.invoke(IPC.CLEANUP_GET_STORAGE_METRICS, repoPaths),
 
     onProgress: (callback: (data: { message: string; result: unknown }) => void): (() => void) => {
       const handler = (_event: IpcRendererEvent, data: { message: string; result: unknown }) => callback(data);

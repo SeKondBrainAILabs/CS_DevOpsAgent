@@ -391,6 +391,67 @@ export interface RepoStatus {
   fetchedAt: string;
 }
 
+// =============================================================================
+// STORAGE METRICS (Workspace Disk & Docker panel)
+// =============================================================================
+
+export interface DockerUsageBucket {
+  sizeBytes: number;
+  reclaimableBytes: number;
+  /** Percentage (0-100) when available from Docker output, otherwise null. */
+  reclaimablePercent: number | null;
+}
+
+export interface DockerUsageMetrics {
+  available: boolean;
+  error?: string;
+  images: DockerUsageBucket;
+  localVolumes: DockerUsageBucket;
+  buildCache: DockerUsageBucket;
+}
+
+export interface LocalStorageRepoUsage {
+  repoPath: string;
+  bytes: number;
+  /** Concrete directories included in this measurement. */
+  paths: string[];
+}
+export interface AbandonedWorktreeUsage {
+  repoPath: string;
+  worktreePath: string;
+  branch: string;
+  bytes: number;
+  exists: boolean;
+  lastTouchedAt: string | null;
+  daysSinceLastTouched: number | null;
+  reason: 'missing-path' | 'stale-no-session';
+}
+
+export interface ReclaimableRepoUsage {
+  repoPath: string;
+  totalReclaimableBytes: number;
+  nodeModulesBytes: number;
+  pythonEnvsBytes: number;
+  abandonedWorktreeBytes: number;
+  abandonedWorktreeCount: number;
+}
+
+export interface LocalStorageUsageMetrics {
+  scannedRepoCount: number;
+  nodeModulesTotalBytes: number;
+  pythonEnvsTotalBytes: number;
+  nodeModulesByRepo: LocalStorageRepoUsage[];
+  pythonEnvsByRepo: LocalStorageRepoUsage[];
+  abandonedWorktrees: AbandonedWorktreeUsage[];
+  reclaimableByRepo: ReclaimableRepoUsage[];
+}
+
+export interface StorageMetricsOverview {
+  fetchedAt: string;
+  docker: DockerUsageMetrics;
+  local: LocalStorageUsageMetrics;
+}
+
 export interface WorkspaceScanResult {
   workspaceId: string;
   scannedAt: string;

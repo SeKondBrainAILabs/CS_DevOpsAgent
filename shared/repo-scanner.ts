@@ -7,8 +7,8 @@
  * — full glob support is intentionally out of scope for the MVP).
  *
  * A directory containing a `.git` child entry is treated as a Git repository
- * and recorded. The scanner does NOT recurse into found repos — once a repo
- * is found, its subdirectories are skipped.
+ * and recorded. The scanner still recurses to discover nested repositories
+ * (for example, git submodules under an orchestration repo root).
  */
 
 export interface DirChild {
@@ -62,13 +62,13 @@ export async function scanForRepos(input: ScanInputs): Promise<ScannedRepo[]> {
       const segments = dir.replace(/\/+$/, '').split('/').filter(Boolean);
       const name = segments.length > 0 ? segments[segments.length - 1] : dir;
       found.push({ path: dir, name, depth });
-      return; // Do NOT recurse into a found repo.
     }
 
     if (depth === input.maxDepth) return;
 
     for (const c of children) {
       if (!c.isDirectory) continue;
+      if (c.name === '.git') continue;
       if (shouldSkipDir(c.name, input.ignoreGlobs)) continue;
       await walk(join(dir, c.name), depth + 1);
     }

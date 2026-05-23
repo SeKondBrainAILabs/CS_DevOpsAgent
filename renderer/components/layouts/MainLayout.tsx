@@ -63,7 +63,7 @@ export function MainLayout({
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
       {/* Recovery Banner */}
       {showRecoveryBanner && orphanedSessions.length > 0 && (
         <div className="bg-yellow-500/10 border-b border-yellow-500/30 px-4 py-2">
@@ -101,7 +101,7 @@ export function MainLayout({
       )}
 
       {/* Main content area */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 min-h-0 flex overflow-hidden">
         {/* Sidebar */}
         {!sidebarCollapsed && (
           <aside
@@ -113,7 +113,7 @@ export function MainLayout({
         )}
 
         {/* Main content */}
-        <main className="flex-1 overflow-hidden bg-surface">{children}</main>
+        <main className="flex-1 min-h-0 overflow-hidden bg-surface flex flex-col">{children}</main>
       </div>
 
       {/* Status bar */}

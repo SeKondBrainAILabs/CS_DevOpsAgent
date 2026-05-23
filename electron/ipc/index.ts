@@ -515,6 +515,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.repoCleanup.cleanupKanvasDirectory(repoPath);
   });
 
+  ipcMain.handle(IPC.CLEANUP_GET_STORAGE_METRICS, async (_, repoPaths: string[]) => {
+    return services.repoCleanup.getStorageMetrics(repoPaths);
+  });
+
   // ==========================================================================
   // GIT REBASE HANDLERS
   // ==========================================================================
@@ -581,6 +585,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
 
   ipcMain.handle(IPC.GIT_PRUNE_WORKTREES, async (_, repoPath: string) => {
     return services.git.pruneWorktrees(repoPath);
+  });
+
+  ipcMain.handle(IPC.GIT_REMOVE_WORKTREE_PATH, async (_, repoPath: string, worktreePath: string) => {
+    return services.git.removeWorktreeByPath(repoPath, worktreePath);
   });
 
   ipcMain.handle(IPC.GIT_DELETE_BRANCH, async (_, repoPath: string, branchName: string, deleteRemote?: boolean) => {

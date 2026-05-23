@@ -30,6 +30,7 @@ export interface RepoStatusBlock {
   currentBranch?: string;
   ahead?: number;
   behind?: number;
+  unmergedCount?: number;
   modifiedCount?: number;
   stagedCount?: number;
   untrackedCount?: number;

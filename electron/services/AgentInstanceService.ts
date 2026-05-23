@@ -63,6 +63,9 @@ import type {
 } from '../../shared/types';
 import { generateSecondaryBranchName } from '../../shared/types';
 import { evaluateSingleSessionGuard } from '../../shared/single-session-guard';
+import { isActiveInstance } from '../../shared/instance-status';
+import { planEnvSymlink } from '../../shared/env-symlink-plan';
+import { symlink, lstat } from 'fs/promises';
 import type { TerminalLogService } from './TerminalLogService';
 import type { ConfigService } from './ConfigService';
 import { MCP_CONFIG_FILE, CONTRACTS_PATHS } from '../../shared/agent-protocol';
@@ -133,10 +136,7 @@ export class AgentInstanceService extends BaseService {
    */
   getActiveSessionsForRepo(repoPath: string): AgentInstance[] {
     return Array.from(this.instances.values()).filter(
-      (inst) =>
-        inst.config.repoPath === repoPath &&
-        inst.status !== 'completed' &&
-        inst.status !== 'closed'
+      (inst) => inst.config.repoPath === repoPath && isActiveInstance(inst)
     );
   }
 
@@ -770,11 +770,64 @@ ${DEVOPS_KIT_DIR}/
       // Initialize .S9N_KIT_DevOpsAgent in the worktree
       await this.initializeKanvasDirectory(worktreeDir);
 
+      // C6: link the main repo's .env into the worktree so the agent inherits env vars.
+      await this.linkEnvIntoWorktree(config.repoPath, worktreeDir);
+
       return worktreeDir;
     } catch (error) {
       console.warn(`[AgentInstanceService] Could not create worktree: ${error}`);
       // Fall back to using main repo path
       return config.repoPath;
+    }
+  }
+
+  /**
+   * C6: Link the main repo's `.env` into the worktree if appropriate.
+   * Decision is delegated to the pure planner in `shared/env-symlink-plan.ts`;
+   * this method only handles the fs side. Failure is non-fatal — we log and
+   * carry on rather than blocking session start, except in the deliberate
+   * `block-missing-env` case (which is logged as a warning here; the
+   * stricter behavior is enforced higher up via the planner's error code).
+   */
+  private async linkEnvIntoWorktree(repoPath: string, worktreePath: string): Promise<void> {
+    try {
+      const repoEnvPath = join(repoPath, '.env');
+      const treeEnvPath = join(worktreePath, '.env');
+      const repoEnvExists = existsSync(repoEnvPath);
+
+      let worktreeEnvExists = false;
+      try {
+        await lstat(treeEnvPath);
+        worktreeEnvExists = true;
+      } catch {
+        // not present
+      }
+
+      const action = planEnvSymlink({
+        repoPath,
+        worktreePath,
+        repoEnvExists,
+        worktreeEnvExists,
+      });
+
+      switch (action.kind) {
+        case 'create-symlink':
+          await symlink(repoEnvPath, treeEnvPath);
+          console.log(`[AgentInstanceService] Linked .env into worktree: ${treeEnvPath} -> ${repoEnvPath}`);
+          break;
+        case 'skip-in-place':
+        case 'skip-already-exists':
+          console.log(`[AgentInstanceService] .env link skipped: ${action.reason}`);
+          break;
+        case 'allow-missing-env-override':
+          console.warn(`[AgentInstanceService] Starting session without .env (override): ${action.reason}`);
+          break;
+        case 'block-missing-env':
+          console.warn(`[AgentInstanceService] No .env file in repo — agent may fail at runtime: ${action.error.message}`);
+          break;
+      }
+    } catch (err) {
+      console.warn(`[AgentInstanceService] Could not link .env into worktree: ${err}`);
     }
   }
 
@@ -1995,16 +2048,25 @@ ${DEVOPS_KIT_DIR}/
 
   /**
    * Update instance status
+   *
+   * R1 fix: when a session transitions across the active/inactive boundary
+   * (e.g. running → completed), we recalc `RecentRepo.agentCount` so the
+   * repo-picker session count stays accurate without restarting the app.
    */
   updateInstanceStatus(instanceId: string, status: AgentInstance['status'], error?: string): void {
     const instance = this.instances.get(instanceId);
     if (instance) {
+      const wasActive = isActiveInstance(instance);
       instance.status = status;
       if (error) {
         instance.error = error;
       }
+      const nowActive = isActiveInstance(instance);
       this.saveInstances();
       this.emitStatusChange(instance);
+      if (wasActive !== nowActive) {
+        this.recalculateRepoAgentCounts();
+      }
     }
   }
 
@@ -2064,12 +2126,17 @@ ${DEVOPS_KIT_DIR}/
   }
 
   /**
-   * Recalculate agent counts for all recent repos based on actual stored instances
-   * This fixes stale counts that got out of sync
+   * Recalculate agent counts for all recent repos based on actual stored instances.
+   * R1 fix: counts ONLY active sessions (filters out completed/closed/failed)
+   * so the "Setup new instance" repo picker shows the live session count, not
+   * a stale all-time tally.
+   *
+   * Active/inactive rule lives in `shared/instance-status.ts` so it stays in
+   * sync with the C5 Single-Session Mode guard.
    */
   recalculateRepoAgentCounts(): void {
     const repos = this.store.get('recentRepos', []) as RecentRepo[];
-    const instances = Array.from(this.instances.values());
+    const instances = Array.from(this.instances.values()).filter(isActiveInstance);
 
     // Count instances per repo
     const countByRepo = new Map<string, number>();
