@@ -4,6 +4,11 @@
  * Top-level view rendered when `mainView === 'workspaces'`. Shows the
  * configured workspaces, a switcher, and a grid of RepoStatusCards
  * for the active workspace's discovered repos.
+ *
+ * Three inline tabs:
+ *   Repos     — discovered repos grid/table
+ *   Workflow  — daily workflow queue
+ *   Storage   — disk metrics / Docker usage
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -12,6 +17,7 @@ import type {
   Workspace,
   WorkspaceRepoChangeEvent,
   StorageMetricsOverview,
+  WorktreeSafetyInfo,
 } from '../../../shared/types';
 import {
   DEFAULT_REPO_SORT_KEY,
@@ -21,6 +27,7 @@ import {
 import type { RepoStatusBlock } from './RepoStatusCard';
 import { AddWorkspaceDialog } from './AddWorkspaceDialog';
 import { useUIStore } from '../../store/uiStore';
+
 function formatGiB(bytes: number): string {
   const gib = bytes / (1024 ** 3);
   return `${gib.toFixed(2)} GiB`;
@@ -151,6 +158,199 @@ function calculateRepoStalePenalty(discoveredAt: string): number {
   return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Amy design system helpers (inline style objects — no new CSS files)
+// ---------------------------------------------------------------------------
+
+const amyCard: React.CSSProperties = {
+  background: 'radial-gradient(circle at top left, #0f172a, #020617)',
+  border: '1px solid rgba(30, 64, 175, 0.4)',
+  borderRadius: '1.2rem',
+  padding: '1rem',
+};
+
+const amyCardTitle: React.CSSProperties = {
+  textTransform: 'uppercase',
+  letterSpacing: '0.16em',
+  fontSize: '0.8rem',
+  color: '#cbd5f5',
+  fontWeight: 600,
+};
+
+const amyCardSubtitle: React.CSSProperties = {
+  fontSize: '0.75rem',
+  color: '#9ca3af',
+};
+
+const amyBodyText: React.CSSProperties = {
+  color: '#e5e7eb',
+  fontSize: '0.875rem',
+};
+
+const amyPrimaryBtn: React.CSSProperties = {
+  background: 'linear-gradient(135deg, #2563eb, #38bdf8)',
+  boxShadow: '0 10px 25px rgba(37, 99, 235, 0.45)',
+  borderRadius: '999px',
+  border: 'none',
+  color: '#fff',
+  padding: '0.35rem 0.85rem',
+  fontSize: '0.7rem',
+  cursor: 'pointer',
+  fontWeight: 600,
+};
+
+const amyWarningBtn: React.CSSProperties = {
+  background: 'linear-gradient(135deg, #d97706, #f59e0b)',
+  boxShadow: '0 6px 18px rgba(217, 119, 6, 0.4)',
+  borderRadius: '999px',
+  border: 'none',
+  color: '#fff',
+  padding: '0.35rem 0.85rem',
+  fontSize: '0.7rem',
+  cursor: 'pointer',
+  fontWeight: 600,
+};
+
+const amyGhostBtn: React.CSSProperties = {
+  background: 'rgba(15,23,42,0.6)',
+  border: '1px solid rgba(30, 64, 175, 0.35)',
+  borderRadius: '999px',
+  color: '#cbd5e1',
+  padding: '0.35rem 0.85rem',
+  fontSize: '0.7rem',
+  cursor: 'pointer',
+};
+
+// Tab-bar pill styles
+const tabInactive: React.CSSProperties = {
+  background: 'rgba(15,23,42,0.6)',
+  border: '1px solid rgba(30, 64, 175, 0.3)',
+  borderRadius: '999px',
+  color: '#94a3b8',
+  padding: '0.3rem 1rem',
+  fontSize: '0.8rem',
+  cursor: 'pointer',
+  fontWeight: 500,
+};
+
+const tabActive: React.CSSProperties = {
+  background: 'linear-gradient(135deg, #2563eb, #38bdf8)',
+  border: 'none',
+  borderRadius: '999px',
+  color: '#fff',
+  padding: '0.3rem 1rem',
+  fontSize: '0.8rem',
+  cursor: 'pointer',
+  fontWeight: 600,
+  boxShadow: '0 4px 14px rgba(37, 99, 235, 0.5)',
+};
+
+// ---------------------------------------------------------------------------
+// Worktree safety badge sub-component
+// ---------------------------------------------------------------------------
+
+interface WorktreeSafetyBadgesProps {
+  worktreePath: string;
+  safetyInfo: WorktreeSafetyInfo | undefined;
+  loading: boolean;
+}
+
+function WorktreeSafetyBadges({ worktreePath: _worktreePath, safetyInfo, loading }: WorktreeSafetyBadgesProps): React.ReactElement {
+  const [expanded, setExpanded] = useState(false);
+
+  if (loading) {
+    return (
+      <span style={{ ...amyCardSubtitle, fontSize: '0.68rem' }}>
+        Checking safety…
+      </span>
+    );
+  }
+  if (!safetyInfo) return <></>;
+
+  const isSafe = !safetyInfo.hasUncommittedChanges && safetyInfo.unmergedCommitCount === 0;
+
+  return (
+    <div style={{ marginTop: '0.4rem' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center' }}>
+        {/* Uncommitted changes badge */}
+        {safetyInfo.hasUncommittedChanges ? (
+          <span style={{
+            fontSize: '0.68rem', padding: '0.15rem 0.5rem', borderRadius: '999px',
+            background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.4)',
+            color: '#f87171',
+          }}>
+            {safetyInfo.uncommittedFiles.length} uncommitted file{safetyInfo.uncommittedFiles.length === 1 ? '' : 's'}
+          </span>
+        ) : (
+          <span style={{
+            fontSize: '0.68rem', padding: '0.15rem 0.5rem', borderRadius: '999px',
+            background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.4)',
+            color: '#34d399',
+          }}>
+            Clean
+          </span>
+        )}
+
+        {/* Merge safety badge */}
+        {safetyInfo.unmergedCommitCount === 0 ? (
+          <span style={{
+            fontSize: '0.68rem', padding: '0.15rem 0.5rem', borderRadius: '999px',
+            background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.4)',
+            color: '#34d399',
+          }}>
+            Fully merged
+          </span>
+        ) : (
+          <span style={{
+            fontSize: '0.68rem', padding: '0.15rem 0.5rem', borderRadius: '999px',
+            background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.4)',
+            color: '#f87171',
+          }}>
+            {safetyInfo.unmergedCommitCount} unmerged commit{safetyInfo.unmergedCommitCount === 1 ? '' : 's'}
+          </span>
+        )}
+
+        {!isSafe && <span style={{ ...amyCardSubtitle, fontSize: '0.68rem' }}>
+          merged into: {safetyInfo.mergedIntoBranches.length > 0 ? safetyInfo.mergedIntoBranches.join(', ') : 'none'}
+        </span>}
+      </div>
+
+      {safetyInfo.hasUncommittedChanges && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          style={{ ...amyGhostBtn, marginTop: '0.35rem', fontSize: '0.68rem' }}
+        >
+          {expanded ? 'Hide changes' : 'View changes'}
+        </button>
+      )}
+
+      {expanded && safetyInfo.uncommittedFiles.length > 0 && (
+        <div style={{
+          marginTop: '0.4rem',
+          background: 'rgba(15,23,42,0.8)',
+          border: '1px solid rgba(30,64,175,0.2)',
+          borderRadius: '0.6rem',
+          padding: '0.5rem 0.75rem',
+          maxHeight: '10rem',
+          overflowY: 'auto',
+        }}>
+          {safetyInfo.uncommittedFiles.map((f, i) => (
+            <div key={i} style={{ display: 'flex', gap: '0.5rem', fontSize: '0.68rem', color: '#e5e7eb', padding: '0.1rem 0' }}>
+              <span style={{ color: '#94a3b8', fontFamily: 'monospace', minWidth: '2rem' }}>{f.status}</span>
+              <span style={{ fontFamily: 'monospace' }}>{f.path}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
 export function WorkspaceBrowserView(): React.ReactElement {
   const openCreateAgentWizardForRepo = useUIStore((s) => s.openCreateAgentWizardForRepo);
   const openRepoDetail = useUIStore((s) => s.openRepoDetail);
@@ -176,10 +376,15 @@ export function WorkspaceBrowserView(): React.ReactElement {
   const [workflowActionErrorsByItemId, setWorkflowActionErrorsByItemId] = useState<Record<string, string>>({});
   const [workspaceMutationPendingId, setWorkspaceMutationPendingId] = useState<string | null>(null);
   const [workspaceManagerExpanded, setWorkspaceManagerExpanded] = useState(false);
-  /** Per-repoPath status block — populated lazily as we learn about repos. */
   const [statusByPath, setStatusByPath] = useState<Record<string, RepoStatusBlock>>({});
-
   const [recentReposFallback, setRecentReposFallback] = useState<DiscoveredRepo[]>([]);
+  // Tab state
+  const [activeTab, setActiveTab] = useState<'repos' | 'workflow' | 'storage'>('repos');
+  // Worktree safety info keyed by worktree path
+  const [worktreeSafetyByPath, setWorktreeSafetyByPath] = useState<Map<string, WorktreeSafetyInfo>>(new Map());
+  const [worktreeSafetyLoadingPaths, setWorktreeSafetyLoadingPaths] = useState<Set<string>>(new Set());
+  // Confirmation state for unsafe "Clean now" actions (key = worktreeKey)
+  const [confirmCleanWorktreeKey, setConfirmCleanWorktreeKey] = useState<string | null>(null);
 
   const refreshWorkspaces = useCallback(async () => {
     const listRes = await window.api.workspace.list();
@@ -190,10 +395,6 @@ export function WorkspaceBrowserView(): React.ReactElement {
     if (activeRes.success && activeRes.data) setActiveId(activeRes.data.id);
     else if (list.length) setActiveId(list[0].id);
 
-    // When the user has no workspaces yet but already has recentRepos from
-    // their existing Kanvas sessions, surface those so the page isn't empty
-    // on first visit. They're not yet a real workspace — there's an inline
-    // CTA to "pin parent folder as workspace" in the empty-state UI.
     if (list.length === 0) {
       try {
         const recents = await window.api.instance?.getRecentRepos?.();
@@ -217,7 +418,6 @@ export function WorkspaceBrowserView(): React.ReactElement {
     }
   }, []);
 
-  /** Common parent dir (POSIX) of a non-empty list of paths. */
   const commonParent = useCallback((paths: string[]): string | null => {
     if (paths.length === 0) return null;
     const split = paths.map((p) => p.split('/'));
@@ -248,23 +448,19 @@ export function WorkspaceBrowserView(): React.ReactElement {
     }
   }, []);
 
-  // Initial load
   useEffect(() => {
     void refreshWorkspaces();
   }, [refreshWorkspaces]);
 
-  // Scan when active workspace changes
   useEffect(() => {
     if (!activeId) {
       setRepos([]);
       return;
     }
     void scanActive(activeId);
-    // Also start watching for new repos
     void window.api.workspace.startWatching(activeId);
   }, [activeId, scanActive]);
 
-  // Subscribe to repo-change events
   useEffect(() => {
     const unsubscribe = window.api.workspace.onRepoChange((event: WorkspaceRepoChangeEvent) => {
       if (event.workspaceId !== activeId) return;
@@ -289,9 +485,6 @@ export function WorkspaceBrowserView(): React.ReactElement {
     return unsubscribe;
   }, [activeId]);
 
-  // Pre-fetch worktree-mode + active session count + git repo status for
-  // each repo so the card shows real branch / ahead-behind / uncommitted /
-  // stash / worktree counts in addition to the C5 single-session badge.
   useEffect(() => {
     let cancelled = false;
     const target = workspaces.length === 0 ? recentReposFallback : repos;
@@ -322,19 +515,14 @@ export function WorkspaceBrowserView(): React.ReactElement {
           }
           updates[repo.path] = block;
         } catch {
-          // ignore — leave block undefined
+          // ignore
         }
       }
       if (!cancelled) setStatusByPath((prev) => ({ ...prev, ...updates }));
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [repos, recentReposFallback, workspaces.length]);
 
-  // When no workspace exists, the recent-repos fallback drives the grid
-  // so the user immediately sees their work — even before they configure
-  // a real workspace folder.
   const showingFallback = workspaces.length === 0 && recentReposFallback.length > 0;
   const sourceRepos = showingFallback ? recentReposFallback : repos;
 
@@ -375,9 +563,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
       setStorageMetrics(null);
       setStorageMetricsError(null);
       setStorageMetricsLoading(false);
-      return () => {
-        cancelled = true;
-      };
+      return () => { cancelled = true; };
     }
 
     const loadStorageMetrics = async (): Promise<void> => {
@@ -402,10 +588,49 @@ export function WorkspaceBrowserView(): React.ReactElement {
     };
 
     void loadStorageMetrics();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [sourceRepos, storageMetricsRefreshNonce]);
+
+  // Fetch worktree safety info for stale-no-session abandoned worktrees
+  useEffect(() => {
+    if (!storageMetrics) return;
+    let cancelled = false;
+    const staleEntries = storageMetrics.local.abandonedWorktrees.filter(
+      (e) => e.reason === 'stale-no-session' && e.exists
+    );
+
+    for (const entry of staleEntries) {
+      const wtp = entry.worktreePath;
+      if (worktreeSafetyByPath.has(wtp) || worktreeSafetyLoadingPaths.has(wtp)) continue;
+
+      setWorktreeSafetyLoadingPaths((prev) => new Set([...prev, wtp]));
+
+      window.api.git.getWorktreeSafetyInfo(wtp).then((res) => {
+        if (cancelled) return;
+        setWorktreeSafetyLoadingPaths((prev) => {
+          const next = new Set(prev);
+          next.delete(wtp);
+          return next;
+        });
+        if (res.success && res.data) {
+          setWorktreeSafetyByPath((prev) => {
+            const next = new Map(prev);
+            next.set(wtp, res.data!);
+            return next;
+          });
+        }
+      }).catch(() => {
+        if (cancelled) return;
+        setWorktreeSafetyLoadingPaths((prev) => {
+          const next = new Set(prev);
+          next.delete(wtp);
+          return next;
+        });
+      });
+    }
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageMetrics]);
 
   const fallbackParent = useMemo(
     () => (showingFallback ? commonParent(recentReposFallback.map((r) => r.path)) : null),
@@ -415,9 +640,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
     () => workspaces.find((workspace) => workspace.id === activeId) ?? workspaces[0] ?? null,
     [workspaces, activeId]
   );
-  const handleSetActiveWorkspace = useCallback(async (
-    nextWorkspaceId: string | null
-  ): Promise<void> => {
+  const handleSetActiveWorkspace = useCallback(async (nextWorkspaceId: string | null): Promise<void> => {
     setError(null);
     setActiveId(nextWorkspaceId);
     const result = await window.api.workspace.setActive(nextWorkspaceId);
@@ -426,9 +649,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
     }
   }, []);
 
-  const handleRemoveWorkspace = useCallback(async (
-    workspaceId: string
-  ): Promise<void> => {
+  const handleRemoveWorkspace = useCallback(async (workspaceId: string): Promise<void> => {
     setWorkspaceMutationPendingId(workspaceId);
     setError(null);
     try {
@@ -464,11 +685,9 @@ export function WorkspaceBrowserView(): React.ReactElement {
     for (const entry of storageMetrics.local.nodeModulesByRepo) {
       for (const targetPath of entry.paths) addTarget(entry.repoPath, targetPath);
     }
-
     for (const entry of storageMetrics.local.pythonEnvsByRepo) {
       for (const targetPath of entry.paths) addTarget(entry.repoPath, targetPath);
     }
-
     for (const entry of storageMetrics.local.abandonedWorktrees) {
       if (!entry.exists) continue;
       addTarget(entry.repoPath, entry.worktreePath);
@@ -481,6 +700,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
     () => storageMetrics?.local.reclaimableByRepo.slice(0, 3) ?? [],
     [storageMetrics]
   );
+
   const abandonedWorktreeCountByRepoPath = useMemo(() => {
     const countsByRepoPath = new Map<string, number>();
     if (!storageMetrics) return countsByRepoPath;
@@ -570,13 +790,10 @@ export function WorkspaceBrowserView(): React.ReactElement {
     }
   }, [buildCleanupCommand]);
 
-  const buildAbandonedWorktreeKey = useCallback((
-    entry: AbandonedWorktreeEntry
-  ): string => `${entry.repoPath}::${entry.worktreePath}::${entry.reason}`, []);
+  const buildAbandonedWorktreeKey = useCallback((entry: AbandonedWorktreeEntry): string =>
+    `${entry.repoPath}::${entry.worktreePath}::${entry.reason}`, []);
 
-  const buildAbandonedWorktreeCleanupCommand = useCallback((
-    entry: AbandonedWorktreeEntry
-  ): string => {
+  const buildAbandonedWorktreeCleanupCommand = useCallback((entry: AbandonedWorktreeEntry): string => {
     const repoPath = shellQuote(entry.repoPath);
     if (entry.reason === 'missing-path') {
       return `git -C ${repoPath} worktree prune`;
@@ -585,9 +802,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
     return `git -C ${repoPath} worktree remove --force ${worktreePath} && git -C ${repoPath} worktree prune`;
   }, []);
 
-  const handleCopyAbandonedWorktreeCommand = useCallback(async (
-    entry: AbandonedWorktreeEntry
-  ): Promise<void> => {
+  const handleCopyAbandonedWorktreeCommand = useCallback(async (entry: AbandonedWorktreeEntry): Promise<void> => {
     const command = buildAbandonedWorktreeCleanupCommand(entry);
     const worktreeKey = buildAbandonedWorktreeKey(entry);
     try {
@@ -601,9 +816,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
     }
   }, [buildAbandonedWorktreeCleanupCommand, buildAbandonedWorktreeKey]);
 
-  const runWorktreeCleanup = useCallback(async (
-    entries: AbandonedWorktreeEntry[]
-  ): Promise<void> => {
+  const runWorktreeCleanup = useCallback(async (entries: AbandonedWorktreeEntry[]): Promise<void> => {
     const entriesByRepoPath = new Map<string, AbandonedWorktreeEntry[]>();
     for (const entry of entries) {
       const current = entriesByRepoPath.get(entry.repoPath) ?? [];
@@ -670,11 +883,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
 
   const handleCleanMissingPathWorktreeRefs = useCallback(async (): Promise<void> => {
     if (!storageMetrics) return;
-
-    const missingPathEntries = (
-      storageMetrics.local.abandonedWorktrees
-        .filter((entry) => entry.reason === 'missing-path')
-    );
+    const missingPathEntries = storageMetrics.local.abandonedWorktrees.filter((entry) => entry.reason === 'missing-path');
     if (missingPathEntries.length === 0) return;
     await runWorktreeCleanup(missingPathEntries);
   }, [storageMetrics, runWorktreeCleanup]);
@@ -698,8 +907,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
     const repoNameByPath = new Map(sourceRepos.map((repo) => [repo.path, repo.name]));
 
     if (storageMetrics) {
-      const missingPathEntries = storageMetrics.local.abandonedWorktrees
-        .filter((entry) => entry.reason === 'missing-path');
+      const missingPathEntries = storageMetrics.local.abandonedWorktrees.filter((entry) => entry.reason === 'missing-path');
       const missingPathRepoCount = new Set(missingPathEntries.map((entry) => entry.repoPath)).size;
 
       if (missingPathRepoCount > 0) {
@@ -710,15 +918,8 @@ export function WorkspaceBrowserView(): React.ReactElement {
           impactLabel: 'Safe cleanup',
           score: 250 + missingPathEntries.length * 10,
           category: 'cleanup',
-          primaryAction: {
-            kind: 'clean-missing-worktree-refs',
-            label: 'Clean safe refs',
-          },
-          secondaryActions: [{
-            kind: 'open-terminal',
-            label: 'Open terminal',
-            repoPath: missingPathEntries[0]?.repoPath,
-          }],
+          primaryAction: { kind: 'clean-missing-worktree-refs', label: 'Clean safe refs' },
+          secondaryActions: [{ kind: 'open-terminal', label: 'Open terminal', repoPath: missingPathEntries[0]?.repoPath }],
         });
       }
 
@@ -734,16 +935,8 @@ export function WorkspaceBrowserView(): React.ReactElement {
           impactLabel: 'Medium impact',
           score: staleScore,
           category: 'cleanup',
-          primaryAction: {
-            kind: 'clean-abandoned-worktree',
-            label: 'Clean now',
-            abandonedWorktree: entry,
-          },
-          secondaryActions: [{
-            kind: 'copy-abandoned-worktree-command',
-            label: 'Copy cmd',
-            abandonedWorktree: entry,
-          }],
+          primaryAction: { kind: 'clean-abandoned-worktree', label: 'Clean now', abandonedWorktree: entry },
+          secondaryActions: [{ kind: 'copy-abandoned-worktree-command', label: 'Copy cmd', abandonedWorktree: entry }],
         });
       }
 
@@ -757,16 +950,8 @@ export function WorkspaceBrowserView(): React.ReactElement {
           impactLabel: 'Disk pressure relief',
           score: 130 + Math.min(45, Math.round((entry.totalReclaimableBytes / ONE_GIB) * 6)),
           category: 'cleanup',
-          primaryAction: {
-            kind: 'copy-repo-cleanup-command',
-            label: 'Copy cleanup cmd',
-            repoPath,
-          },
-          secondaryActions: [{
-            kind: 'open-terminal',
-            label: 'Open terminal',
-            repoPath,
-          }],
+          primaryAction: { kind: 'copy-repo-cleanup-command', label: 'Copy cleanup cmd', repoPath },
+          secondaryActions: [{ kind: 'open-terminal', label: 'Open terminal', repoPath }],
         });
       }
     }
@@ -784,16 +969,8 @@ export function WorkspaceBrowserView(): React.ReactElement {
         impactLabel: 'Merge risk reduction',
         score: 170 + Math.min(40, behind * 3),
         category: 'sync',
-        primaryAction: {
-          kind: 'open-repo-detail',
-          label: 'Open repo',
-          repoPath: repo.path,
-        },
-        secondaryActions: [{
-          kind: 'open-terminal',
-          label: 'Open terminal',
-          repoPath: repo.path,
-        }],
+        primaryAction: { kind: 'open-repo-detail', label: 'Open repo', repoPath: repo.path },
+        secondaryActions: [{ kind: 'open-terminal', label: 'Open terminal', repoPath: repo.path }],
       });
     }
 
@@ -816,16 +993,8 @@ export function WorkspaceBrowserView(): React.ReactElement {
         impactLabel: 'Context preservation',
         score: 140 + Math.min(30, uncommitted * 2),
         category: 'changes',
-        primaryAction: {
-          kind: 'open-repo-detail',
-          label: 'Inspect changes',
-          repoPath: repo.path,
-        },
-        secondaryActions: [{
-          kind: 'new-session',
-          label: 'New session',
-          repoPath: repo.path,
-        }],
+        primaryAction: { kind: 'open-repo-detail', label: 'Inspect changes', repoPath: repo.path },
+        secondaryActions: [{ kind: 'new-session', label: 'New session', repoPath: repo.path }],
       });
     }
 
@@ -881,8 +1050,19 @@ export function WorkspaceBrowserView(): React.ReactElement {
 
   const executeWorkflowAction = useCallback(async (
     itemId: string,
-    action: WorkflowActionDefinition
+    action: WorkflowActionDefinition,
+    force?: boolean
   ): Promise<void> => {
+    // Safety gate: if this is a clean action for an abandoned worktree and not safe, require confirmation
+    if (action.kind === 'clean-abandoned-worktree' && action.abandonedWorktree && !force) {
+      const wtp = action.abandonedWorktree.worktreePath;
+      const info = worktreeSafetyByPath.get(wtp);
+      if (info && (info.hasUncommittedChanges || info.unmergedCommitCount > 0)) {
+        setConfirmCleanWorktreeKey(buildAbandonedWorktreeKey(action.abandonedWorktree));
+        return;
+      }
+    }
+
     setWorkflowActionInFlightItemId(itemId);
     setWorkflowActionErrorsByItemId((current) => {
       if (!(itemId in current)) return current;
@@ -931,21 +1111,31 @@ export function WorkspaceBrowserView(): React.ReactElement {
     handleCopyAbandonedWorktreeCommand,
     handleCleanAbandonedWorktree,
     handleCleanMissingPathWorktreeRefs,
+    worktreeSafetyByPath,
+    buildAbandonedWorktreeKey,
   ]);
 
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
+
   return (
-    <div className="flex-1 h-full min-h-0 flex flex-col bg-surface" data-testid="workspace-browser">
+    <div className="flex-1 h-full min-h-0 flex flex-col" style={{ background: '#020617' }} data-testid="workspace-browser">
       {/* Header */}
-      <div className="border-b border-border bg-surface-secondary">
+      <div style={{ borderBottom: '1px solid rgba(30,64,175,0.3)', background: 'rgba(15,23,42,0.9)' }}>
         <div className="p-4 pb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-lg font-semibold text-text-primary">Workspaces</h1>
-              <span className="inline-flex items-center px-2 py-0.5 text-[11px] rounded-full border border-border bg-surface text-text-secondary">
+              <h1 style={{ ...amyCardTitle, fontSize: '1rem' }}>Workspaces</h1>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', padding: '0.15rem 0.6rem',
+                fontSize: '0.7rem', borderRadius: '999px',
+                border: '1px solid rgba(30,64,175,0.4)', color: '#9ca3af',
+              }}>
                 {activeWorkspace ? activeWorkspace.name : 'No active workspace'}
               </span>
             </div>
-            <p className="text-xs text-text-secondary mt-1">
+            <p style={amyCardSubtitle}>
               {sourceRepos.length === 0
                 ? 'Add a workspace to discover repositories and workflow actions.'
                 : `${sourceRepos.length} repositories${filter.trim() ? ` • ${filtered.length} visible` : ''}`}
@@ -953,7 +1143,14 @@ export function WorkspaceBrowserView(): React.ReactElement {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <select
-              className="px-2.5 py-1.5 border border-border rounded-md bg-surface text-text-primary text-sm"
+              style={{
+                padding: '0.35rem 0.7rem',
+                border: '1px solid rgba(30,64,175,0.4)',
+                borderRadius: '0.5rem',
+                background: 'rgba(15,23,42,0.8)',
+                color: '#e5e7eb',
+                fontSize: '0.8rem',
+              }}
               value={activeId ?? ''}
               onChange={(e) => {
                 const next = e.target.value || null;
@@ -963,15 +1160,13 @@ export function WorkspaceBrowserView(): React.ReactElement {
             >
               {workspaces.length === 0 && <option value="">— no workspaces —</option>}
               {workspaces.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name}
-                </option>
+                <option key={w.id} value={w.id}>{w.name}</option>
               ))}
             </select>
             <button
               type="button"
               onClick={() => setShowAdd(true)}
-              className="text-sm px-3 py-1.5 border border-kanvas-blue rounded-md bg-kanvas-blue text-white hover:opacity-90"
+              style={amyPrimaryBtn}
               data-testid="add-workspace-button"
             >
               + Add local folder
@@ -980,7 +1175,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
               type="button"
               onClick={() => activeId && void scanActive(activeId)}
               disabled={!activeId || loading}
-              className="text-sm px-3 py-1.5 border border-border rounded-md text-text-primary bg-surface hover:bg-surface-tertiary disabled:opacity-50"
+              style={{ ...amyGhostBtn, opacity: (!activeId || loading) ? 0.5 : 1 }}
               data-testid="rescan-button"
             >
               {loading ? 'Scanning…' : 'Rescan'}
@@ -988,47 +1183,19 @@ export function WorkspaceBrowserView(): React.ReactElement {
           </div>
         </div>
 
-        {/* Filter / sort bar */}
-        <div className="px-4 pb-4">
-          <div className="flex flex-wrap items-center gap-2 p-2 border border-border rounded-lg bg-surface">
-            <input
-              type="search"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="Filter repos…"
-              className="px-2.5 py-1.5 border border-border rounded-md bg-surface-secondary text-text-primary text-sm flex-1 min-w-[220px]"
-              data-testid="repo-filter"
-            />
-            <label className="text-xs text-text-secondary px-1">Sort:</label>
-            <select
-              value={sortKey}
-              onChange={(e) => setSortKey(e.target.value as WorkspaceRepoSortKey)}
-              className="px-2.5 py-1.5 border border-border rounded-md bg-surface-secondary text-text-primary text-sm"
-              data-testid="sort-select"
-            >
-              <option value="priority">Priority score</option>
-              <option value="last-touched">Last touched</option>
-              <option value="alphabetical">Alphabetical</option>
-              <option value="size">Size</option>
-            </select>
-          </div>
-        </div>
-
+        {/* Workspace manager panel */}
         {workspaces.length > 0 && (
-          <div className="px-4 pb-4">
-            <div
-              className="p-2.5 border border-border rounded-lg bg-surface"
-              data-testid="workspace-manager-panel"
-            >
+          <div className="px-4 pb-3">
+            <div style={{ ...amyCard, padding: '0.6rem 0.85rem' }} data-testid="workspace-manager-panel">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <p className="text-xs font-medium text-text-primary">Workspace folders</p>
-                  <span className="text-[11px] text-text-secondary">{workspaces.length} total</span>
+                  <p style={{ ...amyCardTitle, fontSize: '0.72rem' }}>Workspace folders</p>
+                  <span style={amyCardSubtitle}>{workspaces.length} total</span>
                 </div>
                 <button
                   type="button"
                   onClick={() => setWorkspaceManagerExpanded((expanded) => !expanded)}
-                  className="text-[11px] px-2 py-1 border border-border rounded-md text-text-primary hover:bg-surface-tertiary"
+                  style={amyGhostBtn}
                   data-testid="workspace-manager-toggle"
                 >
                   {workspaceManagerExpanded ? 'Done' : 'Manage'}
@@ -1036,16 +1203,14 @@ export function WorkspaceBrowserView(): React.ReactElement {
               </div>
               {!workspaceManagerExpanded && activeWorkspace && (
                 <div
-                  className="mt-2 flex items-center justify-between gap-3 p-2 rounded border border-border bg-surface-secondary"
+                  style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', padding: '0.4rem 0.6rem', borderRadius: '0.6rem', border: '1px solid rgba(30,64,175,0.25)', background: 'rgba(15,23,42,0.6)' }}
                   data-testid="workspace-manager-collapsed-summary"
                 >
                   <div className="min-w-0">
-                    <p className="text-sm text-text-primary font-medium truncate">{activeWorkspace.name}</p>
-                    <p className="text-[11px] text-text-secondary truncate">{activeWorkspace.path}</p>
+                    <p style={{ ...amyBodyText, fontWeight: 600 }} className="truncate">{activeWorkspace.name}</p>
+                    <p style={amyCardSubtitle} className="truncate">{activeWorkspace.path}</p>
                   </div>
-                  <span className="text-[10px] px-2 py-1 rounded border border-border text-text-secondary">
-                    Active
-                  </span>
+                  <span style={{ fontSize: '0.68rem', padding: '0.15rem 0.5rem', borderRadius: '999px', border: '1px solid rgba(30,64,175,0.35)', color: '#94a3b8' }}>Active</span>
                 </div>
               )}
               {workspaceManagerExpanded && (
@@ -1057,28 +1222,20 @@ export function WorkspaceBrowserView(): React.ReactElement {
                       return (
                         <div
                           key={workspace.id}
-                          className="flex items-center justify-between gap-3 p-2 rounded border border-border bg-surface-secondary"
+                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', padding: '0.4rem 0.6rem', borderRadius: '0.6rem', border: '1px solid rgba(30,64,175,0.25)', background: 'rgba(15,23,42,0.6)' }}
                           data-testid="workspace-manager-row"
                         >
                           <div className="min-w-0">
-                            <p className="text-sm text-text-primary font-medium truncate">{workspace.name}</p>
-                            <p className="text-[11px] text-text-secondary truncate">{workspace.path}</p>
+                            <p style={{ ...amyBodyText, fontWeight: 600 }} className="truncate">{workspace.name}</p>
+                            <p style={amyCardSubtitle} className="truncate">{workspace.path}</p>
                           </div>
                           <div className="flex items-center gap-1">
                             {isActiveWorkspace ? (
-                              <span
-                                className="text-[10px] px-2 py-1 rounded border border-border text-text-secondary"
-                                data-testid={`workspace-manager-active-${workspace.id}`}
-                              >
+                              <span style={{ fontSize: '0.68rem', padding: '0.15rem 0.5rem', borderRadius: '999px', border: '1px solid rgba(30,64,175,0.35)', color: '#94a3b8' }} data-testid={`workspace-manager-active-${workspace.id}`}>
                                 Active
                               </span>
                             ) : (
-                              <button
-                                type="button"
-                                onClick={() => void handleSetActiveWorkspace(workspace.id)}
-                                className="text-[11px] px-2 py-1 border border-border rounded-md text-text-primary hover:bg-surface-tertiary"
-                                data-testid={`workspace-manager-switch-${workspace.id}`}
-                              >
+                              <button type="button" onClick={() => void handleSetActiveWorkspace(workspace.id)} style={amyGhostBtn} data-testid={`workspace-manager-switch-${workspace.id}`}>
                                 Switch
                               </button>
                             )}
@@ -1086,7 +1243,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
                               type="button"
                               onClick={() => void handleRemoveWorkspace(workspace.id)}
                               disabled={isRemovingWorkspace}
-                              className="text-[11px] px-2 py-1 border border-red-500/40 rounded-md text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+                              style={{ ...amyGhostBtn, borderColor: 'rgba(239,68,68,0.4)', color: '#f87171', opacity: isRemovingWorkspace ? 0.5 : 1 }}
                               data-testid={`workspace-manager-remove-${workspace.id}`}
                             >
                               {isRemovingWorkspace ? 'Removing…' : 'Delete'}
@@ -1096,116 +1253,322 @@ export function WorkspaceBrowserView(): React.ReactElement {
                       );
                     })}
                   </div>
-                  <p className="mt-2 text-[11px] text-text-secondary">
-                    Add any local folder (repo root or parent folder) via “+ Add local folder”.
+                  <p style={{ ...amyCardSubtitle, marginTop: '0.5rem', fontSize: '0.68rem' }}>
+                    Add any local folder (repo root or parent folder) via "+ Add local folder".
                   </p>
                 </>
               )}
             </div>
           </div>
         )}
+
+        {/* Tab bar */}
+        <div style={{ display: 'flex', gap: '0.5rem', padding: '0 1rem 0.75rem' }}>
+          <button type="button" style={activeTab === 'repos' ? tabActive : tabInactive} onClick={() => setActiveTab('repos')}>
+            Repos
+          </button>
+          <button type="button" style={activeTab === 'workflow' ? tabActive : tabInactive} onClick={() => setActiveTab('workflow')}>
+            Workflow
+          </button>
+          <button type="button" style={activeTab === 'storage' ? tabActive : tabInactive} onClick={() => setActiveTab('storage')}>
+            Storage
+          </button>
+        </div>
       </div>
 
       {/* Body */}
       <div className="flex-1 min-h-0 overflow-auto p-4">
-        {sourceRepos.length > 0 && (
-          <div
-            className="mb-4 p-4 border border-border rounded-xl bg-surface-secondary shadow-sm"
-            data-testid="workflow-queue-panel"
-          >
-            <div className="flex items-center justify-between mb-2 gap-2">
-              <div>
-                <h2 className="text-sm font-semibold text-text-primary">Daily workflow queue</h2>
-                <p className="text-xs text-text-secondary">
-                  Highest-leverage actions for this workspace right now.
+        {error && (
+          <div style={{ marginBottom: '0.75rem', padding: '0.5rem 0.75rem', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '0.75rem', color: '#f87171', fontSize: '0.85rem' }}>
+            {error}
+          </div>
+        )}
+
+        {/* ===== REPOS TAB ===== */}
+        {activeTab === 'repos' && (
+          <>
+            {/* Filter / sort bar */}
+            <div style={{ marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.75rem', border: '1px solid rgba(30,64,175,0.3)', borderRadius: '0.75rem', background: 'rgba(15,23,42,0.6)' }}>
+                <input
+                  type="search"
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                  placeholder="Filter repos…"
+                  style={{ padding: '0.35rem 0.65rem', border: '1px solid rgba(30,64,175,0.35)', borderRadius: '0.5rem', background: 'rgba(15,23,42,0.8)', color: '#e5e7eb', fontSize: '0.8rem', flex: '1', minWidth: '200px' }}
+                  data-testid="repo-filter"
+                />
+                <label style={amyCardSubtitle}>Sort:</label>
+                <select
+                  value={sortKey}
+                  onChange={(e) => setSortKey(e.target.value as WorkspaceRepoSortKey)}
+                  style={{ padding: '0.35rem 0.65rem', border: '1px solid rgba(30,64,175,0.35)', borderRadius: '0.5rem', background: 'rgba(15,23,42,0.8)', color: '#e5e7eb', fontSize: '0.8rem' }}
+                  data-testid="sort-select"
+                >
+                  <option value="priority">Priority score</option>
+                  <option value="last-touched">Last touched</option>
+                  <option value="alphabetical">Alphabetical</option>
+                  <option value="size">Size</option>
+                </select>
+              </div>
+            </div>
+
+            {workspaces.length === 0 && recentReposFallback.length === 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '12rem', color: '#9ca3af' }} data-testid="empty-state-no-workspace">
+                <p style={{ marginBottom: '0.75rem' }}>No workspaces yet.</p>
+                <button type="button" onClick={() => setShowAdd(true)} style={amyPrimaryBtn}>
+                  Add your first workspace
+                </button>
+              </div>
+            )}
+
+            {showingFallback && (
+              <div style={{ ...amyCard, marginBottom: '1rem' }} data-testid="recent-repos-banner">
+                <p style={{ ...amyBodyText, marginBottom: '0.5rem' }}>
+                  Showing {recentReposFallback.length} repos from your recent sessions.
+                  Add a workspace to enable folder scanning + filesystem watching.
                 </p>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <button type="button" onClick={() => setShowAdd(true)} style={amyPrimaryBtn}>
+                    + Add local folder
+                  </button>
+                  {fallbackParent && (
+                    <button
+                      type="button"
+                      onClick={() => void handlePinFallbackParent()}
+                      style={amyGhostBtn}
+                      data-testid="pin-parent-button"
+                      title={`Create a workspace at ${fallbackParent}`}
+                    >
+                      Pin {fallbackParent} as workspace
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {workspaces.length > 0 && filtered.length === 0 && !loading && (
+              <p style={amyCardSubtitle} data-testid="empty-state-no-repos">
+                {repos.length === 0 ? 'No git repositories found in this workspace.' : 'No repos match your filter.'}
+              </p>
+            )}
+
+            {filtered.length > 0 && (
+              <div style={{ border: '1px solid rgba(30,64,175,0.35)', borderRadius: '1.2rem', overflow: 'hidden', background: 'radial-gradient(circle at top left, #0f172a, #020617)' }} data-testid="repo-list">
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px,2fr) minmax(130px,0.9fr) minmax(90px,0.7fr) minmax(150px,0.9fr) minmax(220px,1fr) auto', gap: '0.5rem', padding: '0.5rem 0.75rem', borderBottom: '1px solid rgba(30,64,175,0.2)', ...amyCardTitle }}>
+                  <span>Repository</span>
+                  <span>Priority</span>
+                  <span>Health</span>
+                  <span>Sync</span>
+                  <span>Local state</span>
+                  <span>Actions</span>
+                </div>
+                <div>
+                  {filtered.map((repo, index) => {
+                    const status = statusByPath[repo.path] ?? null;
+                    const branch = status?.currentBranch || 'unknown';
+                    const ahead = status?.ahead ?? 0;
+                    const behind = status?.behind ?? 0;
+                    const staged = status?.stagedCount ?? 0;
+                    const modified = status?.modifiedCount ?? 0;
+                    const untracked = status?.untrackedCount ?? 0;
+                    const stashCount = status?.stashCount ?? 0;
+                    const worktreeCount = status?.worktreeCount ?? 0;
+                    const activeSessions = status?.activeSessionCount ?? 0;
+                    const worktreeModeLabel = status?.worktreeMode === 'in-place' ? 'In-place mode' : 'Worktree mode';
+                    const healthSnapshot = healthByRepoPath.get(repo.path) ?? { healthScore: 100, riskPoints: 0, priority: 'healthy' as RepoPriorityLevel };
+                    const priorityLabel = formatRepoPriorityLabel(healthSnapshot.priority);
+                    const priorityBadgeClassName = repoPriorityBadgeClasses(healthSnapshot.priority);
+                    const healthHint = healthSnapshot.healthScore >= 80 ? 'Stable' : healthSnapshot.healthScore >= 60 ? 'Watch' : 'Needs focus';
+
+                    return (
+                      <div
+                        key={repo.path}
+                        style={{ display: 'grid', gridTemplateColumns: 'minmax(220px,2fr) minmax(130px,0.9fr) minmax(90px,0.7fr) minmax(150px,0.9fr) minmax(220px,1fr) auto', gap: '0.5rem', padding: '0.65rem 0.75rem', alignItems: 'start', borderBottom: index < filtered.length - 1 ? '1px solid rgba(30,64,175,0.15)' : 'none', background: index % 2 === 0 ? 'rgba(15,23,42,0.4)' : 'transparent' }}
+                        data-testid="repo-list-row"
+                      >
+                        <div className="min-w-0">
+                          <button
+                            type="button"
+                            onClick={() => openRepoDetail(repo.path)}
+                            style={{ ...amyBodyText, fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' }}
+                            className="truncate hover:underline"
+                            data-testid={`repo-row-open-${index}`}
+                          >
+                            {repo.name}
+                          </button>
+                          <p style={amyCardSubtitle} className="truncate">{repo.path}</p>
+                          <div style={{ marginTop: '0.25rem', display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.4rem', borderRadius: '999px', border: '1px solid rgba(30,64,175,0.3)', color: '#94a3b8' }}>
+                              {`Branch ${branch}`}
+                            </span>
+                            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.4rem', borderRadius: '999px', border: '1px solid rgba(30,64,175,0.3)', color: '#94a3b8' }}>
+                              {worktreeModeLabel}
+                            </span>
+                          </div>
+                        </div>
+                        <div style={amyCardSubtitle} data-testid="repo-row-priority">
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium ${priorityBadgeClassName}`} data-testid="repo-row-priority-badge">
+                            {priorityLabel}
+                          </span>
+                          <p style={{ fontSize: '0.68rem', marginTop: '0.2rem' }} data-testid="repo-row-risk">{`Risk ${healthSnapshot.riskPoints}`}</p>
+                        </div>
+                        <div style={amyCardSubtitle} data-testid="repo-row-health">
+                          <p style={{ ...amyBodyText, fontWeight: 700 }} data-testid="repo-row-health-score">{healthSnapshot.healthScore}</p>
+                          <p style={{ fontSize: '0.68rem' }}>{healthHint}</p>
+                        </div>
+                        <div style={amyCardSubtitle}>
+                          <p style={{ ...amyBodyText, fontWeight: 600 }} data-testid="repo-row-sync">{`↓${behind} / ↑${ahead}`}</p>
+                          <p style={{ fontSize: '0.68rem' }}>{`Stashes ${stashCount} • Worktrees ${worktreeCount}`}</p>
+                        </div>
+                        <div style={amyCardSubtitle}>
+                          <p style={{ fontSize: '0.68rem' }} data-testid="repo-row-changes">{`Staged ${staged} • Modified ${modified} • Untracked ${untracked}`}</p>
+                          <p style={{ fontSize: '0.68rem' }} data-testid="repo-row-sessions">{`Sessions ${activeSessions}`}</p>
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', justifyContent: 'flex-end' }}>
+                          <button type="button" onClick={() => openRepoDetail(repo.path)} style={amyPrimaryBtn} data-testid={`repo-row-detail-${index}`}>Open</button>
+                          <button type="button" onClick={() => window.api.shell?.openVSCode?.(repo.path)} style={amyGhostBtn} data-testid={`repo-row-ide-${index}`}>IDE</button>
+                          <button type="button" onClick={() => window.api.shell?.openTerminal?.(repo.path)} style={amyGhostBtn} data-testid={`repo-row-terminal-${index}`}>Terminal</button>
+                          <button type="button" onClick={() => openCreateAgentWizardForRepo(repo.path)} style={amyGhostBtn} data-testid={`repo-row-session-${index}`}>New session</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ===== WORKFLOW TAB ===== */}
+        {activeTab === 'workflow' && (
+          <div data-testid="workflow-queue-panel">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', gap: '0.5rem' }}>
+              <div>
+                <h2 style={amyCardTitle}>Daily workflow queue</h2>
+                <p style={amyCardSubtitle}>Highest-leverage actions for this workspace right now.</p>
               </div>
               {hiddenWorkflowItemCount > 0 && (
-                <button
-                  type="button"
-                  onClick={handleResetWorkflowVisibility}
-                  className="text-xs px-2.5 py-1 border border-border rounded-md text-text-primary hover:bg-surface-tertiary"
-                  data-testid="workflow-queue-reset"
-                >
+                <button type="button" onClick={handleResetWorkflowVisibility} style={amyGhostBtn} data-testid="workflow-queue-reset">
                   Show hidden ({hiddenWorkflowItemCount})
                 </button>
               )}
             </div>
 
-            {visibleWorkflowQueueItems.length === 0 ? (
-              <p className="text-xs text-text-secondary" data-testid="workflow-queue-empty">
-                Queue is clear. Hidden items can be restored with “Show hidden”.
+            {sourceRepos.length === 0 ? (
+              <div style={{ ...amyCard, textAlign: 'center' }}>
+                <p style={amyCardSubtitle}>Add a workspace to see workflow actions.</p>
+              </div>
+            ) : visibleWorkflowQueueItems.length === 0 ? (
+              <p style={amyCardSubtitle} data-testid="workflow-queue-empty">
+                Queue is clear. Hidden items can be restored with "Show hidden".
               </p>
             ) : (
-              <div className="space-y-2">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                 {visibleWorkflowQueueItems.map((item, index) => {
                   const inFlight = workflowActionInFlightItemId === item.id;
                   const actionError = workflowActionErrorsByItemId[item.id];
+
+                  // For abandoned worktree cleanup items, extract entry + safety info
+                  const isAbandonedCleanup = item.primaryAction.kind === 'clean-abandoned-worktree';
+                  const abandEntry = item.primaryAction.abandonedWorktree;
+                  const wtp = abandEntry?.worktreePath;
+                  const safetyInfo = wtp ? worktreeSafetyByPath.get(wtp) : undefined;
+                  const safetyLoading = wtp ? worktreeSafetyLoadingPaths.has(wtp) : false;
+                  const worktreeKey = abandEntry ? buildAbandonedWorktreeKey(abandEntry) : '';
+                  const isSafe = safetyInfo && !safetyInfo.hasUncommittedChanges && safetyInfo.unmergedCommitCount === 0;
+                  const confirmingThisItem = confirmCleanWorktreeKey === worktreeKey;
+
                   return (
                     <div
                       key={item.id}
-                      className="p-3 border border-border rounded-lg bg-surface shadow-sm"
+                      style={amyCard}
                       data-testid={`workflow-queue-item-${index}`}
                     >
-                      <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-[10px] px-1.5 py-0.5 rounded border border-border text-text-secondary">
-                              {workflowCategoryLabel(item.category)}
-                            </span>
-                            <span className="text-[10px] text-text-secondary">{item.impactLabel}</span>
-                          </div>
-                          <p className="text-sm font-medium text-text-primary">{item.title}</p>
-                          <p className="text-xs text-text-secondary">{item.reason}</p>
-                        </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
+                          <div className="min-w-0">
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '999px', border: '1px solid rgba(30,64,175,0.4)', color: '#94a3b8' }}>
+                                {workflowCategoryLabel(item.category)}
+                              </span>
+                              <span style={{ fontSize: '0.68rem', color: '#9ca3af' }}>{item.impactLabel}</span>
+                            </div>
+                            <p style={{ ...amyBodyText, fontWeight: 600 }}>{item.title}</p>
+                            <p style={amyCardSubtitle}>{item.reason}</p>
 
-                        <div className="flex flex-wrap gap-1">
-                          <button
-                            type="button"
-                            onClick={() => void executeWorkflowAction(item.id, item.primaryAction)}
-                            disabled={inFlight}
-                            className="text-[11px] px-2.5 py-1 rounded-md border border-kanvas-blue bg-kanvas-blue text-white hover:opacity-90 disabled:opacity-50"
-                            data-testid={`workflow-queue-primary-${index}`}
-                          >
-                            {inFlight ? 'Running…' : item.primaryAction.label}
-                          </button>
-                          {(item.secondaryActions ?? []).slice(0, 2).map((secondaryAction, secondaryIndex) => (
-                            <button
-                              key={`${item.id}-secondary-${secondaryAction.kind}-${secondaryIndex}`}
-                              type="button"
-                              onClick={() => void executeWorkflowAction(item.id, secondaryAction)}
-                              disabled={inFlight}
-                              className="text-[11px] px-2 py-1 rounded-md border border-border text-text-primary hover:bg-surface-tertiary disabled:opacity-50"
-                              data-testid={`workflow-queue-secondary-${index}-${secondaryIndex}`}
-                            >
-                              {secondaryAction.label}
+                            {/* Safety badges for abandoned worktree items */}
+                            {isAbandonedCleanup && wtp && (
+                              <WorktreeSafetyBadges
+                                worktreePath={wtp}
+                                safetyInfo={safetyInfo}
+                                loading={safetyLoading}
+                              />
+                            )}
+                          </div>
+
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                            {/* Primary action button — changes colour based on safety */}
+                            {confirmingThisItem ? (
+                              <>
+                                <span style={{ fontSize: '0.7rem', color: '#fbbf24', alignSelf: 'center' }}>Unsafe — confirm?</span>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    setConfirmCleanWorktreeKey(null);
+                                    await executeWorkflowAction(item.id, item.primaryAction, true);
+                                  }}
+                                  disabled={inFlight}
+                                  style={{ ...amyWarningBtn, opacity: inFlight ? 0.5 : 1 }}
+                                  data-testid={`workflow-queue-primary-${index}`}
+                                >
+                                  {inFlight ? 'Running…' : 'Confirm clean'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmCleanWorktreeKey(null)}
+                                  style={amyGhostBtn}
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => void executeWorkflowAction(item.id, item.primaryAction)}
+                                disabled={inFlight}
+                                style={{
+                                  ...(isAbandonedCleanup && safetyInfo && !isSafe ? amyWarningBtn : amyPrimaryBtn),
+                                  opacity: inFlight ? 0.5 : 1,
+                                }}
+                                data-testid={`workflow-queue-primary-${index}`}
+                              >
+                                {inFlight ? 'Running…' : item.primaryAction.label}
+                              </button>
+                            )}
+                            {(item.secondaryActions ?? []).slice(0, 2).map((secondaryAction, secondaryIndex) => (
+                              <button
+                                key={`${item.id}-secondary-${secondaryAction.kind}-${secondaryIndex}`}
+                                type="button"
+                                onClick={() => void executeWorkflowAction(item.id, secondaryAction)}
+                                disabled={inFlight}
+                                style={{ ...amyGhostBtn, opacity: inFlight ? 0.5 : 1 }}
+                                data-testid={`workflow-queue-secondary-${index}-${secondaryIndex}`}
+                              >
+                                {secondaryAction.label}
+                              </button>
+                            ))}
+                            <button type="button" onClick={() => handleSnoozeWorkflowItem(item.id)} disabled={inFlight} style={{ ...amyGhostBtn, opacity: inFlight ? 0.5 : 1 }} data-testid={`workflow-queue-snooze-${index}`}>
+                              Snooze
                             </button>
-                          ))}
-                          <button
-                            type="button"
-                            onClick={() => handleSnoozeWorkflowItem(item.id)}
-                            disabled={inFlight}
-                            className="text-[11px] px-2 py-1 rounded-md border border-border text-text-primary hover:bg-surface-tertiary disabled:opacity-50"
-                            data-testid={`workflow-queue-snooze-${index}`}
-                          >
-                            Snooze
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDismissWorkflowItem(item.id)}
-                            disabled={inFlight}
-                            className="text-[11px] px-2 py-1 rounded-md border border-border text-text-primary hover:bg-surface-tertiary disabled:opacity-50"
-                            data-testid={`workflow-queue-dismiss-${index}`}
-                          >
-                            Dismiss
-                          </button>
+                            <button type="button" onClick={() => handleDismissWorkflowItem(item.id)} disabled={inFlight} style={{ ...amyGhostBtn, opacity: inFlight ? 0.5 : 1 }} data-testid={`workflow-queue-dismiss-${index}`}>
+                              Dismiss
+                            </button>
+                          </div>
                         </div>
                       </div>
                       {actionError && (
-                        <p
-                          className="mt-2 text-[11px] text-red-500"
-                          data-testid={`workflow-queue-error-${index}`}
-                        >
+                        <p style={{ marginTop: '0.4rem', fontSize: '0.7rem', color: '#f87171' }} data-testid={`workflow-queue-error-${index}`}>
                           {actionError}
                         </p>
                       )}
@@ -1216,119 +1579,76 @@ export function WorkspaceBrowserView(): React.ReactElement {
             )}
           </div>
         )}
-        {sourceRepos.length > 0 && (
-          <div
-            className="mb-4 p-4 border border-border rounded-xl bg-surface-secondary shadow-sm"
-            data-testid="storage-metrics-panel"
-          >
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-sm font-semibold text-text-primary">Disk &amp; Docker usage</h2>
-              <button
-                type="button"
-                onClick={() => setStorageMetricsRefreshNonce((n) => n + 1)}
-                disabled={storageMetricsLoading}
-                className="text-xs px-2.5 py-1 border border-border rounded-md text-text-primary hover:bg-surface-tertiary disabled:opacity-50"
-                data-testid="refresh-storage-metrics"
-              >
+
+        {/* ===== STORAGE TAB ===== */}
+        {activeTab === 'storage' && (
+          <div data-testid="storage-metrics-panel">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+              <h2 style={amyCardTitle}>Disk &amp; Docker usage</h2>
+              <button type="button" onClick={() => setStorageMetricsRefreshNonce((n) => n + 1)} disabled={storageMetricsLoading} style={{ ...amyGhostBtn, opacity: storageMetricsLoading ? 0.5 : 1 }} data-testid="refresh-storage-metrics">
                 {storageMetricsLoading ? 'Refreshing…' : 'Refresh'}
               </button>
             </div>
 
             {storageMetricsLoading && (
-              <p className="text-xs text-text-secondary">Analyzing Docker and local storage usage…</p>
+              <p style={amyCardSubtitle}>Analyzing Docker and local storage usage…</p>
             )}
 
             {!storageMetricsLoading && storageMetricsError && (
-              <p className="text-xs text-red-500" data-testid="storage-metrics-error">
-                {storageMetricsError}
-              </p>
+              <p style={{ color: '#f87171', fontSize: '0.8rem' }} data-testid="storage-metrics-error">{storageMetricsError}</p>
             )}
 
             {!storageMetricsLoading && storageMetrics && (
-              <div className="space-y-3">
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                  <div>
-                    <p className="text-xs font-medium text-text-primary mb-1">Docker</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {/* Docker + Local side-by-side */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div style={amyCard}>
+                    <p style={{ ...amyCardTitle, marginBottom: '0.5rem' }}>Docker</p>
                     {storageMetrics.docker.available ? (
-                      <div className="space-y-1 text-xs text-text-secondary">
-                        <p data-testid="docker-images-metric">
-                          {`${formatGiB(storageMetrics.docker.images.sizeBytes)} images (${storageMetrics.docker.images.reclaimablePercent ?? 0}% of total)`}
-                        </p>
-                        <p data-testid="docker-volumes-metric">
-                          {`${formatGiB(storageMetrics.docker.localVolumes.sizeBytes)} local volumes (${storageMetrics.docker.localVolumes.reclaimablePercent ?? 0}% unused)`}
-                        </p>
-                        <p data-testid="docker-build-cache-metric">
-                          {`${formatGiB(storageMetrics.docker.buildCache.sizeBytes)} build cache`}
-                        </p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                        <p style={amyBodyText} data-testid="docker-images-metric">{`${formatGiB(storageMetrics.docker.images.sizeBytes)} images (${storageMetrics.docker.images.reclaimablePercent ?? 0}% of total)`}</p>
+                        <p style={amyBodyText} data-testid="docker-volumes-metric">{`${formatGiB(storageMetrics.docker.localVolumes.sizeBytes)} local volumes (${storageMetrics.docker.localVolumes.reclaimablePercent ?? 0}% unused)`}</p>
+                        <p style={amyBodyText} data-testid="docker-build-cache-metric">{`${formatGiB(storageMetrics.docker.buildCache.sizeBytes)} build cache`}</p>
                       </div>
                     ) : (
-                      <p className="text-xs text-text-secondary">
-                        Docker metrics unavailable{storageMetrics.docker.error ? `: ${storageMetrics.docker.error}` : ''}
-                      </p>
+                      <p style={amyCardSubtitle}>Docker metrics unavailable{storageMetrics.docker.error ? `: ${storageMetrics.docker.error}` : ''}</p>
                     )}
                   </div>
 
-                  <div>
-                    <p className="text-xs font-medium text-text-primary mb-1">Local storage</p>
-                    <div className="space-y-1 text-xs text-text-secondary">
-                      <p data-testid="local-node-modules-metric">
-                        {`${formatGiB(storageMetrics.local.nodeModulesTotalBytes)} node_modules (${storageMetrics.local.nodeModulesByRepo.length} repos)`}
-                      </p>
-                      <p data-testid="local-python-metric">
-                        {`${formatGiB(storageMetrics.local.pythonEnvsTotalBytes)} python envs (${storageMetrics.local.pythonEnvsByRepo.length} repos)`}
-                      </p>
+                  <div style={amyCard}>
+                    <p style={{ ...amyCardTitle, marginBottom: '0.5rem' }}>Local storage</p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                      <p style={amyBodyText} data-testid="local-node-modules-metric">{`${formatGiB(storageMetrics.local.nodeModulesTotalBytes)} node_modules (${storageMetrics.local.nodeModulesByRepo.length} repos)`}</p>
+                      <p style={amyBodyText} data-testid="local-python-metric">{`${formatGiB(storageMetrics.local.pythonEnvsTotalBytes)} python envs (${storageMetrics.local.pythonEnvsByRepo.length} repos)`}</p>
                     </div>
-
                     {(storageMetrics.local.nodeModulesByRepo.length > 0 || storageMetrics.local.pythonEnvsByRepo.length > 0) && (
-                      <div className="mt-2 text-[11px] text-text-secondary space-y-1">
+                      <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
                         {storageMetrics.local.nodeModulesByRepo.slice(0, 3).map((entry) => (
-                          <p key={`node-${entry.repoPath}`}>
-                            {`node_modules: ${basenameFromPath(entry.repoPath)} — ${formatGiB(entry.bytes)}`}
-                          </p>
+                          <p key={`node-${entry.repoPath}`} style={amyCardSubtitle}>{`node_modules: ${basenameFromPath(entry.repoPath)} — ${formatGiB(entry.bytes)}`}</p>
                         ))}
                         {storageMetrics.local.pythonEnvsByRepo.slice(0, 3).map((entry) => (
-                          <p key={`py-${entry.repoPath}`}>
-                            {`python envs: ${basenameFromPath(entry.repoPath)} — ${formatGiB(entry.bytes)}`}
-                          </p>
+                          <p key={`py-${entry.repoPath}`} style={amyCardSubtitle}>{`python envs: ${basenameFromPath(entry.repoPath)} — ${formatGiB(entry.bytes)}`}</p>
                         ))}
                       </div>
                     )}
                   </div>
                 </div>
+
+                {/* Top priority actions */}
                 {topPriorityReclaimable.length > 0 && (
-                  <div
-                    className="pt-2 border-t border-border"
-                    data-testid="top-priority-actions-section"
-                  >
-                    <p className="text-xs font-medium text-text-primary mb-1">Top priority actions</p>
-                    <div className="space-y-2 text-xs text-text-secondary">
+                  <div style={amyCard} data-testid="top-priority-actions-section">
+                    <p style={{ ...amyCardTitle, marginBottom: '0.5rem' }}>Top priority actions</p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                       {topPriorityReclaimable.map((entry, index) => {
                         const cleanupCommand = buildCleanupCommand(entry.repoPath);
                         return (
-                          <div
-                            key={`top-action-${entry.repoPath}`}
-                            className="flex flex-col gap-1"
-                            data-testid={`top-priority-action-row-${index}`}
-                          >
-                            <p>
-                              {`${index + 1}. ${basenameFromPath(entry.repoPath)} — reclaim ${formatGiB(entry.totalReclaimableBytes)}`}
-                            </p>
-                            <div className="flex gap-2">
-                              <button
-                                type="button"
-                                onClick={() => void handleCopyCleanupCommand(entry.repoPath)}
-                                disabled={!cleanupCommand}
-                                className="text-[11px] px-2 py-1 border border-border rounded-md text-text-primary hover:bg-surface-tertiary disabled:opacity-50"
-                                data-testid={`top-priority-action-copy-${index}`}
-                              >
+                          <div key={`top-action-${entry.repoPath}`} style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }} data-testid={`top-priority-action-row-${index}`}>
+                            <p style={amyBodyText}>{`${index + 1}. ${basenameFromPath(entry.repoPath)} — reclaim ${formatGiB(entry.totalReclaimableBytes)}`}</p>
+                            <div style={{ display: 'flex', gap: '0.4rem' }}>
+                              <button type="button" onClick={() => void handleCopyCleanupCommand(entry.repoPath)} disabled={!cleanupCommand} style={{ ...amyGhostBtn, opacity: !cleanupCommand ? 0.5 : 1 }} data-testid={`top-priority-action-copy-${index}`}>
                                 {copiedCleanupRepoPath === entry.repoPath ? 'Copied' : 'Copy cleanup cmd'}
                               </button>
-                              <button
-                                type="button"
-                                onClick={() => window.api.shell?.openTerminal?.(entry.repoPath)}
-                                className="text-[11px] px-2 py-1 border border-border rounded-md text-text-primary hover:bg-surface-tertiary"
-                                data-testid={`top-priority-action-terminal-${index}`}
-                              >
+                              <button type="button" onClick={() => window.api.shell?.openTerminal?.(entry.repoPath)} style={amyGhostBtn} data-testid={`top-priority-action-terminal-${index}`}>
                                 Open terminal
                               </button>
                             </div>
@@ -1339,18 +1659,13 @@ export function WorkspaceBrowserView(): React.ReactElement {
                   </div>
                 )}
 
+                {/* Reclaimable ranking */}
                 {storageMetrics.local.reclaimableByRepo.length > 0 && (
-                  <div
-                    className="pt-2 border-t border-border"
-                    data-testid="reclaimable-ranking-section"
-                  >
-                    <p className="text-xs font-medium text-text-primary mb-1">Reclaimable space ranking</p>
-                    <div className="space-y-1 text-xs text-text-secondary">
+                  <div style={amyCard} data-testid="reclaimable-ranking-section">
+                    <p style={{ ...amyCardTitle, marginBottom: '0.5rem' }}>Reclaimable space ranking</p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
                       {storageMetrics.local.reclaimableByRepo.slice(0, 5).map((entry, index) => (
-                        <p
-                          key={`reclaim-${entry.repoPath}`}
-                          data-testid={`reclaimable-ranking-row-${index}`}
-                        >
+                        <p key={`reclaim-${entry.repoPath}`} style={amyBodyText} data-testid={`reclaimable-ranking-row-${index}`}>
                           {`${index + 1}. ${basenameFromPath(entry.repoPath)} — ${formatGiB(entry.totalReclaimableBytes)} reclaimable`}
                           {` (node_modules ${formatGiB(entry.nodeModulesBytes)}, python ${formatGiB(entry.pythonEnvsBytes)}, abandoned worktrees ${entry.abandonedWorktreeCount})`}
                         </p>
@@ -1359,15 +1674,13 @@ export function WorkspaceBrowserView(): React.ReactElement {
                   </div>
                 )}
 
-                <div
-                  className="pt-2 border-t border-border"
-                  data-testid="abandoned-worktrees-section"
-                >
-                  <p className="text-xs font-medium text-text-primary mb-1">Abandoned worktrees</p>
+                {/* Abandoned worktrees */}
+                <div style={amyCard} data-testid="abandoned-worktrees-section">
+                  <p style={{ ...amyCardTitle, marginBottom: '0.5rem' }}>Abandoned worktrees</p>
                   {storageMetrics.local.abandonedWorktrees.length === 0 ? (
-                    <p className="text-xs text-text-secondary">No abandoned worktrees detected.</p>
+                    <p style={amyCardSubtitle}>No abandoned worktrees detected.</p>
                   ) : (
-                    <div className="space-y-1 text-xs text-text-secondary">
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                       {storageMetrics.local.abandonedWorktrees.slice(0, 5).map((entry, index) => {
                         const worktreeKey = buildAbandonedWorktreeKey(entry);
                         const cleanupError = abandonedWorktreeErrors[worktreeKey];
@@ -1376,18 +1689,28 @@ export function WorkspaceBrowserView(): React.ReactElement {
                         return (
                           <div
                             key={`abandoned-${entry.worktreePath}-${index}`}
-                            className="space-y-1"
+                            style={{ padding: '0.6rem 0.75rem', borderRadius: '0.75rem', border: '1px solid rgba(30,64,175,0.25)', background: 'rgba(15,23,42,0.5)' }}
                             data-testid={`abandoned-worktree-row-${index}`}
                           >
-                            <p>
+                            <p style={amyBodyText}>
                               {`${basenameFromPath(entry.repoPath)}:${entry.branch} — ${formatAbandonedReason(entry.reason)} • ${entry.exists ? formatDaysOld(entry.daysSinceLastTouched) : 'missing path'} • ${formatGiB(entry.bytes)}`}
                             </p>
-                            <div className="flex gap-2">
+
+                            {/* Safety badges in storage panel */}
+                            {entry.reason === 'stale-no-session' && entry.exists && (
+                              <WorktreeSafetyBadges
+                                worktreePath={entry.worktreePath}
+                                safetyInfo={worktreeSafetyByPath.get(entry.worktreePath)}
+                                loading={worktreeSafetyLoadingPaths.has(entry.worktreePath)}
+                              />
+                            )}
+
+                            <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
                               <button
                                 type="button"
                                 onClick={() => void handleCleanAbandonedWorktree(entry)}
                                 disabled={cleaningInProgress}
-                                className="text-[11px] px-2 py-1 border border-kanvas-blue rounded-md bg-kanvas-blue text-white hover:opacity-90 disabled:opacity-50"
+                                style={{ ...amyPrimaryBtn, opacity: cleaningInProgress ? 0.5 : 1 }}
                                 data-testid={`abandoned-worktree-clean-${index}`}
                               >
                                 {cleaningInProgress ? 'Cleaning…' : 'Clean now'}
@@ -1396,17 +1719,14 @@ export function WorkspaceBrowserView(): React.ReactElement {
                                 type="button"
                                 onClick={() => void handleCopyAbandonedWorktreeCommand(entry)}
                                 disabled={cleaningInProgress}
-                                className="text-[11px] px-2 py-1 border border-border rounded-md text-text-primary hover:bg-surface-tertiary disabled:opacity-50"
+                                style={{ ...amyGhostBtn, opacity: cleaningInProgress ? 0.5 : 1 }}
                                 data-testid={`abandoned-worktree-copy-${index}`}
                               >
                                 {copiedAbandonedWorktreeKey === worktreeKey ? 'Copied' : 'Copy cmd'}
                               </button>
                             </div>
                             {cleanupError && (
-                              <p
-                                className="text-[11px] text-red-500"
-                                data-testid={`abandoned-worktree-error-${index}`}
-                              >
+                              <p style={{ marginTop: '0.3rem', fontSize: '0.7rem', color: '#f87171' }} data-testid={`abandoned-worktree-error-${index}`}>
                                 {cleanupError}
                               </p>
                             )}
@@ -1418,190 +1738,12 @@ export function WorkspaceBrowserView(): React.ReactElement {
                 </div>
               </div>
             )}
-          </div>
-        )}
-        {error && (
-          <div className="mb-3 p-2 bg-red-500/10 border border-red-500/30 rounded text-red-500 text-sm">
-            {error}
-          </div>
-        )}
-        {workspaces.length === 0 && recentReposFallback.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-text-secondary" data-testid="empty-state-no-workspace">
-            <p className="mb-3">No workspaces yet.</p>
-            <button
-              type="button"
-              onClick={() => setShowAdd(true)}
-              className="px-3 py-1 bg-kanvas-blue text-white rounded text-sm"
-            >
-              Add your first workspace
-            </button>
-          </div>
-        )}
-        {showingFallback && (
-          <div
-            className="mb-3 p-3 border border-border rounded-lg bg-surface-secondary"
-            data-testid="recent-repos-banner"
-          >
-            <p className="text-sm text-text-primary mb-2">
-              Showing {recentReposFallback.length} repos from your recent sessions.
-              Add a workspace to enable folder scanning + filesystem watching.
-            </p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setShowAdd(true)}
-                className="text-sm px-3 py-1 bg-kanvas-blue text-white rounded"
-              >
-                + Add local folder
-              </button>
-              {fallbackParent && (
-                <button
-                  type="button"
-                  onClick={() => void handlePinFallbackParent()}
-                  className="text-sm px-3 py-1 border border-border rounded text-text-primary hover:bg-surface-tertiary"
-                  data-testid="pin-parent-button"
-                  title={`Create a workspace at ${fallbackParent}`}
-                >
-                  Pin {fallbackParent} as workspace
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-        {workspaces.length > 0 && filtered.length === 0 && !loading && (
-          <p className="text-text-secondary text-sm" data-testid="empty-state-no-repos">
-            {repos.length === 0
-              ? 'No git repositories found in this workspace.'
-              : 'No repos match your filter.'}
-          </p>
-        )}
-        {filtered.length > 0 && (
-          <div
-            className="border border-border rounded-xl bg-surface-secondary overflow-hidden shadow-sm"
-            data-testid="repo-list"
-          >
-            <div className="grid grid-cols-[minmax(220px,2fr)_minmax(130px,0.9fr)_minmax(90px,0.7fr)_minmax(150px,0.9fr)_minmax(220px,1fr)_auto] gap-2 px-3 py-2 border-b border-border text-[10px] font-semibold uppercase tracking-wide text-text-secondary bg-surface">
-              <span>Repository</span>
-              <span>Priority</span>
-              <span>Health</span>
-              <span>Sync</span>
-              <span>Local state</span>
-              <span>Actions</span>
-            </div>
-            <div className="divide-y divide-border">
-              {filtered.map((repo, index) => {
-                const status = statusByPath[repo.path] ?? null;
-                const branch = status?.currentBranch || 'unknown';
-                const ahead = status?.ahead ?? 0;
-                const behind = status?.behind ?? 0;
-                const staged = status?.stagedCount ?? 0;
-                const modified = status?.modifiedCount ?? 0;
-                const untracked = status?.untrackedCount ?? 0;
-                const stashCount = status?.stashCount ?? 0;
-                const worktreeCount = status?.worktreeCount ?? 0;
-                const activeSessions = status?.activeSessionCount ?? 0;
-                const worktreeModeLabel = status?.worktreeMode === 'in-place' ? 'In-place mode' : 'Worktree mode';
-                const healthSnapshot = healthByRepoPath.get(repo.path) ?? {
-                  healthScore: 100,
-                  riskPoints: 0,
-                  priority: 'healthy' as RepoPriorityLevel,
-                };
-                const priorityLabel = formatRepoPriorityLabel(healthSnapshot.priority);
-                const priorityBadgeClassName = repoPriorityBadgeClasses(healthSnapshot.priority);
-                const healthHint = healthSnapshot.healthScore >= 80
-                  ? 'Stable'
-                  : healthSnapshot.healthScore >= 60
-                    ? 'Watch'
-                    : 'Needs focus';
 
-                return (
-                  <div
-                    key={repo.path}
-                    className={`grid grid-cols-[minmax(220px,2fr)_minmax(130px,0.9fr)_minmax(90px,0.7fr)_minmax(150px,0.9fr)_minmax(220px,1fr)_auto] gap-2 px-3 py-3 items-start transition-colors hover:bg-surface-tertiary ${index % 2 === 0 ? 'bg-surface' : 'bg-surface-secondary'}`}
-                    data-testid="repo-list-row"
-                  >
-                    <div className="min-w-0">
-                      <button
-                        type="button"
-                        onClick={() => openRepoDetail(repo.path)}
-                        className="text-sm font-semibold text-text-primary hover:underline text-left truncate"
-                        data-testid={`repo-row-open-${index}`}
-                      >
-                        {repo.name}
-                      </button>
-                      <p className="text-xs text-text-secondary truncate">{repo.path}</p>
-                      <div className="mt-1 flex flex-wrap gap-1.5">
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded border border-border text-[10px] text-text-secondary">
-                          {`Branch ${branch}`}
-                        </span>
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded border border-border text-[10px] text-text-secondary">
-                          {worktreeModeLabel}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="text-xs text-text-secondary space-y-1" data-testid="repo-row-priority">
-                      <span
-                        className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium ${priorityBadgeClassName}`}
-                        data-testid="repo-row-priority-badge"
-                      >
-                        {priorityLabel}
-                      </span>
-                      <p className="text-[11px]" data-testid="repo-row-risk">{`Risk ${healthSnapshot.riskPoints}`}</p>
-                    </div>
-                    <div className="text-xs text-text-secondary space-y-1" data-testid="repo-row-health">
-                      <p className="text-text-primary font-semibold" data-testid="repo-row-health-score">
-                        {healthSnapshot.healthScore}
-                      </p>
-                      <p className="text-[11px]">{healthHint}</p>
-                    </div>
-
-                    <div className="text-xs text-text-secondary space-y-1">
-                      <p className="text-text-primary font-medium" data-testid="repo-row-sync">{`↓${behind} / ↑${ahead}`}</p>
-                      <p className="text-[11px]">{`Stashes ${stashCount} • Worktrees ${worktreeCount}`}</p>
-                    </div>
-                    <div className="text-xs text-text-secondary space-y-1">
-                      <p className="text-[11px]" data-testid="repo-row-changes">{`Staged ${staged} • Modified ${modified} • Untracked ${untracked}`}</p>
-                      <p className="text-[11px]" data-testid="repo-row-sessions">{`Sessions ${activeSessions}`}</p>
-                    </div>
-
-                    <div className="flex flex-wrap gap-1 justify-end">
-                      <button
-                        type="button"
-                        onClick={() => openRepoDetail(repo.path)}
-                        className="text-[11px] px-2 py-1 border border-kanvas-blue rounded-md bg-kanvas-blue text-white hover:opacity-90"
-                        data-testid={`repo-row-detail-${index}`}
-                      >
-                        Open
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => window.api.shell?.openVSCode?.(repo.path)}
-                        className="text-[11px] px-2 py-1 border border-border rounded-md text-text-primary hover:bg-surface-tertiary"
-                        data-testid={`repo-row-ide-${index}`}
-                      >
-                        IDE
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => window.api.shell?.openTerminal?.(repo.path)}
-                        className="text-[11px] px-2 py-1 border border-border rounded-md text-text-primary hover:bg-surface-tertiary"
-                        data-testid={`repo-row-terminal-${index}`}
-                      >
-                        Terminal
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openCreateAgentWizardForRepo(repo.path)}
-                        className="text-[11px] px-2 py-1 border border-border rounded-md text-text-primary hover:bg-surface-tertiary"
-                        data-testid={`repo-row-session-${index}`}
-                      >
-                        New session
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            {!storageMetricsLoading && !storageMetrics && sourceRepos.length === 0 && (
+              <div style={{ ...amyCard, textAlign: 'center' }}>
+                <p style={amyCardSubtitle}>Add a workspace to see storage metrics.</p>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1609,9 +1751,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
       <AddWorkspaceDialog
         open={showAdd}
         onClose={() => setShowAdd(false)}
-        onAdded={() => {
-          void refreshWorkspaces();
-        }}
+        onAdded={() => { void refreshWorkspaces(); }}
       />
     </div>
   );

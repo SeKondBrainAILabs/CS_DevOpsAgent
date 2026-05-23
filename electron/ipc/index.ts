@@ -82,6 +82,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.git.listBranchesForRepo(repoPath);
   });
 
+  ipcMain.handle(IPC.GIT_WORKTREE_SAFETY_INFO, async (_, worktreePath: string) => {
+    return services.git.getWorktreeSafetyInfo(worktreePath);
+  });
+
   // ==========================================================================
   // WATCHER HANDLERS
   // ==========================================================================

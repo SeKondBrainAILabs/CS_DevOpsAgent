@@ -37,6 +37,7 @@ import type {
   RepoVersionSettings,
   AppUpdateInfo,
   StorageMetricsOverview,
+  WorktreeSafetyInfo,
 } from '../shared/types';
 import type {
   AgentInfo,
@@ -261,6 +262,9 @@ const api = {
       ipcRenderer.on(IPC.GIT_STATUS_CHANGED, handler);
       return () => ipcRenderer.removeListener(IPC.GIT_STATUS_CHANGED, handler);
     },
+
+    getWorktreeSafetyInfo: (worktreePath: string): Promise<IpcResult<WorktreeSafetyInfo>> =>
+      ipcRenderer.invoke(IPC.GIT_WORKTREE_SAFETY_INFO, worktreePath),
   },
 
   // ==========================================================================

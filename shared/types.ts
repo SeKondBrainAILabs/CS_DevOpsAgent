@@ -526,6 +526,18 @@ export interface AppUpdateInfo {
 }
 
 // =============================================================================
+// WORKTREE SAFETY INFO
+// =============================================================================
+
+export interface WorktreeSafetyInfo {
+  worktreePath: string;
+  hasUncommittedChanges: boolean;
+  uncommittedFiles: Array<{ path: string; status: string }>;
+  unmergedCommitCount: number;   // commits in worktree HEAD not in main or development
+  mergedIntoBranches: string[];  // which of ['main','development'] contain the HEAD
+}
+
+// =============================================================================
 // IPC RESULT TYPES
 // =============================================================================
 

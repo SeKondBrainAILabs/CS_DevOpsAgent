@@ -220,6 +220,7 @@ export const IPC = {
   GIT_ANALYZE_STALE_BRANCHES: 'git:analyze-stale-branches',
   GIT_ARCHIVE_BRANCH: 'git:archive-branch',
   GIT_GET_COMMIT_DIFF: 'git:get-commit-diff',
+  GIT_WORKTREE_SAFETY_INFO: 'git:worktree-safety-info',
 
   // ==========================================================================
   // REBASE WATCHER CHANNELS
@@ -512,6 +513,7 @@ export const REQUEST_CHANNELS = [
   IPC.GIT_REMOVE_WORKTREE_PATH,
   IPC.GIT_ANALYZE_STALE_BRANCHES,
   IPC.GIT_ARCHIVE_BRANCH,
+  IPC.GIT_WORKTREE_SAFETY_INFO,
   IPC.WATCHER_START,
   IPC.WATCHER_STOP,
   IPC.WATCHER_STATUS,
