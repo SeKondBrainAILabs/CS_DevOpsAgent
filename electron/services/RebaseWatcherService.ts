@@ -130,6 +130,9 @@ export class RebaseWatcherService extends BaseService {
     const state = this.watchedSessions.get(sessionId);
     if (!state || state.isPaused || state.isRebasing) return;
 
+    // First update from the worker establishes the baseline — don't treat
+    // pre-existing behind count as "new commits" requiring an immediate rebase.
+    const isInitialUpdate = state.lastChecked === null;
     state.lastChecked = new Date();
     const previousBehind = state.behindCount;
     state.behindCount = behind;
@@ -138,7 +141,12 @@ export class RebaseWatcherService extends BaseService {
     // Emit updated status to renderer
     this.emitStatus(sessionId);
 
-    // Detect new commits
+    if (isInitialUpdate) {
+      console.log(`[RebaseWatcher] Initial status for ${sessionId}: ${behind} behind (baseline recorded, no rebase triggered)`);
+      return;
+    }
+
+    // Detect new commits (only after we have a baseline)
     const hasNewCommits = behind > 0 && behind > previousBehind;
     if (hasNewCommits) {
       console.log(`[RebaseWatcher] Worker detected ${behind} commits behind for ${sessionId}`);
@@ -397,6 +405,9 @@ export class RebaseWatcherService extends BaseService {
     // Fetch and check remote status
     const status = await this.checkRemoteStatus(config.repoPath, config.baseBranch);
 
+    // First poll establishes the baseline — don't treat pre-existing behind count
+    // as "new commits" that need an immediate rebase on startup.
+    const isInitialPoll = state.lastRemoteCommit === null && !forceRebase;
     state.lastChecked = new Date();
     const previousBehind = state.behindCount;
     state.behindCount = status.behind;
@@ -405,7 +416,13 @@ export class RebaseWatcherService extends BaseService {
     // Emit updated status
     this.emitStatus(config.sessionId);
 
-    // Check if there are new commits
+    if (isInitialPoll) {
+      state.lastRemoteCommit = status.lastCommit;
+      console.log(`[RebaseWatcher] Initial poll for ${config.sessionId}: ${status.behind} behind (baseline recorded, no rebase triggered)`);
+      return { hasChanges: false };
+    }
+
+    // Check if there are new commits (only after baseline is established)
     const hasNewCommits = status.behind > 0 && (
       forceRebase ||
       state.lastRemoteCommit !== status.lastCommit ||
