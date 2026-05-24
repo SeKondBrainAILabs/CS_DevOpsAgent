@@ -13,6 +13,7 @@ interface NewSessionWizardProps {
 
 const agentTypes: { value: AgentType; label: string }[] = [
   { value: 'claude', label: 'Claude' },
+  { value: 'codex', label: 'Codex' },
   { value: 'cursor', label: 'Cursor' },
   { value: 'copilot', label: 'GitHub Copilot' },
   { value: 'cline', label: 'Cline' },
@@ -107,10 +108,10 @@ export function NewSessionWizard({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-surface-secondary border border-border rounded-lg w-full max-w-md animate-slide-up">
+    <div className="fixed inset-0 bg-black/15 backdrop-blur-[2px] flex items-center justify-center z-50">
+      <div className="bg-white border border-[rgba(0,0,0,0.10)] rounded-[22px] shadow-[0_4px_6px_rgba(0,0,0,0.08)] w-full max-w-md animate-slide-up">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border">
+        <div className="flex items-center justify-between p-4 border-b border-[rgba(0,0,0,0.10)]">
           <h2 className="text-lg font-semibold text-gray-100">New Session</h2>
           <button
             onClick={onClose}
@@ -215,7 +216,7 @@ export function NewSessionWizard({
             <button
               type="button"
               onClick={onClose}
-              className="btn-secondary flex-1"
+              className="kb-btn flex-1"
               disabled={isCreating}
             >
               Cancel

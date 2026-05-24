@@ -19,6 +19,11 @@ interface CreateAgentWizardProps {
    * "New session" button on RepoStatusCard.
    */
   initialRepoPath?: string | null;
+  /**
+   * Optional task description to pre-fill. Used by "Resolve with AI" in the
+   * workspace view to pre-populate the task with a description of the issues.
+   */
+  initialTask?: string | null;
 }
 
 type WizardStep = 'repo' | 'setup' | 'agent' | 'multi-repo' | 'workflow' | 'prompt' | 'complete';
@@ -26,6 +31,7 @@ type WizardStep = 'repo' | 'setup' | 'agent' | 'multi-repo' | 'workflow' | 'prom
 type FeatureOrgStructure = 'feature-folders' | 'flat' | 'migrate';
 
 interface AgentSettings {
+  taskDescription: string;
   branchName: string;
   baseBranch: string;
   rebaseFrequency: RebaseFrequency;
@@ -50,7 +56,7 @@ Key things to remember after context compaction:
 - Check .file-coordination/active-edits/ for file claims
 - Write commits to .devops-commit-<session>.msg`;
 
-export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizardProps): React.ReactElement {
+export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: CreateAgentWizardProps): React.ReactElement {
   const [currentStep, setCurrentStep] = useState<WizardStep>(
     initialRepoPath ? 'setup' : 'repo'
   );
@@ -86,6 +92,7 @@ export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizar
   }, [initialRepoPath]);
   const [agentType, setAgentType] = useState<AgentType | null>(null);
   const [settings, setSettings] = useState<AgentSettings>({
+    taskDescription: initialTask ?? '',
     branchName: '',
     baseBranch: 'main',
     rebaseFrequency: 'daily',
@@ -100,6 +107,9 @@ export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizar
   // First-run setup
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
   const [featureOrgChoice, setFeatureOrgChoice] = useState<FeatureOrgStructure>('feature-folders');
+
+  // Custom agent MCP opt-in
+  const [customMcpEnabled, setCustomMcpEnabled] = useState(false);
 
   // Multi-repo settings
   const [multiRepoEnabled, setMultiRepoEnabled] = useState(false);
@@ -250,7 +260,7 @@ export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizar
       const config: AgentInstanceConfig = {
         repoPath,
         agentType,
-        taskDescription: settings.branchName || `${agentType} session`,
+        taskDescription: settings.taskDescription || settings.branchName || `${agentType} session`,
         branchName: settings.branchName,
         baseBranch: settings.baseBranch,
         useWorktree: false,
@@ -260,6 +270,7 @@ export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizar
         systemPrompt: settings.systemPrompt,
         contextPreservation: settings.contextPreservation,
         multiRepo,
+        customMcpEnabled: agentType === 'custom' ? customMcpEnabled : undefined,
       };
 
       const result = await window.api?.instance?.create(config);
@@ -307,7 +318,7 @@ export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizar
       {/* Modal */}
       <div className="modal w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-border flex items-center justify-between">
+        <div className="px-6 py-4 border-b border-[rgba(0,0,0,0.10)] flex items-center justify-between">
           <div className="flex items-center gap-3">
             <KanvasLogo size="lg" />
             <div>
@@ -323,13 +334,13 @@ export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizar
         </div>
 
         {/* Progress bar */}
-        <div className="px-6 py-2 bg-surface-secondary border-b border-border">
+        <div className="px-6 py-2 bg-surface-secondary border-b border-[rgba(0,0,0,0.10)]">
           <div className="flex gap-2">
             {Array.from({ length: totalSteps }, (_, idx) => (
               <div
                 key={idx}
                 className={`h-1 flex-1 rounded-full transition-colors ${
-                  idx < stepNumber ? 'bg-kanvas-blue' : 'bg-border'
+                  idx < stepNumber ? 'bg-black' : 'bg-[rgba(0,0,0,0.10)]'
                 }`}
               />
             ))}
@@ -339,7 +350,7 @@ export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizar
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
           {error && (
-            <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">
+            <div className="mb-4 p-3 rounded-[14px] bg-red-50 border border-red-200 text-red-700 text-sm">
               {error}
             </div>
           )}
@@ -422,7 +433,7 @@ export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizar
 
               {/* House Rules Preview */}
               {featureOrgChoice === 'feature-folders' && (
-                <div className="mt-4 p-4 rounded-xl border border-border bg-surface-secondary">
+                <div className="mt-4 p-4 rounded-[14px] border border-[rgba(0,0,0,0.10)] bg-surface-secondary">
                   <p className="text-sm font-medium text-text-primary mb-2">This will add to house rules:</p>
                   <div className="text-xs text-text-secondary font-mono space-y-1">
                     <p>• Features go in src/features/{'{name}'}/ folders</p>
@@ -452,6 +463,8 @@ export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizar
                 <AgentTypeSelector
                   selectedType={agentType}
                   onSelect={handleAgentSelect}
+                  customMcpEnabled={customMcpEnabled}
+                  onCustomMcpChange={setCustomMcpEnabled}
                 />
               </div>
             </div>
@@ -510,15 +523,15 @@ export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizar
                             return (
                               <label
                                 key={sub.path}
-                                className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
-                                  isSelected ? 'border-kanvas-blue bg-kanvas-blue/5' : 'border-border hover:border-text-secondary'
+                                className={`flex items-center gap-3 p-3 rounded-[10px] border cursor-pointer transition-all ${
+                                  isSelected ? 'border-black bg-[rgba(0,0,0,0.04)]' : 'border-[rgba(0,0,0,0.10)] hover:border-[rgba(0,0,0,0.25)]'
                                 }`}
                               >
                                 <input
                                   type="checkbox"
                                   checked={isSelected}
                                   onChange={() => toggleSubmoduleSelection(sub)}
-                                  className="w-4 h-4 rounded border-border text-kanvas-blue"
+                                  className="w-4 h-4 rounded border-[rgba(0,0,0,0.20)] text-black"
                                 />
                                 <div className="flex-1 min-w-0">
                                   <span className="font-medium text-text-primary text-sm">{sub.name}</span>
@@ -532,7 +545,7 @@ export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizar
                     )}
 
                     {detectedSubmodules.length === 0 && (
-                      <div className="p-4 rounded-xl border border-border bg-surface-secondary">
+                      <div className="p-4 rounded-[14px] border border-[rgba(0,0,0,0.10)] bg-surface-secondary">
                         <p className="text-sm text-text-secondary">
                           No submodules detected in this repository.
                           You can add external repositories below.
@@ -570,7 +583,7 @@ export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizar
 
                     {/* Branch naming info */}
                     {selectedSecondaryRepos.length > 0 && (
-                      <div className="p-4 rounded-xl border border-border bg-surface-secondary">
+                      <div className="p-4 rounded-[14px] border border-[rgba(0,0,0,0.10)] bg-surface-secondary">
                         <p className="text-sm text-text-secondary">
                           Secondary repos will use branch: <code className="text-kanvas-blue font-mono">
                             From_{repoValidation?.repoName || 'Repo'}_{new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' }).replace(/\//g, '')}
@@ -599,6 +612,19 @@ export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizar
               </ConversationBubble>
 
               <div className="space-y-4 mt-4">
+                {/* Task Description */}
+                <SettingCard
+                  title="Task"
+                  description="Describe what this agent should accomplish"
+                >
+                  <textarea
+                    value={settings.taskDescription}
+                    onChange={(e) => setSettings(s => ({ ...s, taskDescription: e.target.value }))}
+                    className="textarea h-20"
+                    placeholder="e.g. Resolve uncommitted changes: commit staged files, stash modified work, clean up repo state"
+                  />
+                </SettingCard>
+
                 {/* Branch Name */}
                 <SettingCard
                   title="Working Branch"
@@ -721,7 +747,7 @@ export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizar
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-border flex items-center justify-between bg-surface">
+        <div className="px-6 py-4 border-t border-[rgba(0,0,0,0.10)] flex items-center justify-between bg-surface">
           <div>
             {currentStep !== 'repo' && (
               <button
@@ -827,7 +853,7 @@ export function CreateAgentWizard({ onClose, initialRepoPath }: CreateAgentWizar
 function ConversationBubble({ children }: { children: React.ReactNode }): React.ReactElement {
   return (
     <div className="animate-fade-in">
-      <div className="p-4 rounded-2xl rounded-tl-md bg-surface-secondary text-text-primary">
+      <div className="p-4 rounded-[22px] rounded-tl-md bg-surface-secondary text-text-primary">
         {children}
       </div>
     </div>
@@ -863,7 +889,7 @@ function SettingCard({
   children: React.ReactNode;
 }): React.ReactElement {
   return (
-    <div className="p-4 rounded-xl border border-border bg-surface">
+    <div className="p-4 rounded-[14px] border border-[rgba(0,0,0,0.10)] bg-surface">
       <h4 className="font-medium text-text-primary mb-1">{title}</h4>
       <p className="text-sm text-text-secondary mb-3">{description}</p>
       {children}
@@ -888,10 +914,10 @@ function OptionButton({
       type="button"
       onClick={onClick}
       className={`
-        px-4 py-2 rounded-lg text-sm font-medium transition-all
+        px-4 py-2 rounded-full text-sm font-medium transition-all
         ${selected
-          ? 'bg-kanvas-blue text-white'
-          : 'bg-surface-secondary text-text-primary hover:bg-surface-tertiary border border-border'
+          ? 'bg-black text-white'
+          : 'bg-surface-secondary text-text-primary hover:bg-surface-tertiary border border-[rgba(0,0,0,0.10)]'
         }
       `}
     >
@@ -926,24 +952,24 @@ function SetupOption({
       onClick={onClick}
       disabled={comingSoon}
       className={`
-        w-full p-4 rounded-xl border-2 text-left transition-all
+        w-full p-4 rounded-[14px] border-2 text-left transition-all
         ${selected
-          ? 'border-kanvas-blue bg-kanvas-blue/5'
-          : 'border-border hover:border-text-secondary bg-surface'
+          ? 'border-black bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]'
+          : 'border-[rgba(0,0,0,0.10)] hover:border-[rgba(0,0,0,0.25)] bg-surface'
         }
         ${comingSoon ? 'opacity-50 cursor-not-allowed' : ''}
       `}
     >
       <div className="flex items-start gap-3">
         <div className={`
-          w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0
-          ${selected ? 'bg-kanvas-blue text-white' : 'bg-surface-secondary text-text-secondary'}
+          w-10 h-10 rounded-[10px] flex items-center justify-center flex-shrink-0
+          ${selected ? 'bg-black text-white' : 'bg-surface-secondary text-text-secondary'}
         `}>
           {icon}
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className={`font-medium ${selected ? 'text-kanvas-blue' : 'text-text-primary'}`}>
+            <span className={`font-medium ${selected ? 'text-text-primary' : 'text-text-primary'}`}>
               {title}
             </span>
             {recommended && (
@@ -961,7 +987,7 @@ function SetupOption({
         </div>
         <div className={`
           w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0
-          ${selected ? 'border-kanvas-blue bg-kanvas-blue' : 'border-border'}
+          ${selected ? 'border-black bg-black' : 'border-[rgba(0,0,0,0.20)]'}
         `}>
           {selected && (
             <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>

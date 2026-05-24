@@ -36,6 +36,8 @@ import type {
   RepoVersionInfo,
   RepoVersionSettings,
   AppUpdateInfo,
+  StorageMetricsOverview,
+  WorktreeSafetyInfo,
 } from '../shared/types';
 import type {
   AgentInfo,
@@ -139,6 +141,12 @@ const api = {
     /** Worktree list keyed on repoPath (Day 2). */
     listWorktrees: (repoPath: string): Promise<IpcResult<Array<{ path: string; branch: string; head: string; bare: boolean }>>> =>
       ipcRenderer.invoke(IPC.GIT_LIST_WORKTREES, repoPath),
+
+    pruneWorktrees: (repoPath: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.GIT_PRUNE_WORKTREES, repoPath),
+
+    removeWorktreeByPath: (repoPath: string, worktreePath: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.GIT_REMOVE_WORKTREE_PATH, repoPath, worktreePath),
 
     getChangedFiles: (repoPath: string, baseBranch?: string): Promise<IpcResult<Array<{
       path: string;
@@ -254,6 +262,9 @@ const api = {
       ipcRenderer.on(IPC.GIT_STATUS_CHANGED, handler);
       return () => ipcRenderer.removeListener(IPC.GIT_STATUS_CHANGED, handler);
     },
+
+    getWorktreeSafetyInfo: (worktreePath: string): Promise<IpcResult<WorktreeSafetyInfo>> =>
+      ipcRenderer.invoke(IPC.GIT_WORKTREE_SAFETY_INFO, worktreePath),
   },
 
   // ==========================================================================
@@ -839,6 +850,9 @@ const api = {
       removedActivityFiles: number;
     }>> =>
       ipcRenderer.invoke(IPC.CLEANUP_KANVAS, repoPath),
+
+    getStorageMetrics: (repoPaths: string[]): Promise<IpcResult<StorageMetricsOverview>> =>
+      ipcRenderer.invoke(IPC.CLEANUP_GET_STORAGE_METRICS, repoPaths),
 
     onProgress: (callback: (data: { message: string; result: unknown }) => void): (() => void) => {
       const handler = (_event: IpcRendererEvent, data: { message: string; result: unknown }) => callback(data);
@@ -1805,6 +1819,9 @@ const api = {
 
     copyPath: (pathToCopy: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.SHELL_COPY_PATH, pathToCopy),
+
+    execGitSafe: (repoPath: string, command: string): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number }> =>
+      ipcRenderer.invoke(IPC.SHELL_EXEC_GIT_SAFE, repoPath, command),
   },
 
   // ==========================================================================

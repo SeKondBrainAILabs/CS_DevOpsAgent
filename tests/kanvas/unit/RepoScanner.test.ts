@@ -36,9 +36,8 @@ describe('scanForRepos (A2)', () => {
     expect(found).toEqual([{ path: '/work', name: 'work', depth: 0 }]);
   });
 
-  it('does not recurse into a found repo', async () => {
-    // /work is a repo. /work/sub is also a repo — but we should NOT find it,
-    // because we stop descent once a repo is identified.
+  it('continues scanning inside a found repo to discover nested repos/submodules', async () => {
+    // /work is a repo. /work/sub is also a repo — both should be found.
     const found = await scanForRepos({
       root: '/work',
       maxDepth: 5,
@@ -48,7 +47,7 @@ describe('scanForRepos (A2)', () => {
         '/work/sub': [file('.git')],
       }),
     });
-    expect(found.map((r) => r.path)).toEqual(['/work']);
+    expect(found.map((r) => r.path)).toEqual(['/work', '/work/sub']);
   });
 
   it('respects maxDepth (default 2 in A1)', async () => {

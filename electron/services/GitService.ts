@@ -17,6 +17,7 @@ import type {
   IpcResult,
   RepoStatus,
   RepoBranchRow,
+  WorktreeSafetyInfo,
 } from '../../shared/types';
 import {
   countNonBlankLines,
@@ -850,6 +851,32 @@ export class GitService extends BaseService {
     return this.wrap(async () => {
       await this.git(['worktree', 'prune'], repoPath);
     }, 'GIT_PRUNE_WORKTREES_FAILED');
+  }
+
+  /**
+   * Remove a specific worktree by path (repo-path based cleanup flow).
+   * If the path no longer exists on disk, prune stale references instead.
+   */
+  async removeWorktreeByPath(repoPath: string, worktreePath: string): Promise<IpcResult<void>> {
+    return this.wrap(async () => {
+      const resolvedRepoPath = path.resolve(repoPath);
+      const resolvedWorktreePath = path.resolve(worktreePath);
+      if (resolvedRepoPath === resolvedWorktreePath) {
+        throw new Error('Refusing to remove primary worktree');
+      }
+
+      if (existsSync(worktreePath)) {
+        await this.git(['worktree', 'remove', worktreePath, '--force'], repoPath);
+      }
+
+      await this.git(['worktree', 'prune'], repoPath);
+
+      for (const [key, value] of worktreePaths.entries()) {
+        if (path.resolve(value.worktreePath) === resolvedWorktreePath) {
+          worktreePaths.delete(key);
+        }
+      }
+    }, 'GIT_REMOVE_WORKTREE_BY_PATH_FAILED');
   }
 
   /**
@@ -1818,5 +1845,50 @@ export class GitService extends BaseService {
 
       return { commit, files };
     }, 'GIT_GET_COMMIT_DIFF_FAILED');
+  }
+
+  /**
+   * Get safety info for an abandoned worktree:
+   * - uncommitted changes (git status --porcelain)
+   * - unmerged commits relative to main and development
+   */
+  async getWorktreeSafetyInfo(worktreePath: string): Promise<IpcResult<WorktreeSafetyInfo>> {
+    return this.wrap(async () => {
+      const safe = async <T>(p: Promise<T>, fallback: T): Promise<T> => {
+        try { return await p; } catch { return fallback; }
+      };
+
+      const [statusOut, mainLogOut, devLogOut] = await Promise.all([
+        safe(this.git(['status', '--porcelain'], worktreePath), ''),
+        safe(this.git(['log', 'main..HEAD', '--oneline'], worktreePath), ''),
+        safe(this.git(['log', 'development..HEAD', '--oneline'], worktreePath), ''),
+      ]);
+
+      const uncommittedFiles = statusOut
+        .split('\n')
+        .filter((line) => line.trim().length > 0)
+        .map((line) => ({
+          status: line.slice(0, 2).trim(),
+          path: line.slice(3).trim(),
+        }));
+
+      const mainCommits = mainLogOut.split('\n').filter((l) => l.trim().length > 0);
+      const devCommits = devLogOut.split('\n').filter((l) => l.trim().length > 0);
+
+      // Total unmerged = max of the two (they share commits that are not in either)
+      const unmergedCommitCount = Math.max(mainCommits.length, devCommits.length);
+
+      const mergedIntoBranches: string[] = [];
+      if (mainCommits.length === 0) mergedIntoBranches.push('main');
+      if (devCommits.length === 0) mergedIntoBranches.push('development');
+
+      return {
+        worktreePath,
+        hasUncommittedChanges: uncommittedFiles.length > 0,
+        uncommittedFiles,
+        unmergedCommitCount,
+        mergedIntoBranches,
+      } satisfies WorktreeSafetyInfo;
+    }, 'GIT_WORKTREE_SAFETY_INFO_FAILED');
   }
 }

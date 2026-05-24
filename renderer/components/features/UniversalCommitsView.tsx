@@ -251,7 +251,7 @@ export function UniversalCommitsView(): React.ReactElement {
         </div>
         <div className="space-y-4">
           {[1, 2, 3].map(i => (
-            <div key={i} className="p-4 border border-border rounded-xl">
+            <div key={i} className="p-4 border border-[rgba(0,0,0,0.10)] rounded-[14px]">
               <div className="flex items-center gap-3">
                 <div className="h-4 w-16 bg-surface-secondary rounded animate-pulse" />
                 <div className="h-4 flex-1 bg-surface-secondary rounded animate-pulse" />
@@ -266,12 +266,12 @@ export function UniversalCommitsView(): React.ReactElement {
   return (
     <div className="h-full bg-surface flex flex-col">
       {/* Header */}
-      <div className="p-6 border-b border-border">
+      <div className="p-6 border-b border-[rgba(0,0,0,0.10)]">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold text-text-primary">All Commits</h2>
           <button
             onClick={loadAllCommits}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-text-secondary hover:text-kanvas-blue hover:bg-surface-secondary rounded-lg transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-text-secondary hover:text-kanvas-blue hover:bg-surface-secondary rounded-full transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -287,7 +287,7 @@ export function UniversalCommitsView(): React.ReactElement {
           <select
             value={selectedSession}
             onChange={(e) => setSelectedSession(e.target.value)}
-            className="px-3 py-1.5 text-sm border border-border rounded-lg bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-kanvas-blue"
+            className="px-3 py-1.5 text-sm border border-[rgba(0,0,0,0.10)] rounded-lg bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-kanvas-blue"
           >
             <option value="all">All Sessions</option>
             {sessions.map(s => (
@@ -301,7 +301,7 @@ export function UniversalCommitsView(): React.ReactElement {
           <select
             value={selectedRepo}
             onChange={(e) => setSelectedRepo(e.target.value)}
-            className="px-3 py-1.5 text-sm border border-border rounded-lg bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-kanvas-blue"
+            className="px-3 py-1.5 text-sm border border-[rgba(0,0,0,0.10)] rounded-lg bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-kanvas-blue"
           >
             <option value="all">All Repos</option>
             {repos.map(repo => (
@@ -315,7 +315,7 @@ export function UniversalCommitsView(): React.ReactElement {
           <select
             value={timeFilter}
             onChange={(e) => setTimeFilter(e.target.value as TimeFilter)}
-            className="px-3 py-1.5 text-sm border border-border rounded-lg bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-kanvas-blue"
+            className="px-3 py-1.5 text-sm border border-[rgba(0,0,0,0.10)] rounded-lg bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-kanvas-blue"
           >
             <option value="all">All Time</option>
             <option value="24h">Last 24 Hours</option>
@@ -335,7 +335,7 @@ export function UniversalCommitsView(): React.ReactElement {
       {/* Commit list */}
       <div className="flex-1 overflow-y-auto p-6">
         {error ? (
-          <div className="p-4 bg-red-50 text-red-700 rounded-xl text-sm">
+          <div className="p-4 bg-red-50 text-red-700 rounded-[14px] text-sm">
             {error}
           </div>
         ) : filteredCommits.length === 0 ? (
@@ -405,7 +405,7 @@ function UniversalCommitCard({
   };
 
   return (
-    <div className="border border-border rounded-xl overflow-hidden bg-surface">
+    <div className="border border-[rgba(0,0,0,0.10)] rounded-[14px] overflow-hidden bg-surface">
       {/* Commit header */}
       <div
         className="p-3 cursor-pointer hover:bg-surface-secondary transition-colors"
@@ -458,7 +458,7 @@ function UniversalCommitCard({
 
       {/* Expanded diff */}
       {commit.expanded && (
-        <div className="border-t border-border bg-surface-secondary">
+        <div className="border-t border-[rgba(0,0,0,0.10)] bg-surface-secondary">
           {commit.loadingDiff ? (
             <div className="p-4 flex items-center justify-center">
               <svg className="w-5 h-5 text-kanvas-blue animate-spin" fill="none" viewBox="0 0 24 24">

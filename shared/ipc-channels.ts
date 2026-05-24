@@ -192,6 +192,7 @@ export const IPC = {
   CLEANUP_EXECUTE: 'cleanup:execute',
   CLEANUP_QUICK: 'cleanup:quick',
   CLEANUP_KANVAS: 'cleanup:kanvas',
+  CLEANUP_GET_STORAGE_METRICS: 'cleanup:get-storage-metrics',
   // Events
   CLEANUP_PROGRESS: 'cleanup:progress',
 
@@ -204,6 +205,7 @@ export const IPC = {
   GIT_PERFORM_REBASE: 'git:perform-rebase',
   GIT_LIST_WORKTREES: 'git:list-worktrees',
   GIT_PRUNE_WORKTREES: 'git:prune-worktrees',
+  GIT_REMOVE_WORKTREE_PATH: 'git:remove-worktree-path',
   GIT_DELETE_BRANCH: 'git:delete-branch',
   GIT_MERGED_BRANCHES: 'git:merged-branches',
   GIT_GET_CHANGED_FILES: 'git:get-changed-files',
@@ -218,6 +220,7 @@ export const IPC = {
   GIT_ANALYZE_STALE_BRANCHES: 'git:analyze-stale-branches',
   GIT_ARCHIVE_BRANCH: 'git:archive-branch',
   GIT_GET_COMMIT_DIFF: 'git:get-commit-diff',
+  GIT_WORKTREE_SAFETY_INFO: 'git:worktree-safety-info',
 
   // ==========================================================================
   // REBASE WATCHER CHANNELS
@@ -337,6 +340,7 @@ export const IPC = {
   SHELL_OPEN_VSCODE: 'shell:open-vscode',
   SHELL_OPEN_FINDER: 'shell:open-finder',
   SHELL_COPY_PATH: 'shell:copy-path',
+  SHELL_EXEC_GIT_SAFE: 'shell:exec-git-safe',
 
   // ==========================================================================
   // TERMINAL LOG CHANNELS
@@ -506,8 +510,11 @@ export const REQUEST_CHANNELS = [
   IPC.GIT_GET_REPO_STATUS,
   IPC.GIT_LIST_BRANCHES_FOR_REPO,
   IPC.GIT_LIST_WORKTREES,
+  IPC.GIT_PRUNE_WORKTREES,
+  IPC.GIT_REMOVE_WORKTREE_PATH,
   IPC.GIT_ANALYZE_STALE_BRANCHES,
   IPC.GIT_ARCHIVE_BRANCH,
+  IPC.GIT_WORKTREE_SAFETY_INFO,
   IPC.WATCHER_START,
   IPC.WATCHER_STOP,
   IPC.WATCHER_STATUS,

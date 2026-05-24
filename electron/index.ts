@@ -59,6 +59,7 @@ async function createWindow(): Promise<void> {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      minimumFontSize: 0,  // Allow sub-12px fonts (KIT eyebrow at 11px)
     },
     backgroundColor: '#ffffff',
     show: true,

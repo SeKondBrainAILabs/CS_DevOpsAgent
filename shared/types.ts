@@ -9,7 +9,7 @@
 
 export type SessionStatus = 'idle' | 'active' | 'watching' | 'paused' | 'error' | 'closed';
 
-export type AgentType = 'claude' | 'cursor' | 'copilot' | 'cline' | 'aider' | 'warp' | 'custom';
+export type AgentType = 'claude' | 'codex' | 'cursor' | 'copilot' | 'cline' | 'aider' | 'warp' | 'custom';
 
 export interface Session {
   id: string;
@@ -391,6 +391,67 @@ export interface RepoStatus {
   fetchedAt: string;
 }
 
+// =============================================================================
+// STORAGE METRICS (Workspace Disk & Docker panel)
+// =============================================================================
+
+export interface DockerUsageBucket {
+  sizeBytes: number;
+  reclaimableBytes: number;
+  /** Percentage (0-100) when available from Docker output, otherwise null. */
+  reclaimablePercent: number | null;
+}
+
+export interface DockerUsageMetrics {
+  available: boolean;
+  error?: string;
+  images: DockerUsageBucket;
+  localVolumes: DockerUsageBucket;
+  buildCache: DockerUsageBucket;
+}
+
+export interface LocalStorageRepoUsage {
+  repoPath: string;
+  bytes: number;
+  /** Concrete directories included in this measurement. */
+  paths: string[];
+}
+export interface AbandonedWorktreeUsage {
+  repoPath: string;
+  worktreePath: string;
+  branch: string;
+  bytes: number;
+  exists: boolean;
+  lastTouchedAt: string | null;
+  daysSinceLastTouched: number | null;
+  reason: 'missing-path' | 'stale-no-session';
+}
+
+export interface ReclaimableRepoUsage {
+  repoPath: string;
+  totalReclaimableBytes: number;
+  nodeModulesBytes: number;
+  pythonEnvsBytes: number;
+  abandonedWorktreeBytes: number;
+  abandonedWorktreeCount: number;
+}
+
+export interface LocalStorageUsageMetrics {
+  scannedRepoCount: number;
+  nodeModulesTotalBytes: number;
+  pythonEnvsTotalBytes: number;
+  nodeModulesByRepo: LocalStorageRepoUsage[];
+  pythonEnvsByRepo: LocalStorageRepoUsage[];
+  abandonedWorktrees: AbandonedWorktreeUsage[];
+  reclaimableByRepo: ReclaimableRepoUsage[];
+}
+
+export interface StorageMetricsOverview {
+  fetchedAt: string;
+  docker: DockerUsageMetrics;
+  local: LocalStorageUsageMetrics;
+}
+
 export interface WorkspaceScanResult {
   workspaceId: string;
   scannedAt: string;
@@ -465,6 +526,18 @@ export interface AppUpdateInfo {
 }
 
 // =============================================================================
+// WORKTREE SAFETY INFO
+// =============================================================================
+
+export interface WorktreeSafetyInfo {
+  worktreePath: string;
+  hasUncommittedChanges: boolean;
+  uncommittedFiles: Array<{ path: string; status: string }>;
+  unmergedCommitCount: number;   // commits in worktree HEAD not in main or development
+  mergedIntoBranches: string[];  // which of ['main','development'] contain the HEAD
+}
+
+// =============================================================================
 // IPC RESULT TYPES
 // =============================================================================
 
@@ -505,6 +578,8 @@ export interface AgentInstanceConfig {
   contextPreservation: string;
   // Multi-repo mode (optional, advanced)
   multiRepo?: MultiRepoConfig;
+  // Custom agent: whether the agent supports MCP
+  customMcpEnabled?: boolean;
 }
 
 export interface AgentInstance {

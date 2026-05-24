@@ -81,11 +81,11 @@ export function AddWorkspaceDialog({
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+      className="fixed inset-0 bg-black/15 backdrop-blur-[2px] flex items-center justify-center z-50"
       data-testid="add-workspace-dialog"
     >
-      <div className="bg-surface-secondary border border-border rounded-lg w-full max-w-md">
-        <div className="flex items-center justify-between p-4 border-b border-border">
+      <div className="bg-white border border-[rgba(0,0,0,0.10)] rounded-[22px] shadow-[0_4px_6px_rgba(0,0,0,0.08)] w-full max-w-md">
+        <div className="flex items-center justify-between p-4 border-b border-[rgba(0,0,0,0.10)]">
           <h2 className="text-lg font-semibold text-text-primary">Add Workspace</h2>
           <button
             type="button"
@@ -107,7 +107,7 @@ export function AddWorkspaceDialog({
                 value={path}
                 onChange={(e) => setPath(e.target.value)}
                 placeholder="/Users/me/work"
-                className="input flex-1 px-2 py-1 border border-border rounded bg-surface text-text-primary"
+                className="input flex-1 px-2 py-1 border border-[rgba(0,0,0,0.10)] rounded bg-white text-text-primary"
                 disabled={submitting}
                 data-testid="workspace-path-input"
               />
@@ -115,7 +115,7 @@ export function AddWorkspaceDialog({
                 type="button"
                 onClick={handleBrowse}
                 disabled={submitting}
-                className="px-3 py-1 border border-border rounded text-text-primary hover:bg-surface-tertiary"
+                className="kb-btn px-3 py-1"
                 data-testid="browse-button"
               >
                 Browse
@@ -130,7 +130,7 @@ export function AddWorkspaceDialog({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Defaults to folder basename"
-              className="input w-full mt-1 px-2 py-1 border border-border rounded bg-surface text-text-primary"
+              className="input w-full mt-1 px-2 py-1 border border-[rgba(0,0,0,0.10)] rounded bg-white text-text-primary"
               disabled={submitting}
               data-testid="workspace-name-input"
             />
@@ -144,7 +144,7 @@ export function AddWorkspaceDialog({
               max={10}
               value={scanDepth}
               onChange={(e) => setScanDepth(Number(e.target.value))}
-              className="input w-full mt-1 px-2 py-1 border border-border rounded bg-surface text-text-primary"
+              className="input w-full mt-1 px-2 py-1 border border-[rgba(0,0,0,0.10)] rounded bg-white text-text-primary"
               disabled={submitting}
               data-testid="scan-depth-input"
             />
@@ -159,7 +159,7 @@ export function AddWorkspaceDialog({
               type="text"
               value={ignoreGlobs}
               onChange={(e) => setIgnoreGlobs(e.target.value)}
-              className="input w-full mt-1 px-2 py-1 border border-border rounded bg-surface text-text-primary"
+              className="input w-full mt-1 px-2 py-1 border border-[rgba(0,0,0,0.10)] rounded bg-white text-text-primary"
               disabled={submitting}
               data-testid="ignore-globs-input"
             />
@@ -179,7 +179,7 @@ export function AddWorkspaceDialog({
               type="button"
               onClick={onClose}
               disabled={submitting}
-              className="flex-1 px-3 py-2 border border-border rounded text-text-primary hover:bg-surface-tertiary"
+              className="kb-btn flex-1"
               data-testid="cancel-button"
             >
               Cancel
@@ -187,7 +187,7 @@ export function AddWorkspaceDialog({
             <button
               type="submit"
               disabled={submitting}
-              className="flex-1 px-3 py-2 bg-kanvas-blue text-white rounded hover:opacity-90 disabled:opacity-50"
+              className="btn-primary flex-1 disabled:opacity-50"
               data-testid="submit-button"
             >
               {submitting ? 'Adding…' : 'Add Workspace'}

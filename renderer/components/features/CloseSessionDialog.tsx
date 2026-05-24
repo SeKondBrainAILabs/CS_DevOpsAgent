@@ -67,10 +67,10 @@ export function CloseSessionDialog({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-surface-secondary border border-border rounded-lg w-full max-w-md animate-slide-up">
+    <div className="fixed inset-0 bg-black/15 backdrop-blur-[2px] flex items-center justify-center z-50">
+      <div className="bg-white border border-[rgba(0,0,0,0.10)] rounded-[22px] shadow-[0_4px_6px_rgba(0,0,0,0.08)] w-full max-w-md animate-slide-up">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border">
+        <div className="flex items-center justify-between p-4 border-b border-[rgba(0,0,0,0.10)]">
           <h2 className="text-lg font-semibold text-gray-100">Close Session</h2>
           <button onClick={onClose} className="btn-icon" disabled={isClosing}>
             <svg
@@ -93,7 +93,7 @@ export function CloseSessionDialog({
         {/* Content */}
         <div className="p-4 space-y-4">
           {/* Session info */}
-          <div className="p-3 bg-surface-tertiary rounded-md">
+          <div className="p-3 bg-surface-secondary rounded-[14px] border border-[rgba(0,0,0,0.10)]">
             <p className="font-medium text-gray-200">{session.name}</p>
             <p className="text-sm text-gray-400 mt-1">{session.branchName}</p>
             <p className="text-sm text-gray-500 mt-1">
@@ -166,14 +166,14 @@ export function CloseSessionDialog({
           <div className="flex gap-2 pt-2">
             <button
               onClick={onClose}
-              className="btn-secondary flex-1"
+              className="kb-btn flex-1"
               disabled={isClosing}
             >
               Cancel
             </button>
             <button
               onClick={handleClose}
-              className="btn-primary flex-1 bg-red-600 hover:bg-red-700"
+              className="flex-1 px-4 py-2 bg-red-500 text-white rounded-full font-medium hover:bg-red-600 transition-colors disabled:opacity-50"
               disabled={isClosing}
             >
               {isClosing ? 'Closing...' : 'Close Session'}

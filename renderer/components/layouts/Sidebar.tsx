@@ -7,7 +7,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { AgentList } from '../features/AgentList';
-import { KanvasLogo } from '../ui/KanvasLogo';
+import { KITMarkContainer } from '../ui/KITMark';
 import { MergeWorkflowModal } from '../features/MergeWorkflowModal';
 import { useAgentStore } from '../../store/agentStore';
 import { useUIStore } from '../../store/uiStore';
@@ -49,31 +49,25 @@ export function Sidebar(): React.ReactElement {
   };
 
   return (
-    <div className="h-full flex bg-surface">
+    <div className="h-full flex bg-surface-secondary">
       {/* Icon Rail */}
       <IconRail />
 
       {/* Main Sidebar Content */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Header: Logo wordmark + Tabs */}
-        <div className="border-b border-border">
-          <div className="flex items-center gap-1 px-3 pt-3 pb-0">
+        {/* Header: Pill tabs */}
+        <div className="border-b border-[rgba(0,0,0,0.10)] px-3 pt-3 pb-2.5">
+          <div className="flex items-center gap-1.5">
             <button
               disabled
-              className="px-3 py-2.5 text-sm font-medium rounded-t-lg text-text-secondary/40 cursor-not-allowed"
+              className="tab opacity-30 cursor-not-allowed"
               title="Coming Soon"
             >
               Artefacts
             </button>
             <button
               onClick={() => handleTabChange('agents')}
-              className={`
-                px-3 py-2.5 text-sm font-medium transition-colors rounded-t-lg
-                ${sidebarTab === 'agents'
-                  ? 'text-text-primary border-b-2 border-kanvas-blue'
-                  : 'text-text-secondary hover:text-text-primary'
-                }
-              `}
+              className={`tab ${sidebarTab === 'agents' ? 'tab-active' : ''}`}
             >
               Agents
             </button>
@@ -90,14 +84,11 @@ export function Sidebar(): React.ReactElement {
         </div>
 
         {/* Agent Actions */}
-        <div className="p-3 border-t border-border space-y-1.5">
-          <p className="text-xs font-medium text-text-secondary uppercase tracking-wider px-1 mb-2">
-            Agent Actions
-          </p>
+        <div className="p-3 border-t border-[rgba(0,0,0,0.10)] space-y-1.5">
+          <p className="kb-eyebrow px-1 mb-2">Agent Actions</p>
           <button
             onClick={() => setShowCreateAgentWizard(true)}
-            className="w-full py-2 px-4 rounded-xl bg-kanvas-blue text-white font-medium text-[13px] leading-5
-                       hover:bg-kanvas-blue-dark transition-colors shadow-kanvas flex items-center justify-center gap-2"
+            className="btn-primary w-full gap-2"
           >
             <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -106,8 +97,7 @@ export function Sidebar(): React.ReactElement {
           </button>
           <button
             onClick={() => setShowNewSessionWizard(true)}
-            className="w-full py-2 px-4 rounded-xl border border-border text-text-primary text-[13px] leading-5
-                       hover:bg-surface-secondary transition-colors flex items-center justify-center gap-2"
+            className="kb-btn w-full gap-2"
           >
             <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -117,8 +107,7 @@ export function Sidebar(): React.ReactElement {
           </button>
           <button
             onClick={() => setMainView('commits')}
-            className="w-full py-2 px-4 rounded-xl border border-border text-text-primary text-[13px] leading-5
-                       hover:bg-surface-secondary transition-colors flex items-center justify-center gap-2"
+            className="kb-btn w-full gap-2"
           >
             <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -128,8 +117,7 @@ export function Sidebar(): React.ReactElement {
           </button>
           <button
             onClick={() => setShowSettingsModal(true)}
-            className="w-full py-2 px-4 rounded-xl border border-border text-text-primary text-[13px] leading-5
-                       hover:bg-surface-secondary transition-colors flex items-center justify-center gap-2"
+            className="kb-btn w-full gap-2"
           >
             <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -152,17 +140,17 @@ function IconRail(): React.ReactElement {
   const { setShowCreateAgentWizard, setSidebarTab, setMainView } = useUIStore();
 
   return (
-    <div className="w-12 flex flex-col items-center py-3 border-r border-border bg-surface">
-      {/* Logo */}
-      <KanvasLogo size="lg" />
+    <div className="w-12 flex flex-col items-center py-3 border-r border-[rgba(0,0,0,0.10)] bg-surface-secondary">
+      {/* KIT logomark */}
+      <KITMarkContainer size={36} state="idle" />
 
       {/* Divider */}
-      <div className="w-7 h-px bg-border my-2" />
+      <div className="w-7 h-px bg-[rgba(0,0,0,0.10)] my-2" />
 
-      {/* Add new - black button matching Figma */}
+      {/* Add new - black pill button */}
       <button
         onClick={() => setShowCreateAgentWizard(true)}
-        className="w-8 h-8 rounded-lg bg-text-primary text-white
+        className="w-8 h-8 rounded-full bg-black text-white
                    flex items-center justify-center hover:opacity-80 transition-opacity"
         title="Create Instance"
       >
@@ -172,7 +160,7 @@ function IconRail(): React.ReactElement {
       </button>
 
       {/* Divider */}
-      <div className="w-7 h-px bg-border my-2" />
+      <div className="w-7 h-px bg-[rgba(0,0,0,0.10)] my-2" />
 
       {/* Active navigation icons */}
       <div className="flex flex-col gap-1">
@@ -200,7 +188,7 @@ function IconRail(): React.ReactElement {
       </div>
 
       {/* Divider between active and coming-soon */}
-      <div className="w-7 h-px bg-border my-2" />
+      <div className="w-7 h-px bg-[rgba(0,0,0,0.10)] my-2" />
 
       {/* Coming soon navigation icons */}
       <div className="flex flex-col gap-1">
@@ -239,11 +227,11 @@ function IconRail(): React.ReactElement {
       {/* Spacer */}
       <div className="flex-1" />
 
-      {/* User avatar */}
+      {/* User avatar — KIT gradient circle */}
       <div
-        className="w-9 h-9 rounded-full bg-gradient-to-br from-kanvas-blue to-sk-purple
-                   flex items-center justify-center text-white text-xs font-bold cursor-not-allowed
-                   opacity-60"
+        className="kb-avatar w-9 h-9 flex items-center justify-center text-white text-xs font-bold
+                   cursor-not-allowed opacity-60"
+        style={{ width: 36, height: 36 }}
         title="Profile - Coming Soon"
       >
         U
@@ -269,10 +257,10 @@ function IconRailButton({
     <button
       onClick={disabled ? undefined : onClick}
       className={`
-        w-9 h-9 rounded-xl flex items-center justify-center transition-colors
+        w-9 h-9 rounded-full flex items-center justify-center transition-colors
         ${disabled
-          ? 'text-text-secondary/40 cursor-not-allowed'
-          : 'text-text-secondary hover:bg-surface-secondary hover:text-text-primary cursor-pointer'
+          ? 'text-text-secondary/30 cursor-not-allowed'
+          : 'text-[rgba(0,0,0,0.45)] hover:bg-[rgba(0,0,0,0.05)] hover:text-black cursor-pointer'
         }
       `}
       title={title}
@@ -400,10 +388,10 @@ function RepoSessionGroup({
   const [isExpanded, setIsExpanded] = useState(true);
 
   return (
-    <div className="rounded-xl border border-border bg-surface overflow-hidden">
+    <div className="rounded-[14px] border border-[rgba(0,0,0,0.10)] bg-white overflow-hidden">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full px-3 py-2.5 flex items-center gap-2 hover:bg-surface-secondary transition-colors"
+        className="w-full px-3 py-2.5 flex items-center gap-2 hover:bg-[rgba(0,0,0,0.03)] transition-colors"
       >
         <svg
           className={`w-4 h-4 text-text-secondary transition-transform ${isExpanded ? 'rotate-90' : ''}`}
@@ -555,7 +543,7 @@ function SessionCard({
         px-3 py-2.5 transition-colors cursor-pointer group
         ${isSelected
           ? 'bg-kanvas-blue/10 border-l-2 border-kanvas-blue'
-          : 'hover:bg-surface-secondary border-l-2 border-transparent'
+          : 'hover:bg-[rgba(0,0,0,0.03)] border-l-2 border-transparent'
         }
       `}
     >
