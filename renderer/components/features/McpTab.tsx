@@ -112,7 +112,7 @@ export function McpTab({ sessionId }: McpTabProps): React.ReactElement {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-[rgba(0,0,0,0.10)]">
         <span className="text-sm text-text-secondary">
           {calls.length} tool call{calls.length !== 1 ? 's' : ''}
         </span>

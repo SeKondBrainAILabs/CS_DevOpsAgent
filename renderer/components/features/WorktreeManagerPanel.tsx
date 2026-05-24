@@ -100,7 +100,7 @@ export function WorktreeManagerPanel({ repoPath }: WorktreeManagerPanelProps): R
               {[...live, ...dangling].map((w) => (
                 <tr
                   key={w.path}
-                  className="border-t border-border hover:bg-surface-secondary"
+                  className="border-t border-[rgba(0,0,0,0.10)] hover:bg-surface-secondary"
                   data-testid={`worktree-row-${w.path}`}
                 >
                   <td className="p-2 font-mono text-text-primary truncate max-w-[400px]" title={w.path}>

@@ -157,21 +157,16 @@ export function StatusBar({ agent }: StatusBarProps): React.ReactElement {
   const totalSessions = sessions.length;
 
   return (
-    <div className="h-7 px-4 bg-surface border-t border-border flex items-center gap-4 text-xs">
-      {/* Kanvas branding */}
-      <span className="flex items-center gap-1.5 text-kanvas-blue font-medium">
-        <div className="w-3 h-3 rounded bg-kanvas-blue flex items-center justify-center">
-          <svg viewBox="0 0 24 24" className="w-2 h-2 text-white" fill="currentColor">
-            <circle cx="12" cy="12" r="5" />
-          </svg>
-        </div>
-        Kanvas
+    <div className="h-7 px-4 bg-white flex items-center gap-4 text-xs">
+      {/* KIT branding */}
+      <span className="flex items-center gap-1.5 font-medium" style={{ color: 'var(--c-blue)', fontFamily: 'var(--f-mono)', fontSize: 11, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+        KIT
       </span>
 
-      <span className="text-border">|</span>
+      <span className="text-[rgba(0,0,0,0.15)]">|</span>
 
       {/* Agent count */}
-      <span className="flex items-center gap-1.5 text-text-secondary">
+      <span className="flex items-center gap-1.5" style={{ color: 'var(--c-muted)' }}>
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
         </svg>
@@ -179,7 +174,7 @@ export function StatusBar({ agent }: StatusBarProps): React.ReactElement {
       </span>
 
       {/* Session count */}
-      <span className="flex items-center gap-1.5 text-text-secondary">
+      <span className="flex items-center gap-1.5" style={{ color: 'var(--c-muted)' }}>
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
         </svg>
@@ -189,7 +184,7 @@ export function StatusBar({ agent }: StatusBarProps): React.ReactElement {
       {/* Selected agent info */}
       {agent && (
         <>
-          <span className="text-border">|</span>
+          <span className="text-[rgba(0,0,0,0.15)]">|</span>
           <span className="flex items-center gap-1.5">
             <span className={`w-2 h-2 rounded-full ${agent.isAlive ? 'bg-green-500' : 'bg-gray-400'}`} />
             <span className="text-text-primary font-medium">{agent.agentName}</span>
@@ -203,7 +198,7 @@ export function StatusBar({ agent }: StatusBarProps): React.ReactElement {
       {/* Worker process status */}
       {workerStatus && (
         <>
-          <span className="text-border">|</span>
+          <span className="text-[rgba(0,0,0,0.15)]">|</span>
           <span
             className="flex items-center gap-1.5 cursor-pointer hover:text-text-primary transition-colors"
             onClick={handleWorkerRestart}
@@ -237,7 +232,7 @@ export function StatusBar({ agent }: StatusBarProps): React.ReactElement {
       {/* MCP server status */}
       {mcpStatus && (
         <>
-          <span className="text-border">|</span>
+          <span className="text-[rgba(0,0,0,0.15)]">|</span>
           <span
             className="flex items-center gap-1.5 cursor-pointer hover:text-text-primary transition-colors"
             title={
@@ -279,15 +274,15 @@ export function StatusBar({ agent }: StatusBarProps): React.ReactElement {
       <div className="flex-1" />
 
       {/* Keyboard shortcuts hint */}
-      <span className="text-text-secondary hidden md:inline">
-        <kbd className="px-1 py-0.5 rounded bg-surface-tertiary text-text-secondary font-mono text-[10px]">Ctrl</kbd>
+      <span className="hidden md:inline" style={{ color: 'var(--c-muted)' }}>
+        <kbd style={{ padding: '1px 5px', background: 'var(--c-paper)', border: '1px solid var(--border-1)', borderRadius: 6, fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--c-muted)' }}>Ctrl</kbd>
         <span className="mx-0.5">+</span>
-        <kbd className="px-1 py-0.5 rounded bg-surface-tertiary text-text-secondary font-mono text-[10px]">N</kbd>
+        <kbd style={{ padding: '1px 5px', background: 'var(--c-paper)', border: '1px solid var(--border-1)', borderRadius: 6, fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--c-muted)' }}>N</kbd>
         <span className="ml-1">New</span>
       </span>
 
       {/* Version */}
-      {appVersion && <span className="text-text-secondary/60">v{appVersion}</span>}
+      {appVersion && <span style={{ color: 'var(--c-muted)', opacity: 0.6 }}>v{appVersion}</span>}
     </div>
   );
 }

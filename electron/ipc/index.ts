@@ -1136,6 +1136,59 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.quickAction.copyPath(pathToCopy);
   });
 
+  // Safe git command execution — allowlisted commands only, sandboxed to repo path
+  ipcMain.handle(IPC.SHELL_EXEC_GIT_SAFE, async (_, repoPath: string, command: string): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number }> => {
+    const { execFile } = await import('child_process');
+    const { promisify } = await import('util');
+    const execFileAsync = promisify(execFile);
+
+    // Allowlist: only safe, non-destructive git operations
+    const ALLOWED_PREFIXES = [
+      'git pull',
+      'git fetch',
+      'git push',
+      'git add',
+      'git commit',
+      'git stash',
+      'git checkout',
+      'git switch',
+      'git restore',
+      'git rebase --abort',
+      'git merge --abort',
+      'git clean -fd',
+    ];
+    const BLOCKED_PATTERNS = [
+      /--force(?!-with-lease)/,   // block --force but allow --force-with-lease
+      /reset\s+--hard/,
+      /push\s+.*--force(?!-with-lease)/,
+      /branch\s+-[Dd]/,
+      /remote\s+rm/,
+      /\brf\b/,
+      /&&|;|\||\$\(|`/,           // no chaining
+    ];
+
+    const trimmed = command.trim();
+    const allowed = ALLOWED_PREFIXES.some(p => trimmed.startsWith(p));
+    const blocked = BLOCKED_PATTERNS.some(r => r.test(trimmed));
+
+    if (!allowed || blocked) {
+      return { ok: false, stdout: '', stderr: `Command not permitted: ${trimmed}`, exitCode: 1 };
+    }
+
+    const parts = trimmed.split(/\s+/);
+    try {
+      const { stdout, stderr } = await execFileAsync(parts[0], parts.slice(1), {
+        cwd: repoPath,
+        timeout: 30_000,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+      return { ok: true, stdout: stdout.trim(), stderr: stderr.trim(), exitCode: 0 };
+    } catch (err: unknown) {
+      const e = err as { stdout?: string; stderr?: string; code?: number };
+      return { ok: false, stdout: e.stdout?.trim() ?? '', stderr: e.stderr?.trim() ?? String(err), exitCode: e.code ?? 1 };
+    }
+  });
+
   // ==========================================================================
   // TERMINAL LOG HANDLERS
   // ==========================================================================

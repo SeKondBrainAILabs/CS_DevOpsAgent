@@ -52,6 +52,7 @@ export default function App(): React.ReactElement {
     showCreateAgentWizard,
     setShowCreateAgentWizard,
     createAgentWizardRepoPath,
+    createAgentWizardTask,
     repoDetailPath,
     closeRepoDetail,
     showOnboarding,
@@ -258,6 +259,7 @@ export default function App(): React.ReactElement {
         <CreateAgentWizard
           onClose={() => setShowCreateAgentWizard(false)}
           initialRepoPath={createAgentWizardRepoPath}
+          initialTask={createAgentWizardTask}
         />
       )}
       {repoDetailPath && (

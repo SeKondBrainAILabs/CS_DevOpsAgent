@@ -70,7 +70,7 @@ export function RepoStatusCard({
   return (
     <div
       data-testid="repo-status-card"
-      className="bg-surface-secondary border border-border rounded-xl p-4 shadow-sm hover:shadow-kanvas transition-shadow cursor-pointer"
+      className="bg-surface-secondary border border-[rgba(0,0,0,0.10)] rounded-[14px] p-4 shadow-sm hover:shadow-[0_1px_3px_rgba(0,0,0,0.08)] transition-shadow cursor-pointer"
       onClick={() => onSelect?.(repo)}
       role="button"
       tabIndex={0}
@@ -143,10 +143,10 @@ export function RepoStatusCard({
       )}
 
       {/* Action footer */}
-      <div className="flex items-center gap-2 pt-2 border-t border-border">
+      <div className="flex items-center gap-2 pt-2 border-t border-[rgba(0,0,0,0.10)]">
         <button
           type="button"
-          className="text-xs text-text-secondary hover:text-text-primary"
+          className="text-xs text-text-secondary hover:text-text-primary rounded-full"
           onClick={(e) => {
             e.stopPropagation();
             onOpenIde?.(repo);
@@ -157,7 +157,7 @@ export function RepoStatusCard({
         </button>
         <button
           type="button"
-          className="text-xs text-text-secondary hover:text-text-primary"
+          className="text-xs text-text-secondary hover:text-text-primary rounded-full"
           onClick={(e) => {
             e.stopPropagation();
             onOpenTerminal?.(repo);
@@ -169,7 +169,7 @@ export function RepoStatusCard({
         <div className="flex-1" />
         <button
           type="button"
-          className="text-xs px-2 py-1 rounded bg-kanvas-blue text-white hover:opacity-90"
+          className="text-xs px-2 py-1 rounded-full bg-black text-white hover:opacity-90"
           onClick={(e) => {
             e.stopPropagation();
             onNewSession?.(repo);

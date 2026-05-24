@@ -174,7 +174,7 @@ export function AgentList(): React.ReactElement {
     <div>
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
-        <span className="text-xs font-medium text-text-secondary uppercase tracking-wider">
+        <span className="kb-eyebrow text-xs font-medium text-text-secondary uppercase tracking-wider">
           Repositories
         </span>
         <span className="text-xs px-1.5 py-0.5 rounded-full bg-kanvas-blue/10 text-kanvas-blue">
@@ -235,7 +235,7 @@ function RepoNode({
       </button>
 
       {expanded && (
-        <div className="ml-4 border-l border-border/50 pl-2 mt-0.5 space-y-0.5">
+        <div className="ml-4 border-l border-[rgba(0,0,0,0.10)] pl-2 mt-0.5 space-y-0.5">
           {repo.agents.length === 1 ? (
             /* Single agent — skip the agent row, show sessions directly */
             <SessionList
@@ -323,7 +323,7 @@ function SessionList({
   onSelectSession: (sessionId: string) => void;
 }): React.ReactElement {
   return (
-    <div className="ml-3 border-l border-border/40 pl-1.5 mt-0.5 space-y-px">
+    <div className="ml-3 border-l border-[rgba(0,0,0,0.10)] pl-1.5 mt-0.5 space-y-px">
       {agent.sessions.map((session, idx) => (
         <SessionRow
           key={session.sessionId}
@@ -520,10 +520,10 @@ export function AgentListCompact(): React.ReactElement {
             selectedAgentType === agentType ? null : agentType
           )}
           className={`
-            flex items-center gap-2 px-3 py-1.5 rounded-lg
+            flex items-center gap-2 px-3 py-1.5 rounded-full
             text-sm transition-colors
             ${selectedAgentType === agentType
-              ? 'bg-kanvas-blue text-white'
+              ? 'bg-black text-white'
               : 'bg-surface-tertiary text-text-primary hover:bg-surface-secondary'
             }
           `}

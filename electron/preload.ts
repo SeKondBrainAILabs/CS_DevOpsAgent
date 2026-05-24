@@ -1819,6 +1819,9 @@ const api = {
 
     copyPath: (pathToCopy: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.SHELL_COPY_PATH, pathToCopy),
+
+    execGitSafe: (repoPath: string, command: string): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number }> =>
+      ipcRenderer.invoke(IPC.SHELL_EXEC_GIT_SAFE, repoPath, command),
   },
 
   // ==========================================================================

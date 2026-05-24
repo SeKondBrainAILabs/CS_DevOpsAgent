@@ -69,7 +69,7 @@ export function InstructionsModal({ instance, onClose }: InstructionsModalProps)
       {/* Modal */}
       <div className="modal w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-border">
+        <div className="px-6 py-4 border-b border-[rgba(0,0,0,0.10)]">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-xl bg-green-100 flex items-center justify-center">
               <svg className="w-6 h-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -86,7 +86,7 @@ export function InstructionsModal({ instance, onClose }: InstructionsModalProps)
         </div>
 
         {/* Status bar */}
-        <div className="px-6 py-3 bg-surface-secondary border-b border-border flex items-center justify-between">
+        <div className="px-6 py-3 bg-surface-secondary border-b border-[rgba(0,0,0,0.10)] flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
@@ -134,7 +134,7 @@ export function InstructionsModal({ instance, onClose }: InstructionsModalProps)
         )}
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-border flex items-center justify-between bg-surface">
+        <div className="px-6 py-4 border-t border-[rgba(0,0,0,0.10)] flex items-center justify-between bg-white">
           <div className="flex items-center gap-2">
             {instance.prompt && (
               <button
@@ -162,14 +162,14 @@ export function InstructionsModal({ instance, onClose }: InstructionsModalProps)
             <button
               type="button"
               onClick={handleCopyAll}
-              className="btn-secondary"
+              className="kb-btn"
             >
               {copiedAll ? 'All Copied!' : 'Copy Full Instructions'}
             </button>
             <button
               type="button"
               onClick={handleOpenTerminal}
-              className="btn-secondary"
+              className="kb-btn"
               title="Open terminal at project path"
             >
               <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -180,7 +180,7 @@ export function InstructionsModal({ instance, onClose }: InstructionsModalProps)
             <button
               type="button"
               onClick={handleOpenVSCode}
-              className="btn-secondary"
+              className="kb-btn"
               title="Open project in VS Code"
             >
               <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -191,7 +191,7 @@ export function InstructionsModal({ instance, onClose }: InstructionsModalProps)
             <button
               type="button"
               onClick={handleOpenFinder}
-              className="btn-secondary"
+              className="kb-btn"
               title="Open in Finder"
             >
               <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">

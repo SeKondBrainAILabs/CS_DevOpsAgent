@@ -24,6 +24,8 @@ interface UIState {
   showCreateAgentWizard: boolean;
   /** Optional repo path to pre-fill when CreateAgentWizard opens (Day 2). */
   createAgentWizardRepoPath: string | null;
+  /** Optional task description to pre-fill when CreateAgentWizard opens. */
+  createAgentWizardTask: string | null;
   showOnboarding: boolean;
   closeSessionId: string | null;
   /** Repo path whose RepoDetailModal is currently open (Day 2). */
@@ -43,6 +45,8 @@ interface UIState {
   setShowCreateAgentWizard: (show: boolean) => void;
   /** Open the wizard with a specific repo path pre-selected (Day 2). */
   openCreateAgentWizardForRepo: (repoPath: string) => void;
+  /** Open the wizard pre-filled with both repo path and task description. */
+  openCreateAgentWizardWithTask: (repoPath: string, task: string) => void;
   setShowOnboarding: (show: boolean) => void;
   /** Open / close the RepoDetailModal (Day 2). */
   openRepoDetail: (repoPath: string) => void;
@@ -65,6 +69,7 @@ export const useUIStore = create<UIState>((set) => ({
   showSettingsModal: false,
   showCreateAgentWizard: false,
   createAgentWizardRepoPath: null,
+  createAgentWizardTask: null,
   showOnboarding: false,
   closeSessionId: null,
   repoDetailPath: null,
@@ -95,10 +100,14 @@ export const useUIStore = create<UIState>((set) => ({
       // Clear prefill when explicitly closing; leave alone when opening so
       // openCreateAgentWizardForRepo's prefill survives.
       createAgentWizardRepoPath: show ? state.createAgentWizardRepoPath : null,
+      createAgentWizardTask: show ? state.createAgentWizardTask : null,
     })),
 
   openCreateAgentWizardForRepo: (repoPath) =>
-    set({ showCreateAgentWizard: true, createAgentWizardRepoPath: repoPath }),
+    set({ showCreateAgentWizard: true, createAgentWizardRepoPath: repoPath, createAgentWizardTask: null }),
+
+  openCreateAgentWizardWithTask: (repoPath, task) =>
+    set({ showCreateAgentWizard: true, createAgentWizardRepoPath: repoPath, createAgentWizardTask: task }),
 
   setShowOnboarding: (show) => set({ showOnboarding: show }),
 

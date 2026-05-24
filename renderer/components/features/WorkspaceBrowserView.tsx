@@ -158,92 +158,6 @@ function calculateRepoStalePenalty(discoveredAt: string): number {
   return 0;
 }
 
-// ---------------------------------------------------------------------------
-// Amy design system helpers (inline style objects — no new CSS files)
-// ---------------------------------------------------------------------------
-
-const amyCard: React.CSSProperties = {
-  background: 'radial-gradient(circle at top left, #0f172a, #020617)',
-  border: '1px solid rgba(30, 64, 175, 0.4)',
-  borderRadius: '1.2rem',
-  padding: '1rem',
-};
-
-const amyCardTitle: React.CSSProperties = {
-  textTransform: 'uppercase',
-  letterSpacing: '0.16em',
-  fontSize: '0.8rem',
-  color: '#cbd5f5',
-  fontWeight: 600,
-};
-
-const amyCardSubtitle: React.CSSProperties = {
-  fontSize: '0.75rem',
-  color: '#9ca3af',
-};
-
-const amyBodyText: React.CSSProperties = {
-  color: '#e5e7eb',
-  fontSize: '0.875rem',
-};
-
-const amyPrimaryBtn: React.CSSProperties = {
-  background: 'linear-gradient(135deg, #2563eb, #38bdf8)',
-  boxShadow: '0 10px 25px rgba(37, 99, 235, 0.45)',
-  borderRadius: '999px',
-  border: 'none',
-  color: '#fff',
-  padding: '0.35rem 0.85rem',
-  fontSize: '0.7rem',
-  cursor: 'pointer',
-  fontWeight: 600,
-};
-
-const amyWarningBtn: React.CSSProperties = {
-  background: 'linear-gradient(135deg, #d97706, #f59e0b)',
-  boxShadow: '0 6px 18px rgba(217, 119, 6, 0.4)',
-  borderRadius: '999px',
-  border: 'none',
-  color: '#fff',
-  padding: '0.35rem 0.85rem',
-  fontSize: '0.7rem',
-  cursor: 'pointer',
-  fontWeight: 600,
-};
-
-const amyGhostBtn: React.CSSProperties = {
-  background: 'rgba(15,23,42,0.6)',
-  border: '1px solid rgba(30, 64, 175, 0.35)',
-  borderRadius: '999px',
-  color: '#cbd5e1',
-  padding: '0.35rem 0.85rem',
-  fontSize: '0.7rem',
-  cursor: 'pointer',
-};
-
-// Tab-bar pill styles
-const tabInactive: React.CSSProperties = {
-  background: 'rgba(15,23,42,0.6)',
-  border: '1px solid rgba(30, 64, 175, 0.3)',
-  borderRadius: '999px',
-  color: '#94a3b8',
-  padding: '0.3rem 1rem',
-  fontSize: '0.8rem',
-  cursor: 'pointer',
-  fontWeight: 500,
-};
-
-const tabActive: React.CSSProperties = {
-  background: 'linear-gradient(135deg, #2563eb, #38bdf8)',
-  border: 'none',
-  borderRadius: '999px',
-  color: '#fff',
-  padding: '0.3rem 1rem',
-  fontSize: '0.8rem',
-  cursor: 'pointer',
-  fontWeight: 600,
-  boxShadow: '0 4px 14px rgba(37, 99, 235, 0.5)',
-};
 
 // ---------------------------------------------------------------------------
 // Worktree safety badge sub-component
@@ -260,7 +174,7 @@ function WorktreeSafetyBadges({ worktreePath: _worktreePath, safetyInfo, loading
 
   if (loading) {
     return (
-      <span style={{ ...amyCardSubtitle, fontSize: '0.68rem' }}>
+      <span style={{ fontSize: '0.68rem', color: 'rgba(0,0,0,0.45)' }}>
         Checking safety…
       </span>
     );
@@ -310,7 +224,7 @@ function WorktreeSafetyBadges({ worktreePath: _worktreePath, safetyInfo, loading
           </span>
         )}
 
-        {!isSafe && <span style={{ ...amyCardSubtitle, fontSize: '0.68rem' }}>
+        {!isSafe && <span style={{ fontSize: '0.68rem', color: 'rgba(0,0,0,0.45)' }}>
           merged into: {safetyInfo.mergedIntoBranches.length > 0 ? safetyInfo.mergedIntoBranches.join(', ') : 'none'}
         </span>}
       </div>
@@ -319,7 +233,8 @@ function WorktreeSafetyBadges({ worktreePath: _worktreePath, safetyInfo, loading
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
-          style={{ ...amyGhostBtn, marginTop: '0.35rem', fontSize: '0.68rem' }}
+          className="kb-btn"
+          style={{ marginTop: '0.35rem', fontSize: '0.68rem' }}
         >
           {expanded ? 'Hide changes' : 'View changes'}
         </button>
@@ -328,19 +243,589 @@ function WorktreeSafetyBadges({ worktreePath: _worktreePath, safetyInfo, loading
       {expanded && safetyInfo.uncommittedFiles.length > 0 && (
         <div style={{
           marginTop: '0.4rem',
-          background: 'rgba(15,23,42,0.8)',
-          border: '1px solid rgba(30,64,175,0.2)',
           borderRadius: '0.6rem',
           padding: '0.5rem 0.75rem',
           maxHeight: '10rem',
           overflowY: 'auto',
-        }}>
+        }} className="bg-[#FAFAF7] border border-[rgba(0,0,0,0.10)]">
           {safetyInfo.uncommittedFiles.map((f, i) => (
-            <div key={i} style={{ display: 'flex', gap: '0.5rem', fontSize: '0.68rem', color: '#e5e7eb', padding: '0.1rem 0' }}>
-              <span style={{ color: '#94a3b8', fontFamily: 'monospace', minWidth: '2rem' }}>{f.status}</span>
+            <div key={i} style={{ display: 'flex', gap: '0.5rem', fontSize: '0.68rem', padding: '0.1rem 0' }} className="text-black">
+              <span style={{ fontFamily: 'monospace', minWidth: '2rem' }} className="text-[rgba(0,0,0,0.45)]">{f.status}</span>
               <span style={{ fontFamily: 'monospace' }}>{f.path}</span>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tooltip helper — renders at fixed position to escape overflow-hidden parents
+// ---------------------------------------------------------------------------
+
+function Tip({ label, children }: { label: React.ReactNode; children: React.ReactNode }): React.ReactElement {
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  return (
+    <span
+      onMouseEnter={(e) => setPos({ x: e.clientX, y: e.clientY })}
+      onMouseMove={(e) => setPos({ x: e.clientX, y: e.clientY })}
+      onMouseLeave={() => setPos(null)}
+      style={{ cursor: 'default' }}
+    >
+      {children}
+      {pos && (
+        <div
+          style={{
+            position: 'fixed',
+            left: pos.x + 14,
+            top: pos.y - 6,
+            zIndex: 9999,
+            background: 'rgba(0,0,0,0.88)',
+            color: '#fff',
+            borderRadius: 10,
+            padding: '8px 12px',
+            fontSize: 12,
+            lineHeight: '1.5',
+            maxWidth: 280,
+            pointerEvents: 'none',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
+            fontFamily: 'var(--f-body)',
+            letterSpacing: '-0.005em',
+            whiteSpace: 'pre-line',
+          }}
+        >
+          {label}
+        </div>
+      )}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Repo insights — plain-English explanations for a repo's status
+// ---------------------------------------------------------------------------
+
+interface RepoInsight {
+  icon: string;
+  text: string;
+  severity: 'info' | 'warn' | 'ok';
+}
+
+function buildRepoInsights(opts: {
+  repoName: string;
+  branch: string;
+  behind: number;
+  ahead: number;
+  staged: number;
+  modified: number;
+  untracked: number;
+  stashCount: number;
+  worktreeCount: number;
+  riskPoints: number;
+  healthScore: number;
+}): RepoInsight[] {
+  const { behind, ahead, staged, modified, untracked, stashCount, worktreeCount, riskPoints, healthScore } = opts;
+  const insights: RepoInsight[] = [];
+
+  // Sync insights
+  if (behind > 0) {
+    insights.push({
+      icon: '⬇',
+      text: `${behind} commit${behind !== 1 ? 's' : ''} from remote haven't been pulled yet — this branch is behind its remote counterpart. Run \`git pull\` to update.`,
+      severity: behind > 10 ? 'warn' : 'info',
+    });
+  }
+  if (ahead > 0) {
+    insights.push({
+      icon: '⬆',
+      text: `${ahead} local commit${ahead !== 1 ? 's' : ''} haven't been pushed to remote yet.`,
+      severity: ahead > 20 ? 'warn' : 'info',
+    });
+  }
+  if (behind === 0 && ahead === 0) {
+    insights.push({ icon: '✓', text: 'Branch is fully in sync with its remote.', severity: 'ok' });
+  }
+
+  // Changes insights
+  if (staged > 0) {
+    insights.push({
+      icon: '📝',
+      text: `${staged} file${staged !== 1 ? 's' : ''} ${staged !== 1 ? 'are' : 'is'} staged — these changes are queued and ready to commit.`,
+      severity: 'warn',
+    });
+  }
+  if (modified > 0) {
+    insights.push({
+      icon: '✏',
+      text: `${modified} file${modified !== 1 ? 's' : ''} modified but not staged yet — changes exist locally but haven't been added to a commit.`,
+      severity: 'info',
+    });
+  }
+  if (untracked > 0) {
+    insights.push({
+      icon: '?',
+      text: `${untracked} untracked file${untracked !== 1 ? 's' : ''} — new files not yet known to git. Add them with \`git add\` if they should be tracked.`,
+      severity: 'info',
+    });
+  }
+  if (staged === 0 && modified === 0 && untracked === 0) {
+    insights.push({ icon: '✓', text: 'Working directory is clean — no uncommitted changes.', severity: 'ok' });
+  }
+
+  // Stash & worktree insights
+  if (stashCount > 0) {
+    insights.push({
+      icon: '📦',
+      text: `${stashCount} stash${stashCount !== 1 ? 'es' : ''} — work saved aside with \`git stash\`. Stashes can be lost if the repo is cleaned up.`,
+      severity: stashCount > 3 ? 'warn' : 'info',
+    });
+  }
+  if (worktreeCount > 1) {
+    insights.push({
+      icon: '🌿',
+      text: `${worktreeCount} worktrees — this repo has ${worktreeCount} parallel checkout directories on different branches.`,
+      severity: 'info',
+    });
+  }
+
+  // Risk score explanation
+  const riskBreakdown: string[] = [];
+  if (behind > 0) riskBreakdown.push(`${behind} commits behind × 3 = ${behind * 3} pts`);
+  if (staged > 0) riskBreakdown.push(`${staged} staged file${staged !== 1 ? 's' : ''} = ${staged} pts`);
+  if (modified > 0) riskBreakdown.push(`${modified} modified file${modified !== 1 ? 's' : ''} = ${modified} pts`);
+  if (untracked > 0) riskBreakdown.push(`${untracked} untracked file${untracked !== 1 ? 's' : ''} = ${untracked} pts`);
+
+  insights.push({
+    icon: '📊',
+    text: `Risk score: ${riskPoints} pts → Health: ${healthScore}/100\n${riskBreakdown.length > 0 ? riskBreakdown.join(' · ') : 'No major risk factors detected'}.\nScores ≥ 20 = Critical, ≥ 10 = Attention, < 10 = Healthy.`,
+    severity: riskPoints >= 20 ? 'warn' : riskPoints >= 10 ? 'info' : 'ok',
+  });
+
+  return insights;
+}
+
+// ---------------------------------------------------------------------------
+// RepoInsightRow — one repo row with expandable plain-English insights
+// ---------------------------------------------------------------------------
+
+interface RepoInsightRowProps {
+  repo: DiscoveredRepo;
+  index: number;
+  status: RepoStatusBlock | null;
+  healthSnapshot: RepoHealthSnapshot;
+  isLast: boolean;
+  openRepoDetail: (path: string) => void;
+  openCreateAgentWizardForRepo: (path: string) => void;
+  openCreateAgentWizardWithTask: (path: string, task: string) => void;
+}
+
+interface ResolveCommand {
+  label: string;
+  cmd: string;
+}
+
+interface RunResult {
+  ok: boolean;
+  output: string;
+}
+
+function parseResolveCommands(text: string): ResolveCommand[] {
+  const results: ResolveCommand[] = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(/^COMMAND:\s*(.+)$/);
+    if (match) {
+      // Use the preceding non-empty line as a label, stripping markdown
+      let label = '';
+      for (let j = i - 1; j >= 0; j--) {
+        const prev = lines[j].trim().replace(/^#+\s*/, '').replace(/^\d+\.\s*/, '').replace(/\*\*/g, '');
+        if (prev) { label = prev; break; }
+      }
+      results.push({ label: label || match[1], cmd: match[1].trim() });
+    }
+  }
+  return results;
+}
+
+function RepoInsightRow({
+  repo, index, status, healthSnapshot, isLast,
+  openRepoDetail, openCreateAgentWizardForRepo, openCreateAgentWizardWithTask,
+}: RepoInsightRowProps): React.ReactElement {
+  const [expanded, setExpanded] = useState(false);
+  const [resolveOpen, setResolveOpen] = useState(false);
+  const [resolveState, setResolveState] = useState<'idle' | 'analyzing' | 'done' | 'error'>('idle');
+  const [resolveText, setResolveText] = useState('');
+  const [runResults, setRunResults] = useState<Record<number, RunResult>>({});
+
+  const branch = status?.currentBranch || 'unknown';
+  const ahead = status?.ahead ?? 0;
+  const behind = status?.behind ?? 0;
+  const staged = status?.stagedCount ?? 0;
+  const modified = status?.modifiedCount ?? 0;
+  const untracked = status?.untrackedCount ?? 0;
+  const stashCount = status?.stashCount ?? 0;
+  const worktreeCount = status?.worktreeCount ?? 0;
+  const activeSessions = status?.activeSessionCount ?? 0;
+  const worktreeModeLabel = status?.worktreeMode === 'in-place' ? 'In-place mode' : 'Worktree mode';
+  const priorityLabel = formatRepoPriorityLabel(healthSnapshot.priority);
+  const priorityBadgeClassName = repoPriorityBadgeClasses(healthSnapshot.priority);
+  const healthHint = healthSnapshot.healthScore >= 80 ? 'Stable' : healthSnapshot.healthScore >= 60 ? 'Watch' : 'Needs focus';
+
+  const insights = buildRepoInsights({
+    repoName: repo.name, branch, behind, ahead, staged, modified, untracked,
+    stashCount, worktreeCount, riskPoints: healthSnapshot.riskPoints, healthScore: healthSnapshot.healthScore,
+  });
+
+  const hasIssues = staged > 0 || modified > 0 || (ahead > 0 && behind > 0) || behind > 0;
+
+  const rowBorder = isLast ? 'none' : '1px solid rgba(0,0,0,0.06)';
+
+  const triggerResolve = useCallback(async () => {
+    setResolveOpen(true);
+    setExpanded(false);
+    setRunResults({});
+    if (resolveState === 'analyzing') return; // already in flight
+    setResolveState('analyzing');
+    setResolveText('');
+
+    const issueLines: string[] = [];
+    if (behind > 0) issueLines.push(`- ${behind} commit${behind !== 1 ? 's' : ''} behind remote (need to pull)`);
+    if (ahead > 0) issueLines.push(`- ${ahead} commit${ahead !== 1 ? 's' : ''} ahead of remote (not yet pushed)`);
+    if (staged > 0) issueLines.push(`- ${staged} staged file${staged !== 1 ? 's' : ''} waiting to be committed`);
+    if (modified > 0) issueLines.push(`- ${modified} modified file${modified !== 1 ? 's' : ''} not yet staged`);
+    if (untracked > 0) issueLines.push(`- ${untracked} untracked file${untracked !== 1 ? 's' : ''}`);
+    if (stashCount > 0) issueLines.push(`- ${stashCount} stash${stashCount !== 1 ? 'es' : ''} saved aside`);
+
+    const userMessage = `Repository: ${repo.name}\nBranch: ${branch}\n\nCurrent issues:\n${issueLines.join('\n')}`;
+    const systemMessage = `You are a concise git assistant helping a developer resolve repository issues.
+Explain what each issue means in 1-2 plain-English sentences, then give exact git commands to fix them.
+
+Rules:
+- Be concise and practical
+- No --force, no reset --hard, no branch deletion
+- If staged files exist: commit them with a sensible message
+- If modified files exist: suggest staging + committing, or stashing
+- If behind remote: git pull --rebase origin ${branch}
+- If ahead of remote: git push origin ${branch}
+- Each command must appear on its own line starting with COMMAND: (no markdown fences around it)
+
+Format your response exactly like:
+**What's happening:** [brief plain-English summary]
+
+**Steps to resolve:**
+
+1. [step description]
+COMMAND: git <command here>
+
+2. [next step if needed]
+COMMAND: git <command here>`;
+
+    try {
+      const result = await window.api.ai?.chat([
+        { role: 'system', content: systemMessage },
+        { role: 'user', content: userMessage },
+      ]);
+      if (result?.ok) {
+        setResolveText(result.data ?? '');
+        setResolveState('done');
+      } else {
+        setResolveText(result?.error ?? 'AI not available');
+        setResolveState('error');
+      }
+    } catch (e) {
+      setResolveText('Failed to reach AI service. Is it configured?');
+      setResolveState('error');
+    }
+  }, [repo.name, branch, behind, ahead, staged, modified, untracked, stashCount, resolveState]);
+
+  return (
+    <div data-testid="repo-list-row" style={{ borderBottom: rowBorder }}>
+      {/* Main data row */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(220px,2fr) minmax(130px,0.9fr) minmax(90px,0.7fr) minmax(150px,0.9fr) minmax(220px,1fr) auto',
+          gap: '0.5rem',
+          padding: '0.65rem 0.75rem',
+          alignItems: 'start',
+          background: index % 2 === 0 ? 'rgba(0,0,0,0.02)' : 'transparent',
+        }}
+      >
+        {/* Repository name + path + tags */}
+        <div className="min-w-0">
+          <button
+            type="button"
+            onClick={() => openRepoDetail(repo.path)}
+            className="truncate hover:underline text-black font-semibold text-[0.875rem]"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' }}
+            data-testid={`repo-row-open-${index}`}
+          >
+            {repo.name}
+          </button>
+          <p className="text-[0.75rem] text-[rgba(0,0,0,0.45)] truncate">{repo.path}</p>
+          <div style={{ marginTop: '0.25rem', display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+            <span className="text-[0.68rem] px-[0.4rem] py-[0.1rem] rounded-full border border-[rgba(0,0,0,0.10)] text-[rgba(0,0,0,0.45)]">
+              {`Branch ${branch}`}
+            </span>
+            <span className="text-[0.68rem] px-[0.4rem] py-[0.1rem] rounded-full border border-[rgba(0,0,0,0.10)] text-[rgba(0,0,0,0.45)]">
+              {worktreeModeLabel}
+            </span>
+          </div>
+        </div>
+
+        {/* Priority / Risk */}
+        <div className="text-[0.75rem] text-[rgba(0,0,0,0.45)]" data-testid="repo-row-priority">
+          <Tip label={
+            <span>
+              <strong style={{ display: 'block', marginBottom: 4 }}>Priority &amp; Risk Score</strong>
+              Risk is calculated from uncommitted work and sync gaps:{'\n'}
+              • Each commit behind remote = 3 pts{'\n'}
+              • Each staged / modified / untracked file = 1 pt{'\n'}
+              • Abandoned worktrees = 2 pts each{'\n\n'}
+              Critical ≥ 20 · Attention ≥ 10 · Healthy &lt; 10
+            </span>
+          }>
+            <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium ${priorityBadgeClassName}`} data-testid="repo-row-priority-badge">
+              {priorityLabel}
+            </span>
+            <p style={{ fontSize: '0.68rem', marginTop: '0.2rem' }} data-testid="repo-row-risk">Risk {healthSnapshot.riskPoints} pts</p>
+          </Tip>
+        </div>
+
+        {/* Health score */}
+        <div className="text-[0.75rem] text-[rgba(0,0,0,0.45)]" data-testid="repo-row-health">
+          <Tip label={
+            <span>
+              <strong style={{ display: 'block', marginBottom: 4 }}>Health Score (0 – 100)</strong>
+              Starts at 100 and decreases with risk points.{'\n'}
+              80 – 100 = Stable{'\n'}
+              60 – 79  = Watch{'\n'}
+              0  – 59  = Needs focus
+            </span>
+          }>
+            <p className="text-[0.875rem] text-black font-bold" data-testid="repo-row-health-score">{healthSnapshot.healthScore}</p>
+            <p style={{ fontSize: '0.68rem' }}>{healthHint}</p>
+          </Tip>
+        </div>
+
+        {/* Sync (behind / ahead) + stashes + worktrees */}
+        <div className="text-[0.75rem] text-[rgba(0,0,0,0.45)]">
+          <Tip label={
+            <span>
+              <strong style={{ display: 'block', marginBottom: 4 }}>Sync with Remote</strong>
+              ↓ {behind} = commits on remote not yet pulled locally{'\n'}
+              ↑ {ahead} = local commits not yet pushed to remote
+            </span>
+          }>
+            <p className="text-[0.875rem] text-black font-semibold" data-testid="repo-row-sync">{`↓${behind} / ↑${ahead}`}</p>
+          </Tip>
+          <Tip label={
+            <span>
+              <strong style={{ display: 'block', marginBottom: 4 }}>Stashes &amp; Worktrees</strong>
+              Stashes = work saved aside with `git stash`.{'\n'}
+              Worktrees = parallel branch checkouts in separate directories.
+            </span>
+          }>
+            <p style={{ fontSize: '0.68rem' }}>{`Stashes ${stashCount} • Worktrees ${worktreeCount}`}</p>
+          </Tip>
+        </div>
+
+        {/* Local state */}
+        <div className="text-[0.75rem] text-[rgba(0,0,0,0.45)]">
+          <Tip label={
+            <span>
+              <strong style={{ display: 'block', marginBottom: 4 }}>Local File Changes</strong>
+              Staged = queued for the next commit{'\n'}
+              Modified = changed but not staged yet{'\n'}
+              Untracked = new files git doesn't know about{'\n\n'}
+              Sessions = active agent sessions on this repo
+            </span>
+          }>
+            <p style={{ fontSize: '0.68rem' }} data-testid="repo-row-changes">{`Staged ${staged} • Modified ${modified} • Untracked ${untracked}`}</p>
+            <p style={{ fontSize: '0.68rem' }} data-testid="repo-row-sessions">{`Sessions ${activeSessions}`}</p>
+          </Tip>
+        </div>
+
+        {/* Actions */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', justifyContent: 'flex-end', alignItems: 'flex-start' }}>
+          <button type="button" onClick={() => openRepoDetail(repo.path)} className="btn-primary-sm" data-testid={`repo-row-detail-${index}`}>Open</button>
+          <button type="button" onClick={() => window.api.shell?.openVSCode?.(repo.path)} className="kb-btn-sm" data-testid={`repo-row-ide-${index}`}>IDE</button>
+          <button type="button" onClick={() => window.api.shell?.openTerminal?.(repo.path)} className="kb-btn-sm" data-testid={`repo-row-terminal-${index}`}>Terminal</button>
+          <button type="button" onClick={() => openCreateAgentWizardForRepo(repo.path)} className="kb-btn-sm" data-testid={`repo-row-session-${index}`}>New session</button>
+          {hasIssues && (
+            <button
+              type="button"
+              className={`btn-ai-resolve${resolveOpen ? ' ring-1 ring-[#8B78F5]' : ''}`}
+              data-testid={`repo-row-ai-resolve-${index}`}
+              title="Explain and resolve these issues with AI"
+              onClick={triggerResolve}
+            >
+              {resolveState === 'analyzing' ? '⟳ Analyzing…' : '✦ Resolve'}
+            </button>
+          )}
+          {/* Expand/collapse insights */}
+          <button
+            type="button"
+            onClick={() => { setExpanded((v) => !v); setResolveOpen(false); }}
+            className="kb-btn-sm"
+            data-testid={`repo-row-expand-${index}`}
+            title={expanded ? 'Hide insights' : 'Show plain-English explanation'}
+            style={{ minWidth: 28, padding: '0 8px' }}
+          >
+            {expanded ? '▴' : '▾'}
+          </button>
+        </div>
+      </div>
+
+      {/* Expandable insights panel */}
+      {expanded && !resolveOpen && (
+        <div
+          style={{
+            margin: '0 0.75rem 0.75rem',
+            padding: '0.75rem 1rem',
+            background: '#FAFAF7',
+            borderRadius: 10,
+            border: '1px solid rgba(0,0,0,0.08)',
+          }}
+          data-testid={`repo-row-insights-${index}`}
+        >
+          <p style={{ fontSize: 11, fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.10em', color: 'rgba(0,0,0,0.45)', marginBottom: '0.5rem' }}>
+            {repo.name} — what this means
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+            {insights.map((insight, i) => (
+              <div
+                key={i}
+                style={{
+                  display: 'flex',
+                  gap: '0.6rem',
+                  alignItems: 'flex-start',
+                  fontSize: 12,
+                  lineHeight: '1.5',
+                  color: insight.severity === 'warn' ? '#b45309' : insight.severity === 'ok' ? '#059669' : 'rgba(0,0,0,0.75)',
+                }}
+              >
+                <span style={{ flexShrink: 0, marginTop: 1 }}>{insight.icon}</span>
+                <span>{insight.text}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* AI Resolve panel */}
+      {resolveOpen && (
+        <div
+          style={{
+            margin: '0 0.75rem 0.75rem',
+            padding: '0.85rem 1rem',
+            background: 'rgba(139,120,245,0.04)',
+            borderRadius: 10,
+            border: '1px solid rgba(139,120,245,0.20)',
+          }}
+          data-testid={`repo-row-resolve-panel-${index}`}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.6rem' }}>
+            <p style={{ fontSize: 11, fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.10em', color: '#8B78F5' }}>
+              ✦ AI Resolution — {repo.name}
+            </p>
+            <button
+              type="button"
+              onClick={() => setResolveOpen(false)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: 'rgba(0,0,0,0.35)', lineHeight: 1 }}
+              title="Close"
+            >×</button>
+          </div>
+
+          {resolveState === 'analyzing' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: 13, color: 'rgba(0,0,0,0.55)' }}>
+              <span style={{ display: 'inline-block', animation: 'spin 1s linear infinite', fontSize: 16 }}>⟳</span>
+              Asking AI to analyse this repository…
+            </div>
+          )}
+
+          {resolveState === 'error' && (
+            <p style={{ fontSize: 13, color: '#b91c1c' }}>{resolveText}</p>
+          )}
+
+          {resolveState === 'done' && (() => {
+            const commands = parseResolveCommands(resolveText);
+            // Render explanation text without COMMAND: lines
+            const explanationLines = resolveText.split('\n').filter(l => !l.match(/^COMMAND:/));
+            const explanation = explanationLines.join('\n').trim();
+
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {/* Explanation */}
+                <div style={{ fontSize: 13, lineHeight: '1.6', color: 'rgba(0,0,0,0.75)', whiteSpace: 'pre-wrap' }}>
+                  {explanation}
+                </div>
+
+                {/* Commands */}
+                {commands.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <p style={{ fontSize: 11, fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.10em', color: 'rgba(0,0,0,0.40)', marginBottom: 2 }}>
+                      Commands to run
+                    </p>
+                    {commands.map((c, ci) => {
+                      const res = runResults[ci];
+                      return (
+                        <div
+                          key={ci}
+                          style={{
+                            background: '#fff',
+                            border: `1px solid ${res ? (res.ok ? 'rgba(5,150,105,0.30)' : 'rgba(220,38,38,0.30)') : 'rgba(0,0,0,0.10)'}`,
+                            borderRadius: 8,
+                            padding: '0.5rem 0.75rem',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'space-between' }}>
+                            <code style={{ fontSize: 12, fontFamily: 'var(--f-mono)', color: '#1e40af', flex: 1 }}>
+                              {c.cmd}
+                            </code>
+                            <button
+                              type="button"
+                              disabled={!!res || resolveState === 'analyzing'}
+                              style={{
+                                height: 24,
+                                padding: '0 10px',
+                                fontSize: 11,
+                                borderRadius: 999,
+                                border: 'none',
+                                background: res ? (res.ok ? '#dcfce7' : '#fee2e2') : '#000',
+                                color: res ? (res.ok ? '#059669' : '#b91c1c') : '#fff',
+                                cursor: res ? 'default' : 'pointer',
+                                fontWeight: 600,
+                                flexShrink: 0,
+                              }}
+                              onClick={async () => {
+                                const r = await window.api.shell?.execGitSafe?.(repo.path, c.cmd);
+                                setRunResults(prev => ({
+                                  ...prev,
+                                  [ci]: {
+                                    ok: r?.ok ?? false,
+                                    output: r ? `${r.stdout}${r.stderr ? '\n' + r.stderr : ''}`.trim() : 'No response',
+                                  },
+                                }));
+                              }}
+                            >
+                              {res ? (res.ok ? '✓ Done' : '✗ Failed') : '▶ Run'}
+                            </button>
+                          </div>
+                          {res?.output && (
+                            <pre style={{ margin: '0.4rem 0 0', fontSize: 11, fontFamily: 'var(--f-mono)', color: res.ok ? '#059669' : '#b91c1c', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                              {res.output}
+                            </pre>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>
@@ -353,6 +838,7 @@ function WorktreeSafetyBadges({ worktreePath: _worktreePath, safetyInfo, loading
 
 export function WorkspaceBrowserView(): React.ReactElement {
   const openCreateAgentWizardForRepo = useUIStore((s) => s.openCreateAgentWizardForRepo);
+  const openCreateAgentWizardWithTask = useUIStore((s) => s.openCreateAgentWizardWithTask);
   const openRepoDetail = useUIStore((s) => s.openRepoDetail);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -1107,6 +1593,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
   }, [
     openRepoDetail,
     openCreateAgentWizardForRepo,
+    openCreateAgentWizardWithTask,
     handleCopyCleanupCommand,
     handleCopyAbandonedWorktreeCommand,
     handleCleanAbandonedWorktree,
@@ -1120,22 +1607,18 @@ export function WorkspaceBrowserView(): React.ReactElement {
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="flex-1 h-full min-h-0 flex flex-col" style={{ background: '#020617' }} data-testid="workspace-browser">
+    <div className="flex-1 h-full min-h-0 flex flex-col bg-white" data-testid="workspace-browser">
       {/* Header */}
-      <div style={{ borderBottom: '1px solid rgba(30,64,175,0.3)', background: 'rgba(15,23,42,0.9)' }}>
+      <div className="bg-white border-b border-[rgba(0,0,0,0.10)]">
         <div className="p-4 pb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 style={{ ...amyCardTitle, fontSize: '1rem' }}>Workspaces</h1>
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', padding: '0.15rem 0.6rem',
-                fontSize: '0.7rem', borderRadius: '999px',
-                border: '1px solid rgba(30,64,175,0.4)', color: '#9ca3af',
-              }}>
+              <h1 className="uppercase tracking-widest text-[0.8rem] text-black font-semibold" style={{ fontSize: '1rem' }}>Workspaces</h1>
+              <span className="inline-flex items-center px-[0.6rem] py-[0.15rem] text-[0.7rem] rounded-full border border-[rgba(0,0,0,0.10)] text-[rgba(0,0,0,0.45)]">
                 {activeWorkspace ? activeWorkspace.name : 'No active workspace'}
               </span>
             </div>
-            <p style={amyCardSubtitle}>
+            <p className="text-[0.75rem] text-[rgba(0,0,0,0.45)]">
               {sourceRepos.length === 0
                 ? 'Add a workspace to discover repositories and workflow actions.'
                 : `${sourceRepos.length} repositories${filter.trim() ? ` • ${filtered.length} visible` : ''}`}
@@ -1143,14 +1626,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <select
-              style={{
-                padding: '0.35rem 0.7rem',
-                border: '1px solid rgba(30,64,175,0.4)',
-                borderRadius: '0.5rem',
-                background: 'rgba(15,23,42,0.8)',
-                color: '#e5e7eb',
-                fontSize: '0.8rem',
-              }}
+              className="px-[0.7rem] py-[0.35rem] border border-[rgba(0,0,0,0.10)] rounded-lg bg-white text-black text-[0.8rem]"
               value={activeId ?? ''}
               onChange={(e) => {
                 const next = e.target.value || null;
@@ -1166,7 +1642,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
             <button
               type="button"
               onClick={() => setShowAdd(true)}
-              style={amyPrimaryBtn}
+              className="btn-primary"
               data-testid="add-workspace-button"
             >
               + Add local folder
@@ -1175,7 +1651,8 @@ export function WorkspaceBrowserView(): React.ReactElement {
               type="button"
               onClick={() => activeId && void scanActive(activeId)}
               disabled={!activeId || loading}
-              style={{ ...amyGhostBtn, opacity: (!activeId || loading) ? 0.5 : 1 }}
+              className="kb-btn"
+              style={{ opacity: (!activeId || loading) ? 0.5 : 1 }}
               data-testid="rescan-button"
             >
               {loading ? 'Scanning…' : 'Rescan'}
@@ -1186,16 +1663,16 @@ export function WorkspaceBrowserView(): React.ReactElement {
         {/* Workspace manager panel */}
         {workspaces.length > 0 && (
           <div className="px-4 pb-3">
-            <div style={{ ...amyCard, padding: '0.6rem 0.85rem' }} data-testid="workspace-manager-panel">
+            <div className="bg-[#FAFAF7] border border-[rgba(0,0,0,0.10)] rounded-[14px]" style={{ padding: '0.6rem 0.85rem' }} data-testid="workspace-manager-panel">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <p style={{ ...amyCardTitle, fontSize: '0.72rem' }}>Workspace folders</p>
-                  <span style={amyCardSubtitle}>{workspaces.length} total</span>
+                  <p className="uppercase tracking-widest text-black font-semibold" style={{ fontSize: '0.72rem' }}>Workspace folders</p>
+                  <span className="text-[0.75rem] text-[rgba(0,0,0,0.45)]">{workspaces.length} total</span>
                 </div>
                 <button
                   type="button"
                   onClick={() => setWorkspaceManagerExpanded((expanded) => !expanded)}
-                  style={amyGhostBtn}
+                  className="kb-btn"
                   data-testid="workspace-manager-toggle"
                 >
                   {workspaceManagerExpanded ? 'Done' : 'Manage'}
@@ -1203,14 +1680,15 @@ export function WorkspaceBrowserView(): React.ReactElement {
               </div>
               {!workspaceManagerExpanded && activeWorkspace && (
                 <div
-                  style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', padding: '0.4rem 0.6rem', borderRadius: '0.6rem', border: '1px solid rgba(30,64,175,0.25)', background: 'rgba(15,23,42,0.6)' }}
+                  className="flex items-center justify-between gap-3 border border-[rgba(0,0,0,0.10)] rounded-[10px] bg-white"
+                  style={{ marginTop: '0.5rem', padding: '0.4rem 0.6rem' }}
                   data-testid="workspace-manager-collapsed-summary"
                 >
                   <div className="min-w-0">
-                    <p style={{ ...amyBodyText, fontWeight: 600 }} className="truncate">{activeWorkspace.name}</p>
-                    <p style={amyCardSubtitle} className="truncate">{activeWorkspace.path}</p>
+                    <p className="text-[0.875rem] text-black font-semibold truncate">{activeWorkspace.name}</p>
+                    <p className="text-[0.75rem] text-[rgba(0,0,0,0.45)] truncate">{activeWorkspace.path}</p>
                   </div>
-                  <span style={{ fontSize: '0.68rem', padding: '0.15rem 0.5rem', borderRadius: '999px', border: '1px solid rgba(30,64,175,0.35)', color: '#94a3b8' }}>Active</span>
+                  <span className="text-[0.68rem] px-[0.5rem] py-[0.15rem] rounded-full border border-[rgba(0,0,0,0.10)] text-[rgba(0,0,0,0.45)]">Active</span>
                 </div>
               )}
               {workspaceManagerExpanded && (
@@ -1222,20 +1700,21 @@ export function WorkspaceBrowserView(): React.ReactElement {
                       return (
                         <div
                           key={workspace.id}
-                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', padding: '0.4rem 0.6rem', borderRadius: '0.6rem', border: '1px solid rgba(30,64,175,0.25)', background: 'rgba(15,23,42,0.6)' }}
+                          className="flex items-center justify-between gap-3 border border-[rgba(0,0,0,0.10)] rounded-[10px] bg-white"
+                          style={{ padding: '0.4rem 0.6rem' }}
                           data-testid="workspace-manager-row"
                         >
                           <div className="min-w-0">
-                            <p style={{ ...amyBodyText, fontWeight: 600 }} className="truncate">{workspace.name}</p>
-                            <p style={amyCardSubtitle} className="truncate">{workspace.path}</p>
+                            <p className="text-[0.875rem] text-black font-semibold truncate">{workspace.name}</p>
+                            <p className="text-[0.75rem] text-[rgba(0,0,0,0.45)] truncate">{workspace.path}</p>
                           </div>
                           <div className="flex items-center gap-1">
                             {isActiveWorkspace ? (
-                              <span style={{ fontSize: '0.68rem', padding: '0.15rem 0.5rem', borderRadius: '999px', border: '1px solid rgba(30,64,175,0.35)', color: '#94a3b8' }} data-testid={`workspace-manager-active-${workspace.id}`}>
+                              <span className="text-[0.68rem] px-[0.5rem] py-[0.15rem] rounded-full border border-[rgba(0,0,0,0.10)] text-[rgba(0,0,0,0.45)]" data-testid={`workspace-manager-active-${workspace.id}`}>
                                 Active
                               </span>
                             ) : (
-                              <button type="button" onClick={() => void handleSetActiveWorkspace(workspace.id)} style={amyGhostBtn} data-testid={`workspace-manager-switch-${workspace.id}`}>
+                              <button type="button" onClick={() => void handleSetActiveWorkspace(workspace.id)} className="kb-btn" data-testid={`workspace-manager-switch-${workspace.id}`}>
                                 Switch
                               </button>
                             )}
@@ -1243,7 +1722,8 @@ export function WorkspaceBrowserView(): React.ReactElement {
                               type="button"
                               onClick={() => void handleRemoveWorkspace(workspace.id)}
                               disabled={isRemovingWorkspace}
-                              style={{ ...amyGhostBtn, borderColor: 'rgba(239,68,68,0.4)', color: '#f87171', opacity: isRemovingWorkspace ? 0.5 : 1 }}
+                              className="kb-btn"
+                              style={{ borderColor: 'rgba(239,68,68,0.4)', color: '#dc2626', opacity: isRemovingWorkspace ? 0.5 : 1 }}
                               data-testid={`workspace-manager-remove-${workspace.id}`}
                             >
                               {isRemovingWorkspace ? 'Removing…' : 'Delete'}
@@ -1253,7 +1733,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
                       );
                     })}
                   </div>
-                  <p style={{ ...amyCardSubtitle, marginTop: '0.5rem', fontSize: '0.68rem' }}>
+                  <p className="text-[rgba(0,0,0,0.45)]" style={{ marginTop: '0.5rem', fontSize: '0.68rem' }}>
                     Add any local folder (repo root or parent folder) via "+ Add local folder".
                   </p>
                 </>
@@ -1263,14 +1743,14 @@ export function WorkspaceBrowserView(): React.ReactElement {
         )}
 
         {/* Tab bar */}
-        <div style={{ display: 'flex', gap: '0.5rem', padding: '0 1rem 0.75rem' }}>
-          <button type="button" style={activeTab === 'repos' ? tabActive : tabInactive} onClick={() => setActiveTab('repos')}>
+        <div className="flex items-center gap-1.5 p-1 bg-[rgba(0,0,0,0.04)] rounded-full" style={{ margin: '0 1rem 0.75rem' }}>
+          <button type="button" className={activeTab === 'repos' ? 'bg-black text-white rounded-full px-3 py-1.5 text-xs font-medium cursor-pointer' : 'text-[rgba(0,0,0,0.45)] rounded-full px-3 py-1.5 text-xs font-medium hover:bg-[rgba(0,0,0,0.04)] cursor-pointer'} onClick={() => setActiveTab('repos')}>
             Repos
           </button>
-          <button type="button" style={activeTab === 'workflow' ? tabActive : tabInactive} onClick={() => setActiveTab('workflow')}>
+          <button type="button" className={activeTab === 'workflow' ? 'bg-black text-white rounded-full px-3 py-1.5 text-xs font-medium cursor-pointer' : 'text-[rgba(0,0,0,0.45)] rounded-full px-3 py-1.5 text-xs font-medium hover:bg-[rgba(0,0,0,0.04)] cursor-pointer'} onClick={() => setActiveTab('workflow')}>
             Workflow
           </button>
-          <button type="button" style={activeTab === 'storage' ? tabActive : tabInactive} onClick={() => setActiveTab('storage')}>
+          <button type="button" className={activeTab === 'storage' ? 'bg-black text-white rounded-full px-3 py-1.5 text-xs font-medium cursor-pointer' : 'text-[rgba(0,0,0,0.45)] rounded-full px-3 py-1.5 text-xs font-medium hover:bg-[rgba(0,0,0,0.04)] cursor-pointer'} onClick={() => setActiveTab('storage')}>
             Storage
           </button>
         </div>
@@ -1279,7 +1759,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
       {/* Body */}
       <div className="flex-1 min-h-0 overflow-auto p-4">
         {error && (
-          <div style={{ marginBottom: '0.75rem', padding: '0.5rem 0.75rem', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '0.75rem', color: '#f87171', fontSize: '0.85rem' }}>
+          <div style={{ marginBottom: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: '0.75rem', fontSize: '0.85rem' }} className="bg-red-50 border border-red-200 text-red-600">
             {error}
           </div>
         )}
@@ -1289,20 +1769,22 @@ export function WorkspaceBrowserView(): React.ReactElement {
           <>
             {/* Filter / sort bar */}
             <div style={{ marginBottom: '1rem' }}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.75rem', border: '1px solid rgba(30,64,175,0.3)', borderRadius: '0.75rem', background: 'rgba(15,23,42,0.6)' }}>
+              <div className="flex flex-wrap items-center gap-2 border border-[rgba(0,0,0,0.10)] rounded-[12px] bg-[#FAFAF7]" style={{ padding: '0.5rem 0.75rem' }}>
                 <input
                   type="search"
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
                   placeholder="Filter repos…"
-                  style={{ padding: '0.35rem 0.65rem', border: '1px solid rgba(30,64,175,0.35)', borderRadius: '0.5rem', background: 'rgba(15,23,42,0.8)', color: '#e5e7eb', fontSize: '0.8rem', flex: '1', minWidth: '200px' }}
+                  className="border border-[rgba(0,0,0,0.10)] rounded-lg bg-white text-black text-[0.8rem]"
+                  style={{ padding: '0.35rem 0.65rem', flex: '1', minWidth: '200px' }}
                   data-testid="repo-filter"
                 />
-                <label style={amyCardSubtitle}>Sort:</label>
+                <label className="text-[0.75rem] text-[rgba(0,0,0,0.45)]">Sort:</label>
                 <select
                   value={sortKey}
                   onChange={(e) => setSortKey(e.target.value as WorkspaceRepoSortKey)}
-                  style={{ padding: '0.35rem 0.65rem', border: '1px solid rgba(30,64,175,0.35)', borderRadius: '0.5rem', background: 'rgba(15,23,42,0.8)', color: '#e5e7eb', fontSize: '0.8rem' }}
+                  className="border border-[rgba(0,0,0,0.10)] rounded-lg bg-white text-black text-[0.8rem]"
+                  style={{ padding: '0.35rem 0.65rem' }}
                   data-testid="sort-select"
                 >
                   <option value="priority">Priority score</option>
@@ -1314,29 +1796,29 @@ export function WorkspaceBrowserView(): React.ReactElement {
             </div>
 
             {workspaces.length === 0 && recentReposFallback.length === 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '12rem', color: '#9ca3af' }} data-testid="empty-state-no-workspace">
+              <div className="flex flex-col items-center justify-center text-[rgba(0,0,0,0.45)]" style={{ height: '12rem' }} data-testid="empty-state-no-workspace">
                 <p style={{ marginBottom: '0.75rem' }}>No workspaces yet.</p>
-                <button type="button" onClick={() => setShowAdd(true)} style={amyPrimaryBtn}>
+                <button type="button" onClick={() => setShowAdd(true)} className="btn-primary">
                   Add your first workspace
                 </button>
               </div>
             )}
 
             {showingFallback && (
-              <div style={{ ...amyCard, marginBottom: '1rem' }} data-testid="recent-repos-banner">
-                <p style={{ ...amyBodyText, marginBottom: '0.5rem' }}>
+              <div className="bg-[#FAFAF7] border border-[rgba(0,0,0,0.10)] rounded-[14px] p-4" style={{ marginBottom: '1rem' }} data-testid="recent-repos-banner">
+                <p className="text-[0.875rem] text-black" style={{ marginBottom: '0.5rem' }}>
                   Showing {recentReposFallback.length} repos from your recent sessions.
                   Add a workspace to enable folder scanning + filesystem watching.
                 </p>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <button type="button" onClick={() => setShowAdd(true)} style={amyPrimaryBtn}>
+                  <button type="button" onClick={() => setShowAdd(true)} className="btn-primary">
                     + Add local folder
                   </button>
                   {fallbackParent && (
                     <button
                       type="button"
                       onClick={() => void handlePinFallbackParent()}
-                      style={amyGhostBtn}
+                      className="kb-btn"
                       data-testid="pin-parent-button"
                       title={`Create a workspace at ${fallbackParent}`}
                     >
@@ -1348,14 +1830,14 @@ export function WorkspaceBrowserView(): React.ReactElement {
             )}
 
             {workspaces.length > 0 && filtered.length === 0 && !loading && (
-              <p style={amyCardSubtitle} data-testid="empty-state-no-repos">
+              <p className="text-[0.75rem] text-[rgba(0,0,0,0.45)]" data-testid="empty-state-no-repos">
                 {repos.length === 0 ? 'No git repositories found in this workspace.' : 'No repos match your filter.'}
               </p>
             )}
 
             {filtered.length > 0 && (
-              <div style={{ border: '1px solid rgba(30,64,175,0.35)', borderRadius: '1.2rem', overflow: 'hidden', background: 'radial-gradient(circle at top left, #0f172a, #020617)' }} data-testid="repo-list">
-                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px,2fr) minmax(130px,0.9fr) minmax(90px,0.7fr) minmax(150px,0.9fr) minmax(220px,1fr) auto', gap: '0.5rem', padding: '0.5rem 0.75rem', borderBottom: '1px solid rgba(30,64,175,0.2)', ...amyCardTitle }}>
+              <div className="border border-[rgba(0,0,0,0.10)] rounded-[14px] overflow-hidden bg-white" data-testid="repo-list">
+                <div className="uppercase tracking-widest text-black font-semibold text-[0.8rem] border-b border-[rgba(0,0,0,0.10)]" style={{ display: 'grid', gridTemplateColumns: 'minmax(220px,2fr) minmax(130px,0.9fr) minmax(90px,0.7fr) minmax(150px,0.9fr) minmax(220px,1fr) auto', gap: '0.5rem', padding: '0.5rem 0.75rem' }}>
                   <span>Repository</span>
                   <span>Priority</span>
                   <span>Health</span>
@@ -1364,76 +1846,19 @@ export function WorkspaceBrowserView(): React.ReactElement {
                   <span>Actions</span>
                 </div>
                 <div>
-                  {filtered.map((repo, index) => {
-                    const status = statusByPath[repo.path] ?? null;
-                    const branch = status?.currentBranch || 'unknown';
-                    const ahead = status?.ahead ?? 0;
-                    const behind = status?.behind ?? 0;
-                    const staged = status?.stagedCount ?? 0;
-                    const modified = status?.modifiedCount ?? 0;
-                    const untracked = status?.untrackedCount ?? 0;
-                    const stashCount = status?.stashCount ?? 0;
-                    const worktreeCount = status?.worktreeCount ?? 0;
-                    const activeSessions = status?.activeSessionCount ?? 0;
-                    const worktreeModeLabel = status?.worktreeMode === 'in-place' ? 'In-place mode' : 'Worktree mode';
-                    const healthSnapshot = healthByRepoPath.get(repo.path) ?? { healthScore: 100, riskPoints: 0, priority: 'healthy' as RepoPriorityLevel };
-                    const priorityLabel = formatRepoPriorityLabel(healthSnapshot.priority);
-                    const priorityBadgeClassName = repoPriorityBadgeClasses(healthSnapshot.priority);
-                    const healthHint = healthSnapshot.healthScore >= 80 ? 'Stable' : healthSnapshot.healthScore >= 60 ? 'Watch' : 'Needs focus';
-
-                    return (
-                      <div
-                        key={repo.path}
-                        style={{ display: 'grid', gridTemplateColumns: 'minmax(220px,2fr) minmax(130px,0.9fr) minmax(90px,0.7fr) minmax(150px,0.9fr) minmax(220px,1fr) auto', gap: '0.5rem', padding: '0.65rem 0.75rem', alignItems: 'start', borderBottom: index < filtered.length - 1 ? '1px solid rgba(30,64,175,0.15)' : 'none', background: index % 2 === 0 ? 'rgba(15,23,42,0.4)' : 'transparent' }}
-                        data-testid="repo-list-row"
-                      >
-                        <div className="min-w-0">
-                          <button
-                            type="button"
-                            onClick={() => openRepoDetail(repo.path)}
-                            style={{ ...amyBodyText, fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' }}
-                            className="truncate hover:underline"
-                            data-testid={`repo-row-open-${index}`}
-                          >
-                            {repo.name}
-                          </button>
-                          <p style={amyCardSubtitle} className="truncate">{repo.path}</p>
-                          <div style={{ marginTop: '0.25rem', display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
-                            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.4rem', borderRadius: '999px', border: '1px solid rgba(30,64,175,0.3)', color: '#94a3b8' }}>
-                              {`Branch ${branch}`}
-                            </span>
-                            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.4rem', borderRadius: '999px', border: '1px solid rgba(30,64,175,0.3)', color: '#94a3b8' }}>
-                              {worktreeModeLabel}
-                            </span>
-                          </div>
-                        </div>
-                        <div style={amyCardSubtitle} data-testid="repo-row-priority">
-                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium ${priorityBadgeClassName}`} data-testid="repo-row-priority-badge">
-                            {priorityLabel}
-                          </span>
-                          <p style={{ fontSize: '0.68rem', marginTop: '0.2rem' }} data-testid="repo-row-risk">{`Risk ${healthSnapshot.riskPoints}`}</p>
-                        </div>
-                        <div style={amyCardSubtitle} data-testid="repo-row-health">
-                          <p style={{ ...amyBodyText, fontWeight: 700 }} data-testid="repo-row-health-score">{healthSnapshot.healthScore}</p>
-                          <p style={{ fontSize: '0.68rem' }}>{healthHint}</p>
-                        </div>
-                        <div style={amyCardSubtitle}>
-                          <p style={{ ...amyBodyText, fontWeight: 600 }} data-testid="repo-row-sync">{`↓${behind} / ↑${ahead}`}</p>
-                          <p style={{ fontSize: '0.68rem' }}>{`Stashes ${stashCount} • Worktrees ${worktreeCount}`}</p>
-                        </div>
-                        <div style={amyCardSubtitle}>
-                          <p style={{ fontSize: '0.68rem' }} data-testid="repo-row-changes">{`Staged ${staged} • Modified ${modified} • Untracked ${untracked}`}</p>
-                          <p style={{ fontSize: '0.68rem' }} data-testid="repo-row-sessions">{`Sessions ${activeSessions}`}</p>
-                        </div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', justifyContent: 'flex-end' }}>
-                          <button type="button" onClick={() => openRepoDetail(repo.path)} style={amyPrimaryBtn} data-testid={`repo-row-detail-${index}`}>Open</button>
-                          <button type="button" onClick={() => window.api.shell?.openVSCode?.(repo.path)} style={amyGhostBtn} data-testid={`repo-row-ide-${index}`}>IDE</button>
-                          <button type="button" onClick={() => window.api.shell?.openTerminal?.(repo.path)} style={amyGhostBtn} data-testid={`repo-row-terminal-${index}`}>Terminal</button>
-                          <button type="button" onClick={() => openCreateAgentWizardForRepo(repo.path)} style={amyGhostBtn} data-testid={`repo-row-session-${index}`}>New session</button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {filtered.map((repo, index) => (
+                    <RepoInsightRow
+                      key={repo.path}
+                      repo={repo}
+                      index={index}
+                      status={statusByPath[repo.path] ?? null}
+                      healthSnapshot={healthByRepoPath.get(repo.path) ?? { healthScore: 100, riskPoints: 0, priority: 'healthy' as RepoPriorityLevel }}
+                      isLast={index === filtered.length - 1}
+                      openRepoDetail={openRepoDetail}
+                      openCreateAgentWizardForRepo={openCreateAgentWizardForRepo}
+                      openCreateAgentWizardWithTask={openCreateAgentWizardWithTask}
+                    />
+                  ))}
                 </div>
               </div>
             )}
@@ -1445,22 +1870,22 @@ export function WorkspaceBrowserView(): React.ReactElement {
           <div data-testid="workflow-queue-panel">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', gap: '0.5rem' }}>
               <div>
-                <h2 style={amyCardTitle}>Daily workflow queue</h2>
-                <p style={amyCardSubtitle}>Highest-leverage actions for this workspace right now.</p>
+                <h2 className="uppercase tracking-widest text-black font-semibold text-[0.8rem]">Daily workflow queue</h2>
+                <p className="text-[0.75rem] text-[rgba(0,0,0,0.45)]">Highest-leverage actions for this workspace right now.</p>
               </div>
               {hiddenWorkflowItemCount > 0 && (
-                <button type="button" onClick={handleResetWorkflowVisibility} style={amyGhostBtn} data-testid="workflow-queue-reset">
+                <button type="button" onClick={handleResetWorkflowVisibility} className="kb-btn" data-testid="workflow-queue-reset">
                   Show hidden ({hiddenWorkflowItemCount})
                 </button>
               )}
             </div>
 
             {sourceRepos.length === 0 ? (
-              <div style={{ ...amyCard, textAlign: 'center' }}>
-                <p style={amyCardSubtitle}>Add a workspace to see workflow actions.</p>
+              <div className="bg-[#FAFAF7] border border-[rgba(0,0,0,0.10)] rounded-[14px] p-4 text-center">
+                <p className="text-[0.75rem] text-[rgba(0,0,0,0.45)]">Add a workspace to see workflow actions.</p>
               </div>
             ) : visibleWorkflowQueueItems.length === 0 ? (
-              <p style={amyCardSubtitle} data-testid="workflow-queue-empty">
+              <p className="text-[0.75rem] text-[rgba(0,0,0,0.45)]" data-testid="workflow-queue-empty">
                 Queue is clear. Hidden items can be restored with "Show hidden".
               </p>
             ) : (
@@ -1482,20 +1907,20 @@ export function WorkspaceBrowserView(): React.ReactElement {
                   return (
                     <div
                       key={item.id}
-                      style={amyCard}
+                      className="bg-[#FAFAF7] border border-[rgba(0,0,0,0.10)] rounded-[14px] p-4"
                       data-testid={`workflow-queue-item-${index}`}
                     >
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                         <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
                           <div className="min-w-0">
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
-                              <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '999px', border: '1px solid rgba(30,64,175,0.4)', color: '#94a3b8' }}>
+                              <span className="text-[0.68rem] px-[0.45rem] py-[0.1rem] rounded-full border border-[rgba(0,0,0,0.10)] text-[rgba(0,0,0,0.45)]">
                                 {workflowCategoryLabel(item.category)}
                               </span>
-                              <span style={{ fontSize: '0.68rem', color: '#9ca3af' }}>{item.impactLabel}</span>
+                              <span className="text-[0.68rem] text-[rgba(0,0,0,0.45)]">{item.impactLabel}</span>
                             </div>
-                            <p style={{ ...amyBodyText, fontWeight: 600 }}>{item.title}</p>
-                            <p style={amyCardSubtitle}>{item.reason}</p>
+                            <p className="text-[0.875rem] text-black font-semibold">{item.title}</p>
+                            <p className="text-[0.75rem] text-[rgba(0,0,0,0.45)]">{item.reason}</p>
 
                             {/* Safety badges for abandoned worktree items */}
                             {isAbandonedCleanup && wtp && (
@@ -1511,7 +1936,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
                             {/* Primary action button — changes colour based on safety */}
                             {confirmingThisItem ? (
                               <>
-                                <span style={{ fontSize: '0.7rem', color: '#fbbf24', alignSelf: 'center' }}>Unsafe — confirm?</span>
+                                <span className="text-[0.7rem] text-amber-600 self-center">Unsafe — confirm?</span>
                                 <button
                                   type="button"
                                   onClick={async () => {
@@ -1519,7 +1944,8 @@ export function WorkspaceBrowserView(): React.ReactElement {
                                     await executeWorkflowAction(item.id, item.primaryAction, true);
                                   }}
                                   disabled={inFlight}
-                                  style={{ ...amyWarningBtn, opacity: inFlight ? 0.5 : 1 }}
+                                  className="kb-btn"
+                                  style={{ borderColor: 'rgba(217,119,6,0.4)', color: '#d97706', opacity: inFlight ? 0.5 : 1 }}
                                   data-testid={`workflow-queue-primary-${index}`}
                                 >
                                   {inFlight ? 'Running…' : 'Confirm clean'}
@@ -1527,7 +1953,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
                                 <button
                                   type="button"
                                   onClick={() => setConfirmCleanWorktreeKey(null)}
-                                  style={amyGhostBtn}
+                                  className="kb-btn"
                                 >
                                   Cancel
                                 </button>
@@ -1537,10 +1963,8 @@ export function WorkspaceBrowserView(): React.ReactElement {
                                 type="button"
                                 onClick={() => void executeWorkflowAction(item.id, item.primaryAction)}
                                 disabled={inFlight}
-                                style={{
-                                  ...(isAbandonedCleanup && safetyInfo && !isSafe ? amyWarningBtn : amyPrimaryBtn),
-                                  opacity: inFlight ? 0.5 : 1,
-                                }}
+                                className={isAbandonedCleanup && safetyInfo && !isSafe ? 'kb-btn' : 'btn-primary'}
+                                style={isAbandonedCleanup && safetyInfo && !isSafe ? { borderColor: 'rgba(217,119,6,0.4)', color: '#d97706', opacity: inFlight ? 0.5 : 1 } : { opacity: inFlight ? 0.5 : 1 }}
                                 data-testid={`workflow-queue-primary-${index}`}
                               >
                                 {inFlight ? 'Running…' : item.primaryAction.label}
@@ -1552,16 +1976,17 @@ export function WorkspaceBrowserView(): React.ReactElement {
                                 type="button"
                                 onClick={() => void executeWorkflowAction(item.id, secondaryAction)}
                                 disabled={inFlight}
-                                style={{ ...amyGhostBtn, opacity: inFlight ? 0.5 : 1 }}
+                                className="kb-btn"
+                                style={{ opacity: inFlight ? 0.5 : 1 }}
                                 data-testid={`workflow-queue-secondary-${index}-${secondaryIndex}`}
                               >
                                 {secondaryAction.label}
                               </button>
                             ))}
-                            <button type="button" onClick={() => handleSnoozeWorkflowItem(item.id)} disabled={inFlight} style={{ ...amyGhostBtn, opacity: inFlight ? 0.5 : 1 }} data-testid={`workflow-queue-snooze-${index}`}>
+                            <button type="button" onClick={() => handleSnoozeWorkflowItem(item.id)} disabled={inFlight} className="kb-btn" style={{ opacity: inFlight ? 0.5 : 1 }} data-testid={`workflow-queue-snooze-${index}`}>
                               Snooze
                             </button>
-                            <button type="button" onClick={() => handleDismissWorkflowItem(item.id)} disabled={inFlight} style={{ ...amyGhostBtn, opacity: inFlight ? 0.5 : 1 }} data-testid={`workflow-queue-dismiss-${index}`}>
+                            <button type="button" onClick={() => handleDismissWorkflowItem(item.id)} disabled={inFlight} className="kb-btn" style={{ opacity: inFlight ? 0.5 : 1 }} data-testid={`workflow-queue-dismiss-${index}`}>
                               Dismiss
                             </button>
                           </div>
@@ -1584,14 +2009,14 @@ export function WorkspaceBrowserView(): React.ReactElement {
         {activeTab === 'storage' && (
           <div data-testid="storage-metrics-panel">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-              <h2 style={amyCardTitle}>Disk &amp; Docker usage</h2>
-              <button type="button" onClick={() => setStorageMetricsRefreshNonce((n) => n + 1)} disabled={storageMetricsLoading} style={{ ...amyGhostBtn, opacity: storageMetricsLoading ? 0.5 : 1 }} data-testid="refresh-storage-metrics">
+              <h2 className="uppercase tracking-widest text-black font-semibold text-[0.8rem]">Disk &amp; Docker usage</h2>
+              <button type="button" onClick={() => setStorageMetricsRefreshNonce((n) => n + 1)} disabled={storageMetricsLoading} className="kb-btn" style={{ opacity: storageMetricsLoading ? 0.5 : 1 }} data-testid="refresh-storage-metrics">
                 {storageMetricsLoading ? 'Refreshing…' : 'Refresh'}
               </button>
             </div>
 
             {storageMetricsLoading && (
-              <p style={amyCardSubtitle}>Analyzing Docker and local storage usage…</p>
+              <p className="text-[0.75rem] text-[rgba(0,0,0,0.45)]">Analyzing Docker and local storage usage…</p>
             )}
 
             {!storageMetricsLoading && storageMetricsError && (
@@ -1602,32 +2027,32 @@ export function WorkspaceBrowserView(): React.ReactElement {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                 {/* Docker + Local side-by-side */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                  <div style={amyCard}>
-                    <p style={{ ...amyCardTitle, marginBottom: '0.5rem' }}>Docker</p>
+                  <div className="bg-[#FAFAF7] border border-[rgba(0,0,0,0.10)] rounded-[14px] p-4">
+                    <p className="uppercase tracking-widest text-black font-semibold text-[0.8rem]" style={{ marginBottom: '0.5rem' }}>Docker</p>
                     {storageMetrics.docker.available ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                        <p style={amyBodyText} data-testid="docker-images-metric">{`${formatGiB(storageMetrics.docker.images.sizeBytes)} images (${storageMetrics.docker.images.reclaimablePercent ?? 0}% of total)`}</p>
-                        <p style={amyBodyText} data-testid="docker-volumes-metric">{`${formatGiB(storageMetrics.docker.localVolumes.sizeBytes)} local volumes (${storageMetrics.docker.localVolumes.reclaimablePercent ?? 0}% unused)`}</p>
-                        <p style={amyBodyText} data-testid="docker-build-cache-metric">{`${formatGiB(storageMetrics.docker.buildCache.sizeBytes)} build cache`}</p>
+                        <p className="text-[0.875rem] text-black" data-testid="docker-images-metric">{`${formatGiB(storageMetrics.docker.images.sizeBytes)} images (${storageMetrics.docker.images.reclaimablePercent ?? 0}% of total)`}</p>
+                        <p className="text-[0.875rem] text-black" data-testid="docker-volumes-metric">{`${formatGiB(storageMetrics.docker.localVolumes.sizeBytes)} local volumes (${storageMetrics.docker.localVolumes.reclaimablePercent ?? 0}% unused)`}</p>
+                        <p className="text-[0.875rem] text-black" data-testid="docker-build-cache-metric">{`${formatGiB(storageMetrics.docker.buildCache.sizeBytes)} build cache`}</p>
                       </div>
                     ) : (
-                      <p style={amyCardSubtitle}>Docker metrics unavailable{storageMetrics.docker.error ? `: ${storageMetrics.docker.error}` : ''}</p>
+                      <p className="text-[0.75rem] text-[rgba(0,0,0,0.45)]">Docker metrics unavailable{storageMetrics.docker.error ? `: ${storageMetrics.docker.error}` : ''}</p>
                     )}
                   </div>
 
-                  <div style={amyCard}>
-                    <p style={{ ...amyCardTitle, marginBottom: '0.5rem' }}>Local storage</p>
+                  <div className="bg-[#FAFAF7] border border-[rgba(0,0,0,0.10)] rounded-[14px] p-4">
+                    <p className="uppercase tracking-widest text-black font-semibold text-[0.8rem]" style={{ marginBottom: '0.5rem' }}>Local storage</p>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                      <p style={amyBodyText} data-testid="local-node-modules-metric">{`${formatGiB(storageMetrics.local.nodeModulesTotalBytes)} node_modules (${storageMetrics.local.nodeModulesByRepo.length} repos)`}</p>
-                      <p style={amyBodyText} data-testid="local-python-metric">{`${formatGiB(storageMetrics.local.pythonEnvsTotalBytes)} python envs (${storageMetrics.local.pythonEnvsByRepo.length} repos)`}</p>
+                      <p className="text-[0.875rem] text-black" data-testid="local-node-modules-metric">{`${formatGiB(storageMetrics.local.nodeModulesTotalBytes)} node_modules (${storageMetrics.local.nodeModulesByRepo.length} repos)`}</p>
+                      <p className="text-[0.875rem] text-black" data-testid="local-python-metric">{`${formatGiB(storageMetrics.local.pythonEnvsTotalBytes)} python envs (${storageMetrics.local.pythonEnvsByRepo.length} repos)`}</p>
                     </div>
                     {(storageMetrics.local.nodeModulesByRepo.length > 0 || storageMetrics.local.pythonEnvsByRepo.length > 0) && (
                       <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
                         {storageMetrics.local.nodeModulesByRepo.slice(0, 3).map((entry) => (
-                          <p key={`node-${entry.repoPath}`} style={amyCardSubtitle}>{`node_modules: ${basenameFromPath(entry.repoPath)} — ${formatGiB(entry.bytes)}`}</p>
+                          <p key={`node-${entry.repoPath}`} className="text-[0.75rem] text-[rgba(0,0,0,0.45)]">{`node_modules: ${basenameFromPath(entry.repoPath)} — ${formatGiB(entry.bytes)}`}</p>
                         ))}
                         {storageMetrics.local.pythonEnvsByRepo.slice(0, 3).map((entry) => (
-                          <p key={`py-${entry.repoPath}`} style={amyCardSubtitle}>{`python envs: ${basenameFromPath(entry.repoPath)} — ${formatGiB(entry.bytes)}`}</p>
+                          <p key={`py-${entry.repoPath}`} className="text-[0.75rem] text-[rgba(0,0,0,0.45)]">{`python envs: ${basenameFromPath(entry.repoPath)} — ${formatGiB(entry.bytes)}`}</p>
                         ))}
                       </div>
                     )}
@@ -1636,19 +2061,19 @@ export function WorkspaceBrowserView(): React.ReactElement {
 
                 {/* Top priority actions */}
                 {topPriorityReclaimable.length > 0 && (
-                  <div style={amyCard} data-testid="top-priority-actions-section">
-                    <p style={{ ...amyCardTitle, marginBottom: '0.5rem' }}>Top priority actions</p>
+                  <div className="bg-[#FAFAF7] border border-[rgba(0,0,0,0.10)] rounded-[14px] p-4" data-testid="top-priority-actions-section">
+                    <p className="uppercase tracking-widest text-black font-semibold text-[0.8rem]" style={{ marginBottom: '0.5rem' }}>Top priority actions</p>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                       {topPriorityReclaimable.map((entry, index) => {
                         const cleanupCommand = buildCleanupCommand(entry.repoPath);
                         return (
                           <div key={`top-action-${entry.repoPath}`} style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }} data-testid={`top-priority-action-row-${index}`}>
-                            <p style={amyBodyText}>{`${index + 1}. ${basenameFromPath(entry.repoPath)} — reclaim ${formatGiB(entry.totalReclaimableBytes)}`}</p>
+                            <p className="text-[0.875rem] text-black">{`${index + 1}. ${basenameFromPath(entry.repoPath)} — reclaim ${formatGiB(entry.totalReclaimableBytes)}`}</p>
                             <div style={{ display: 'flex', gap: '0.4rem' }}>
-                              <button type="button" onClick={() => void handleCopyCleanupCommand(entry.repoPath)} disabled={!cleanupCommand} style={{ ...amyGhostBtn, opacity: !cleanupCommand ? 0.5 : 1 }} data-testid={`top-priority-action-copy-${index}`}>
+                              <button type="button" onClick={() => void handleCopyCleanupCommand(entry.repoPath)} disabled={!cleanupCommand} className="kb-btn" style={{ opacity: !cleanupCommand ? 0.5 : 1 }} data-testid={`top-priority-action-copy-${index}`}>
                                 {copiedCleanupRepoPath === entry.repoPath ? 'Copied' : 'Copy cleanup cmd'}
                               </button>
-                              <button type="button" onClick={() => window.api.shell?.openTerminal?.(entry.repoPath)} style={amyGhostBtn} data-testid={`top-priority-action-terminal-${index}`}>
+                              <button type="button" onClick={() => window.api.shell?.openTerminal?.(entry.repoPath)} className="kb-btn" data-testid={`top-priority-action-terminal-${index}`}>
                                 Open terminal
                               </button>
                             </div>
@@ -1661,11 +2086,11 @@ export function WorkspaceBrowserView(): React.ReactElement {
 
                 {/* Reclaimable ranking */}
                 {storageMetrics.local.reclaimableByRepo.length > 0 && (
-                  <div style={amyCard} data-testid="reclaimable-ranking-section">
-                    <p style={{ ...amyCardTitle, marginBottom: '0.5rem' }}>Reclaimable space ranking</p>
+                  <div className="bg-[#FAFAF7] border border-[rgba(0,0,0,0.10)] rounded-[14px] p-4" data-testid="reclaimable-ranking-section">
+                    <p className="uppercase tracking-widest text-black font-semibold text-[0.8rem]" style={{ marginBottom: '0.5rem' }}>Reclaimable space ranking</p>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
                       {storageMetrics.local.reclaimableByRepo.slice(0, 5).map((entry, index) => (
-                        <p key={`reclaim-${entry.repoPath}`} style={amyBodyText} data-testid={`reclaimable-ranking-row-${index}`}>
+                        <p key={`reclaim-${entry.repoPath}`} className="text-[0.875rem] text-black" data-testid={`reclaimable-ranking-row-${index}`}>
                           {`${index + 1}. ${basenameFromPath(entry.repoPath)} — ${formatGiB(entry.totalReclaimableBytes)} reclaimable`}
                           {` (node_modules ${formatGiB(entry.nodeModulesBytes)}, python ${formatGiB(entry.pythonEnvsBytes)}, abandoned worktrees ${entry.abandonedWorktreeCount})`}
                         </p>
@@ -1675,10 +2100,10 @@ export function WorkspaceBrowserView(): React.ReactElement {
                 )}
 
                 {/* Abandoned worktrees */}
-                <div style={amyCard} data-testid="abandoned-worktrees-section">
-                  <p style={{ ...amyCardTitle, marginBottom: '0.5rem' }}>Abandoned worktrees</p>
+                <div className="bg-[#FAFAF7] border border-[rgba(0,0,0,0.10)] rounded-[14px] p-4" data-testid="abandoned-worktrees-section">
+                  <p className="uppercase tracking-widest text-black font-semibold text-[0.8rem]" style={{ marginBottom: '0.5rem' }}>Abandoned worktrees</p>
                   {storageMetrics.local.abandonedWorktrees.length === 0 ? (
-                    <p style={amyCardSubtitle}>No abandoned worktrees detected.</p>
+                    <p className="text-[0.75rem] text-[rgba(0,0,0,0.45)]">No abandoned worktrees detected.</p>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                       {storageMetrics.local.abandonedWorktrees.slice(0, 5).map((entry, index) => {
@@ -1689,10 +2114,11 @@ export function WorkspaceBrowserView(): React.ReactElement {
                         return (
                           <div
                             key={`abandoned-${entry.worktreePath}-${index}`}
-                            style={{ padding: '0.6rem 0.75rem', borderRadius: '0.75rem', border: '1px solid rgba(30,64,175,0.25)', background: 'rgba(15,23,42,0.5)' }}
+                            className="border border-[rgba(0,0,0,0.10)] rounded-[10px] bg-white"
+                            style={{ padding: '0.6rem 0.75rem' }}
                             data-testid={`abandoned-worktree-row-${index}`}
                           >
-                            <p style={amyBodyText}>
+                            <p className="text-[0.875rem] text-black">
                               {`${basenameFromPath(entry.repoPath)}:${entry.branch} — ${formatAbandonedReason(entry.reason)} • ${entry.exists ? formatDaysOld(entry.daysSinceLastTouched) : 'missing path'} • ${formatGiB(entry.bytes)}`}
                             </p>
 
@@ -1710,7 +2136,8 @@ export function WorkspaceBrowserView(): React.ReactElement {
                                 type="button"
                                 onClick={() => void handleCleanAbandonedWorktree(entry)}
                                 disabled={cleaningInProgress}
-                                style={{ ...amyPrimaryBtn, opacity: cleaningInProgress ? 0.5 : 1 }}
+                                className="btn-primary"
+                                style={{ opacity: cleaningInProgress ? 0.5 : 1 }}
                                 data-testid={`abandoned-worktree-clean-${index}`}
                               >
                                 {cleaningInProgress ? 'Cleaning…' : 'Clean now'}
@@ -1719,7 +2146,8 @@ export function WorkspaceBrowserView(): React.ReactElement {
                                 type="button"
                                 onClick={() => void handleCopyAbandonedWorktreeCommand(entry)}
                                 disabled={cleaningInProgress}
-                                style={{ ...amyGhostBtn, opacity: cleaningInProgress ? 0.5 : 1 }}
+                                className="kb-btn"
+                                style={{ opacity: cleaningInProgress ? 0.5 : 1 }}
                                 data-testid={`abandoned-worktree-copy-${index}`}
                               >
                                 {copiedAbandonedWorktreeKey === worktreeKey ? 'Copied' : 'Copy cmd'}
@@ -1740,8 +2168,8 @@ export function WorkspaceBrowserView(): React.ReactElement {
             )}
 
             {!storageMetricsLoading && !storageMetrics && sourceRepos.length === 0 && (
-              <div style={{ ...amyCard, textAlign: 'center' }}>
-                <p style={amyCardSubtitle}>Add a workspace to see storage metrics.</p>
+              <div className="bg-[#FAFAF7] border border-[rgba(0,0,0,0.10)] rounded-[14px] p-4 text-center">
+                <p className="text-[0.75rem] text-[rgba(0,0,0,0.45)]">Add a workspace to see storage metrics.</p>
               </div>
             )}
           </div>

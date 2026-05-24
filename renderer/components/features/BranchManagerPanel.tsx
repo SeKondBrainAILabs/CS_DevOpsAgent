@@ -98,16 +98,16 @@ export function BranchManagerPanel({ repoPath }: BranchManagerPanelProps): React
 
   return (
     <div className="flex flex-col h-full" data-testid="branch-manager-panel">
-      <div className="p-3 border-b border-border flex items-center gap-2 flex-wrap">
+      <div className="p-3 border-b border-[rgba(0,0,0,0.10)] flex items-center gap-2 flex-wrap">
         {CHIPS.map((c) => (
           <button
             key={c.id}
             type="button"
             onClick={() => setChip(c.id)}
-            className={`text-xs px-2 py-1 rounded border ${
+            className={`text-xs px-2 py-1 rounded-full border ${
               chip === c.id
-                ? 'bg-kanvas-blue text-white border-kanvas-blue'
-                : 'border-border text-text-secondary hover:bg-surface-tertiary'
+                ? 'bg-black text-white border-black'
+                : 'border-[rgba(0,0,0,0.10)] text-text-secondary hover:bg-surface-tertiary'
             }`}
             data-testid={`chip-${c.id}`}
           >
@@ -152,7 +152,7 @@ export function BranchManagerPanel({ repoPath }: BranchManagerPanelProps): React
               {visible.map(({ row, flags }) => (
                 <tr
                   key={row.name}
-                  className="border-t border-border hover:bg-surface-secondary"
+                  className="border-t border-[rgba(0,0,0,0.10)] hover:bg-surface-secondary"
                   data-testid={`branch-row-${row.name}`}
                 >
                   <td className="p-2 font-mono text-text-primary">

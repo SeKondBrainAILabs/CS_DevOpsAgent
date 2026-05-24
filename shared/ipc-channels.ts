@@ -340,6 +340,7 @@ export const IPC = {
   SHELL_OPEN_VSCODE: 'shell:open-vscode',
   SHELL_OPEN_FINDER: 'shell:open-finder',
   SHELL_COPY_PATH: 'shell:copy-path',
+  SHELL_EXEC_GIT_SAFE: 'shell:exec-git-safe',
 
   // ==========================================================================
   // TERMINAL LOG CHANNELS

@@ -153,7 +153,7 @@ export function CommitsTab({ session }: CommitsTabProps): React.ReactElement {
           <div className="h-8 w-20 bg-surface-secondary rounded animate-pulse" />
         </div>
         {[1, 2, 3].map(i => (
-          <div key={i} className="p-4 border border-border rounded-xl">
+          <div key={i} className="p-4 border border-[rgba(0,0,0,0.10)] rounded-[14px]">
             <div className="flex items-center gap-3">
               <div className="h-4 w-16 bg-surface-secondary rounded animate-pulse" />
               <div className="h-4 flex-1 bg-surface-secondary rounded animate-pulse" />
@@ -175,7 +175,7 @@ export function CommitsTab({ session }: CommitsTabProps): React.ReactElement {
           <h3 className="font-semibold text-text-primary">Commits</h3>
           <button
             onClick={loadCommits}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-kanvas-blue hover:bg-surface-secondary rounded-lg transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-kanvas-blue hover:bg-surface-secondary rounded-full transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -184,7 +184,7 @@ export function CommitsTab({ session }: CommitsTabProps): React.ReactElement {
             Retry
           </button>
         </div>
-        <div className="p-4 bg-red-50 text-red-700 rounded-xl text-sm">
+        <div className="p-4 bg-red-50 text-red-700 rounded-[14px] text-sm">
           {error}
         </div>
       </div>
@@ -198,7 +198,7 @@ export function CommitsTab({ session }: CommitsTabProps): React.ReactElement {
           <h3 className="font-semibold text-text-primary">Commits</h3>
           <button
             onClick={loadCommits}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-kanvas-blue hover:bg-surface-secondary rounded-lg transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-kanvas-blue hover:bg-surface-secondary rounded-full transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -233,7 +233,7 @@ export function CommitsTab({ session }: CommitsTabProps): React.ReactElement {
         </div>
         <button
           onClick={loadCommits}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-text-secondary hover:text-kanvas-blue hover:bg-surface-secondary rounded-lg transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-text-secondary hover:text-kanvas-blue hover:bg-surface-secondary rounded-full transition-colors"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -271,7 +271,7 @@ function CommitCard({
   formatRelativeTime: (date: string) => string;
 }): React.ReactElement {
   return (
-    <div className="border border-border rounded-xl overflow-hidden bg-surface">
+    <div className="border border-[rgba(0,0,0,0.10)] rounded-[14px] overflow-hidden bg-surface">
       {/* Commit header - always visible */}
       <div
         className="p-4 cursor-pointer hover:bg-surface-secondary transition-colors"
@@ -319,7 +319,7 @@ function CommitCard({
 
       {/* Expanded content - file list and diffs */}
       {commit.expanded && (
-        <div className="border-t border-border bg-surface-secondary">
+        <div className="border-t border-[rgba(0,0,0,0.10)] bg-surface-secondary">
           {commit.loadingDiff ? (
             <div className="p-4 flex items-center justify-center">
               <svg className="w-5 h-5 text-kanvas-blue animate-spin" fill="none" viewBox="0 0 24 24">

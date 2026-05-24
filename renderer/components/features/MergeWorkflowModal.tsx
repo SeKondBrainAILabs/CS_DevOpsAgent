@@ -476,10 +476,10 @@ export function MergeWorkflowModal({
   const hasCodeConflicts = preview?.hasConflicts && !hasUntrackedBlocking;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+    <div className="fixed inset-0 bg-black/15 backdrop-blur-[2px] flex items-center justify-center z-50">
+      <div className="bg-white border border-[rgba(0,0,0,0.10)] rounded-[22px] shadow-[0_4px_6px_rgba(0,0,0,0.08)] w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="p-4 border-b border-border flex-shrink-0">
+        <div className="p-4 border-b border-[rgba(0,0,0,0.10)] flex-shrink-0">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-text-primary">Merge Workflow</h2>
@@ -491,7 +491,7 @@ export function MergeWorkflowModal({
                   <select
                     value={targetBranch}
                     onChange={(e) => setTargetBranch(e.target.value)}
-                    className="px-2 py-1 rounded bg-surface-secondary border border-border text-kanvas-blue text-sm font-mono focus:outline-none focus:ring-2 focus:ring-kanvas-blue/50"
+                    className="px-2 py-1 rounded-[14px] bg-surface-secondary border border-[rgba(0,0,0,0.10)] text-kanvas-blue text-sm font-mono focus:outline-none focus:ring-2 focus:ring-kanvas-blue/50"
                   >
                     {!branches.find(b => b.name === targetBranch) && (
                       <option value={targetBranch}>{targetBranch}</option>
@@ -652,15 +652,15 @@ export function MergeWorkflowModal({
 
                   {/* Stats */}
                   <div className="grid grid-cols-3 gap-3">
-                    <div className="p-3 bg-surface-secondary rounded-lg">
+                    <div className="p-3 bg-surface-secondary rounded-[14px] border border-[rgba(0,0,0,0.10)]">
                       <div className="text-2xl font-bold text-text-primary">{preview.commitCount}</div>
                       <div className="text-sm text-text-secondary">Commits</div>
                     </div>
-                    <div className="p-3 bg-surface-secondary rounded-lg">
+                    <div className="p-3 bg-surface-secondary rounded-[14px] border border-[rgba(0,0,0,0.10)]">
                       <div className="text-2xl font-bold text-text-primary">{preview.filesChanged.length}</div>
                       <div className="text-sm text-text-secondary">Files Changed</div>
                     </div>
-                    <div className="p-3 bg-surface-secondary rounded-lg">
+                    <div className="p-3 bg-surface-secondary rounded-[14px] border border-[rgba(0,0,0,0.10)]">
                       <div className="text-2xl font-bold text-text-primary">
                         +{preview.aheadBy} / -{preview.behindBy}
                       </div>
@@ -926,7 +926,7 @@ export function MergeWorkflowModal({
                 </div>
               )}
               {/* Advanced error details */}
-              <div className="border border-border rounded-lg overflow-hidden text-left">
+              <div className="border border-[rgba(0,0,0,0.10)] rounded-[14px] overflow-hidden text-left">
                 <button
                   onClick={() => setShowAdvancedError(!showAdvancedError)}
                   className="w-full px-3 py-2 flex items-center justify-between text-xs text-text-secondary hover:bg-surface-secondary transition-colors"
@@ -940,7 +940,7 @@ export function MergeWorkflowModal({
                   </svg>
                 </button>
                 {showAdvancedError && (
-                  <div className="border-t border-border bg-surface-secondary p-3 space-y-1 max-h-48 overflow-y-auto">
+                  <div className="border-t border-[rgba(0,0,0,0.10)] bg-surface-secondary p-3 space-y-1 max-h-48 overflow-y-auto">
                     <div className="text-xs font-mono text-text-secondary space-y-1">
                       <p><span className="text-text-primary font-medium">Error:</span> {error}</p>
                       <p><span className="text-text-primary font-medium">Repo:</span> {repoPath}</p>
@@ -965,13 +965,13 @@ export function MergeWorkflowModal({
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-border bg-surface-secondary">
+        <div className="p-4 border-t border-[rgba(0,0,0,0.10)] bg-surface-secondary">
           <div className="flex items-center justify-between">
             {step === 'preview' && (
               <>
                 <button
                   onClick={onClose}
-                  className="px-4 py-2 rounded-lg text-text-secondary hover:bg-surface transition-colors"
+                  className="kb-btn"
                 >
                   Cancel
                 </button>
@@ -980,7 +980,7 @@ export function MergeWorkflowModal({
                   {hasUntrackedBlocking && (
                     <button
                       onClick={handleStashAndRetry}
-                      className="px-4 py-2 rounded-lg bg-yellow-500 text-white font-medium hover:bg-yellow-600 transition-colors flex items-center gap-2"
+                      className="px-4 py-2 rounded-full bg-yellow-500 text-white font-medium hover:bg-yellow-600 transition-colors flex items-center gap-2"
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
@@ -992,7 +992,7 @@ export function MergeWorkflowModal({
                   {hasCodeConflicts && (
                     <button
                       onClick={handleAutoFix}
-                      className="px-4 py-2 rounded-lg bg-purple-600 text-white font-medium hover:bg-purple-700 transition-colors flex items-center gap-2"
+                      className="px-4 py-2 rounded-full bg-purple-600 text-white font-medium hover:bg-purple-700 transition-colors flex items-center gap-2"
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -1004,9 +1004,9 @@ export function MergeWorkflowModal({
                   <button
                     onClick={() => setStep('options')}
                     disabled={!preview?.canMerge}
-                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                    className={`px-4 py-2 rounded-full font-medium transition-colors ${
                       preview?.canMerge
-                        ? 'bg-kanvas-blue text-white hover:bg-kanvas-blue/90'
+                        ? 'bg-black text-white hover:bg-black/90'
                         : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                     }`}
                   >
@@ -1021,7 +1021,7 @@ export function MergeWorkflowModal({
                   setStep('preview');
                   setProgressLog([]);
                 }}
-                className="ml-auto px-4 py-2 rounded-lg text-text-secondary hover:bg-surface transition-colors"
+                className="ml-auto kb-btn"
               >
                 Back to Preview
               </button>
@@ -1030,13 +1030,13 @@ export function MergeWorkflowModal({
               <>
                 <button
                   onClick={() => setStep('preview')}
-                  className="px-4 py-2 rounded-lg text-text-secondary hover:bg-surface transition-colors"
+                  className="kb-btn"
                 >
                   Back
                 </button>
                 <button
                   onClick={handleExecuteMerge}
-                  className="px-4 py-2 rounded-lg bg-kanvas-blue text-white font-medium hover:bg-kanvas-blue/90 transition-colors"
+                  className="btn-primary"
                 >
                   Execute Merge
                 </button>
@@ -1046,7 +1046,7 @@ export function MergeWorkflowModal({
               <>
                 <button
                   onClick={onClose}
-                  className="px-4 py-2 rounded-lg text-text-secondary hover:bg-surface transition-colors"
+                  className="kb-btn"
                 >
                   Close
                 </button>
@@ -1056,7 +1056,7 @@ export function MergeWorkflowModal({
                       autoFixTriggered.current = false;
                       handleAutoFix();
                     }}
-                    className="px-4 py-2 rounded-lg bg-kanvas-blue text-white hover:bg-blue-600 transition-colors font-medium flex items-center gap-2"
+                    className="btn-primary flex items-center gap-2"
                   >
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -1069,7 +1069,7 @@ export function MergeWorkflowModal({
             {step === 'complete' && (
               <button
                 onClick={handleClose}
-                className="ml-auto px-4 py-2 rounded-lg bg-surface text-text-primary hover:bg-surface-tertiary transition-colors font-medium"
+                className="ml-auto kb-btn"
               >
                 Close
               </button>

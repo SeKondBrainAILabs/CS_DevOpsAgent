@@ -66,15 +66,15 @@ export function RepoDetailModal({ repoPath, onClose }: RepoDetailModalProps): Re
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 flex items-stretch justify-end z-50"
+      className="fixed inset-0 bg-black/15 backdrop-blur-[2px] flex items-stretch justify-end z-50"
       data-testid="repo-detail-modal"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="bg-surface w-full max-w-4xl border-l border-border flex flex-col">
+      <div className="bg-white w-full max-w-4xl border-l border-[rgba(0,0,0,0.10)] flex flex-col">
         {/* Header */}
-        <div className="flex items-center gap-3 p-4 border-b border-border">
+        <div className="flex items-center gap-3 p-4 border-b border-[rgba(0,0,0,0.10)]">
           <div>
             <h2 className="text-lg font-semibold text-text-primary" data-testid="repo-detail-name">
               {repoName}
@@ -100,7 +100,7 @@ export function RepoDetailModal({ repoPath, onClose }: RepoDetailModalProps): Re
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 px-4 border-b border-border" role="tablist">
+        <div className="flex gap-1 px-4 py-2 border-b border-[rgba(0,0,0,0.10)]" role="tablist">
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -108,10 +108,10 @@ export function RepoDetailModal({ repoPath, onClose }: RepoDetailModalProps): Re
               role="tab"
               aria-selected={tab === t.id}
               onClick={() => setTab(t.id)}
-              className={`px-3 py-2 text-sm border-b-2 ${
+              className={`px-4 py-1.5 text-sm rounded-full font-medium transition-colors ${
                 tab === t.id
-                  ? 'border-kanvas-blue text-text-primary'
-                  : 'border-transparent text-text-secondary hover:text-text-primary'
+                  ? 'bg-black text-white'
+                  : 'text-text-secondary hover:text-text-primary hover:bg-[rgba(0,0,0,0.05)]'
               }`}
               data-testid={`repo-detail-tab-${t.id}`}
             >

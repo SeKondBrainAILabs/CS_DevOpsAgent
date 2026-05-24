@@ -365,10 +365,10 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-surface-secondary border border-border rounded-lg w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col animate-slide-up">
+    <div className="fixed inset-0 bg-black/15 backdrop-blur-[2px] flex items-center justify-center z-50">
+      <div className="bg-white border border-[rgba(0,0,0,0.10)] rounded-[22px] shadow-[0_4px_6px_rgba(0,0,0,0.08)] w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col animate-slide-up">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border">
+        <div className="flex items-center justify-between p-4 border-b border-[rgba(0,0,0,0.10)]">
           <h2 className="text-lg font-semibold text-gray-100">Settings</h2>
           <button onClick={onClose} className="btn-icon">
             <svg
@@ -389,33 +389,33 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-border">
+        <div className="flex gap-1 px-4 py-2 border-b border-[rgba(0,0,0,0.10)]">
           <button
             onClick={() => setActiveTab('general')}
-            className={`px-4 py-2 text-sm font-medium transition-colors ${
+            className={`px-3 py-1.5 text-sm font-medium transition-colors rounded-full ${
               activeTab === 'general'
-                ? 'text-accent border-b-2 border-accent'
-                : 'text-gray-400 hover:text-gray-200'
+                ? 'bg-black text-white'
+                : 'text-[rgba(0,0,0,0.45)] hover:bg-[rgba(0,0,0,0.04)]'
             }`}
           >
             General
           </button>
           <button
             onClick={() => setActiveTab('credentials')}
-            className={`px-4 py-2 text-sm font-medium transition-colors ${
+            className={`px-3 py-1.5 text-sm font-medium transition-colors rounded-full ${
               activeTab === 'credentials'
-                ? 'text-accent border-b-2 border-accent'
-                : 'text-gray-400 hover:text-gray-200'
+                ? 'bg-black text-white'
+                : 'text-[rgba(0,0,0,0.45)] hover:bg-[rgba(0,0,0,0.04)]'
             }`}
           >
             Credentials
           </button>
           <button
             onClick={() => setActiveTab('maintenance')}
-            className={`px-4 py-2 text-sm font-medium transition-colors ${
+            className={`px-3 py-1.5 text-sm font-medium transition-colors rounded-full ${
               activeTab === 'maintenance'
-                ? 'text-accent border-b-2 border-accent'
-                : 'text-gray-400 hover:text-gray-200'
+                ? 'bg-black text-white'
+                : 'text-[rgba(0,0,0,0.45)] hover:bg-[rgba(0,0,0,0.04)]'
             }`}
           >
             Maintenance
@@ -435,10 +435,10 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
                 if (result?.success && result.data) setClaudeDesktopConfig(result.data);
               });
             }}
-            className={`px-4 py-2 text-sm font-medium transition-colors ${
+            className={`px-3 py-1.5 text-sm font-medium transition-colors rounded-full ${
               activeTab === 'mcp'
-                ? 'text-accent border-b-2 border-accent'
-                : 'text-gray-400 hover:text-gray-200'
+                ? 'bg-black text-white'
+                : 'text-[rgba(0,0,0,0.45)] hover:bg-[rgba(0,0,0,0.04)]'
             }`}
           >
             MCP
@@ -453,10 +453,10 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
                 }
               });
             }}
-            className={`px-4 py-2 text-sm font-medium transition-colors ${
+            className={`px-3 py-1.5 text-sm font-medium transition-colors rounded-full ${
               activeTab === 'debug'
-                ? 'text-accent border-b-2 border-accent'
-                : 'text-gray-400 hover:text-gray-200'
+                ? 'bg-black text-white'
+                : 'text-[rgba(0,0,0,0.45)] hover:bg-[rgba(0,0,0,0.04)]'
             }`}
           >
             Debug
@@ -468,7 +468,7 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
           {activeTab === 'general' && config && (
             <>
               {/* Repo Version Management */}
-              <div className="bg-surface-tertiary rounded-lg p-3 mb-4 space-y-3">
+              <div className="bg-surface-secondary rounded-[14px] border border-[rgba(0,0,0,0.10)] p-3 mb-4 space-y-3">
                 <div className="text-xs text-gray-500 uppercase tracking-wide">Repo Version</div>
 
                 {uniqueRepos.size === 0 ? (
@@ -505,7 +505,7 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
                           <button
                             onClick={() => handleBump('patch')}
                             disabled={isBumping}
-                            className="flex-1 py-1.5 px-2 rounded bg-surface-secondary hover:bg-surface-primary border border-border text-sm text-gray-200 transition-colors disabled:opacity-50"
+                            className="flex-1 py-1.5 px-2 rounded-[10px] bg-surface-secondary hover:bg-surface-tertiary border border-[rgba(0,0,0,0.10)] text-sm text-text-primary transition-colors disabled:opacity-50"
                           >
                             <div className="font-medium">Patch</div>
                             <div className="text-xs text-gray-500 font-mono">
@@ -515,7 +515,7 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
                           <button
                             onClick={() => handleBump('minor')}
                             disabled={isBumping}
-                            className="flex-1 py-1.5 px-2 rounded bg-surface-secondary hover:bg-surface-primary border border-border text-sm text-gray-200 transition-colors disabled:opacity-50"
+                            className="flex-1 py-1.5 px-2 rounded-[10px] bg-surface-secondary hover:bg-surface-tertiary border border-[rgba(0,0,0,0.10)] text-sm text-text-primary transition-colors disabled:opacity-50"
                           >
                             <div className="font-medium">Minor</div>
                             <div className="text-xs text-gray-500 font-mono">
@@ -525,7 +525,7 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
                           <button
                             onClick={() => handleBump('major')}
                             disabled={isBumping}
-                            className="flex-1 py-1.5 px-2 rounded bg-surface-secondary hover:bg-surface-primary border border-border text-sm text-gray-200 transition-colors disabled:opacity-50"
+                            className="flex-1 py-1.5 px-2 rounded-[10px] bg-surface-secondary hover:bg-surface-tertiary border border-[rgba(0,0,0,0.10)] text-sm text-text-primary transition-colors disabled:opacity-50"
                           >
                             <div className="font-medium">Major</div>
                             <div className="text-xs text-gray-500 font-mono">
@@ -539,18 +539,18 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
                     )}
 
                     {/* Separator */}
-                    <div className="border-t border-border" />
+                    <div className="border-t border-[rgba(0,0,0,0.10)]" />
 
                     {/* Auto version bump toggle */}
                     <div className="flex items-center justify-between">
                       <div>
-                        <div className="text-sm text-gray-200">Auto version bump</div>
-                        <div className="text-xs text-gray-500">Bump on daily rollover</div>
+                        <div className="text-sm text-text-primary">Auto version bump</div>
+                        <div className="text-xs text-text-secondary">Bump on daily rollover</div>
                       </div>
                       <button
                         onClick={() => handleAutoVersionBumpToggle(!versionSettings.autoVersionBump)}
                         className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                          versionSettings.autoVersionBump ? 'bg-accent' : 'bg-gray-600'
+                          versionSettings.autoVersionBump ? 'bg-black' : 'bg-[rgba(0,0,0,0.15)]'
                         }`}
                       >
                         <span
@@ -611,7 +611,7 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
                           }
                         }}
                         disabled={isCheckingUpdate}
-                        className="px-2 py-0.5 text-xs rounded bg-surface-secondary hover:bg-surface-primary border border-border text-gray-300 transition-colors disabled:opacity-50"
+                        className="px-2 py-0.5 text-xs rounded-full bg-surface-secondary hover:bg-surface-tertiary border border-[rgba(0,0,0,0.10)] text-text-secondary transition-colors disabled:opacity-50"
                       >
                         {isCheckingUpdate ? 'Checking...' : 'Check for Updates'}
                       </button>
