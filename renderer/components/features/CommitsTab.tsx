@@ -49,35 +49,50 @@ export function CommitsTab({ session }: CommitsTabProps): React.ReactElement {
         }
       }
 
-      // Try with resolved branch first; if empty results, fall back to no branch filter
+      // Try with resolved branch first; if empty results, fall back to origin/baseBranch
       const result = await window.api.git.getCommitHistory(repoPath, baseBranch, 100, resolvedBranch);
-      if (result.success && result.data) {
-        if (result.data.length > 0) {
-          setCommits(result.data.map(c => ({ ...c, expanded: false })));
+      if (result.success && result.data && result.data.length > 0) {
+        setCommits(result.data.map(c => ({ ...c, expanded: false })));
+        return;
+      }
+
+      if (!result.success && result.error) {
+        // git error — try origin/baseBranch
+        const fallbackResult = await window.api.git.getCommitHistory(repoPath, `origin/${baseBranch}`, 100, resolvedBranch);
+        if (fallbackResult.success && fallbackResult.data && fallbackResult.data.length > 0) {
+          setCommits(fallbackResult.data.map(c => ({ ...c, expanded: false })));
           return;
         }
-        // Empty — might be because baseBranch isn't a local ref; try origin/baseBranch
-        const fallbackResult = await window.api.git.getCommitHistory(repoPath, `origin/${baseBranch}`, 100, resolvedBranch);
-        if (fallbackResult.success && fallbackResult.data) {
-          setCommits(fallbackResult.data.map(c => ({ ...c, expanded: false })));
-        } else {
-          setCommits([]);
-        }
-      } else if (result.error) {
-        // Try origin/baseBranch as fallback
-        const fallbackResult = await window.api.git.getCommitHistory(repoPath, `origin/${baseBranch}`, 100, resolvedBranch);
-        if (fallbackResult.success && fallbackResult.data) {
-          setCommits(fallbackResult.data.map(c => ({ ...c, expanded: false })));
-        } else {
-          setError(result.error.message || 'Failed to load commits');
+        // If that also fails fall through to DB fallback below
+      }
+
+      // Git returned empty (branch merged to base, or origin/base also empty) — fall back
+      // to commits recorded in the database for this session
+      if (window.api?.activity?.getCommits) {
+        const dbResult = await window.api.activity.getCommits(session.sessionId, 100);
+        if (dbResult.success && dbResult.data && dbResult.data.length > 0) {
+          setCommits(dbResult.data.map(c => ({
+            hash: c.hash,
+            shortHash: c.hash.substring(0, 7),
+            message: c.message,
+            author: '',
+            date: c.timestamp,
+            filesChanged: c.filesChanged,
+            additions: c.additions,
+            deletions: c.deletions,
+            expanded: false,
+          })));
+          return;
         }
       }
+
+      setCommits([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load commits');
     } finally {
       setLoading(false);
     }
-  }, [session.worktreePath, session.repoPath, session.baseBranch, session.branchName]);
+  }, [session.sessionId, session.worktreePath, session.repoPath, session.baseBranch, session.branchName]);
 
   // Initial load
   useEffect(() => {

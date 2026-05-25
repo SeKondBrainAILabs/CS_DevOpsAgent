@@ -201,22 +201,22 @@ export default function App(): React.ReactElement {
   const setMainView = useUIStore((state) => state.setMainView);
 
   // Determine what to show in main content
-  // Priority: 1) Session detail, 2) Commits view, 3) Artefacts view, 4) Dashboard
-  const mainContent = selectedSession ? (
+  // Priority: 1) Commits/Workspaces views (always on top), 2) Session detail, 3) Dashboard
+  const mainContent = mainView === 'commits' ? (
+    <UniversalCommitsView />
+  ) : mainView === 'workspaces' ? (
+    <WorkspaceBrowserView />
+  ) : mainView === 'artefacts' ? (
+    <div className="h-full p-6 overflow-auto">
+      <HomeArtefactLeft className="max-w-5xl aspect-[1440/1024] rounded-2xl shadow-card" />
+    </div>
+  ) : selectedSession ? (
     <SessionDetailView
       session={selectedSession}
       onBack={() => setSelectedSession(null)}
       onDelete={handleDeleteSession}
       onRestart={handleRestartSession}
     />
-  ) : mainView === 'workspaces' ? (
-    <WorkspaceBrowserView />
-  ) : mainView === 'commits' ? (
-    <UniversalCommitsView />
-  ) : mainView === 'artefacts' ? (
-    <div className="h-full p-6 overflow-auto">
-      <HomeArtefactLeft className="max-w-5xl aspect-[1440/1024] rounded-2xl shadow-card" />
-    </div>
   ) : (
     <DashboardCanvas agent={selectedAgent} />
   );
