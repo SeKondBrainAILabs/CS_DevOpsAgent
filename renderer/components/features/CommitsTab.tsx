@@ -88,6 +88,28 @@ export function CommitsTab({ session }: CommitsTabProps): React.ReactElement {
 
       setCommits([]);
     } catch (err) {
+      // Git spawn failed (e.g. worktree dir no longer exists) — try DB fallback
+      if (window.api?.activity?.getCommits) {
+        try {
+          const dbResult = await window.api.activity.getCommits(session.sessionId, 100);
+          if (dbResult.success && dbResult.data && dbResult.data.length > 0) {
+            setCommits(dbResult.data.map(c => ({
+              hash: c.hash,
+              shortHash: c.hash.substring(0, 7),
+              message: c.message,
+              author: '',
+              date: c.timestamp,
+              filesChanged: c.filesChanged,
+              additions: c.additions,
+              deletions: c.deletions,
+              expanded: false,
+            })));
+            return;
+          }
+        } catch {
+          // DB also failed — fall through to setError
+        }
+      }
       setError(err instanceof Error ? err.message : 'Failed to load commits');
     } finally {
       setLoading(false);

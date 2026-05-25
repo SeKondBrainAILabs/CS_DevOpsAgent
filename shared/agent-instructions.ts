@@ -193,10 +193,22 @@ EOF
 ### ⚠️ FALLBACK: If MCP tools are NOT in your available tools list
 If the \`kit_commit\` MCP tool is not listed in your tools (MCP connection failed):
 1. Stage and commit directly: \`git add -A && git commit -m "your message"\`
-2. Or write commit message to \`.devops-commit-${shortSessionId}.msg\` or \`.claude-commit-msg\` — the KIT watcher will auto-commit.` : `
+2. Or write commit message to \`.devops-commit-${shortSessionId}.msg\` or \`.claude-commit-msg\` — the KIT watcher will auto-commit.
+
+⛔ **CRITICAL GIT PUSH RULES (read even if MCP is working):**
+- If you need to push manually, ONLY push to your session branch: \`git push origin HEAD:${vars.branchName || 'YOUR_SESSION_BRANCH'}\`
+- **NEVER** push to \`${vars.baseBranch || 'main'}\`, \`main\`, \`master\`, or any base/production branch directly
+- **NEVER** use \`HEAD:main\` or \`HEAD:master\` in a push command
+- Merging to the base branch is done by the human via Kanvas — NOT by the agent
+- If you cannot commit via MCP or git, STOP and ask the user — do not invent alternative push strategies` : `
 📝 **To commit**, either:
 1. Stage and commit directly: \`git add -A && git commit -m "your message"\`
-2. Or write your commit message to \`.devops-commit-${shortSessionId}.msg\` or \`.claude-commit-msg\` — the KIT watcher will auto-commit.`}
+2. Or write your commit message to \`.devops-commit-${shortSessionId}.msg\` or \`.claude-commit-msg\` — the KIT watcher will auto-commit.
+
+⛔ **CRITICAL GIT PUSH RULES:**
+- ONLY push to your session branch — NEVER to \`main\`, \`master\`, or any base/production branch
+- Merging to the base branch is done by the human via Kanvas — NOT by the agent
+- If you cannot commit, STOP and ask the user — do not invent alternative push strategies`}
 
 **One story = one commit.** If given multiple stories, complete and commit each separately.
 
@@ -316,7 +328,16 @@ EOF
 ### ⚠️ FALLBACK: If MCP tools are not available` : ''}
 \`\`\`bash
 git add -A && git commit -m "your message"
+# Push ONLY to your session branch:
+git push origin HEAD:${vars.branchName || 'YOUR_SESSION_BRANCH'}
 \`\`\`
+
+⛔ **CRITICAL GIT PUSH RULES — READ BEFORE ANY PUSH:**
+- ONLY push to your session branch (\`${vars.branchName || 'YOUR_SESSION_BRANCH'}\`)
+- **NEVER** push to \`${vars.baseBranch || 'main'}\`, \`main\`, \`master\`, or any base/production branch directly
+- **NEVER** use \`HEAD:main\` or \`HEAD:master\` in any git push command
+- Merging to the base branch is done by the human via Kanvas — NOT by the agent
+- If MCP commit fails and direct git also fails, **STOP and tell the user** — do not invent alternative strategies
 ${vars.multiRepoEntries && vars.multiRepoEntries.length > 1 ? `
 ## MULTI-REPO SESSION
 | Repo | Role | Branch | Path |
