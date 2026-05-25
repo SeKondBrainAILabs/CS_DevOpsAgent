@@ -332,6 +332,12 @@ export class McpServerService extends BaseService {
       return;
     }
 
+    // ---- Stateless JSON-RPC route (for Codex / type:"http" clients) ----
+    if (url.pathname === '/rpc') {
+      await this.handleStatelessRpc(req, res);
+      return;
+    }
+
     // ---- Streamable HTTP transport route (for Claude Code) ----
     if (url.pathname !== '/mcp') {
       res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -401,6 +407,45 @@ export class McpServerService extends BaseService {
       this.transports.set(sid, transport);
       this.lastActivity.set(sid, Date.now());
       console.log(`[McpServerService] New session: ${sid} (${this.transports.size} active)`);
+    }
+  }
+
+  // ==========================================================================
+  // STATELESS JSON-RPC (Codex / type:"http" clients)
+  // ==========================================================================
+
+  /**
+   * Handles a single stateless JSON-RPC request (no session management).
+   * Codex uses `type: "http"` which sends plain JSON-RPC POST requests without
+   * the MCP Streamable HTTP session protocol. A fresh server + stateless transport
+   * is created for each request and torn down after the response is sent.
+   */
+  private async handleStatelessRpc(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method !== 'POST') {
+      res.writeHead(405, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Method not allowed' }));
+      return;
+    }
+
+    const McpServerClass = _McpServer!;
+    const TransportClass = _StreamableHTTPServerTransport!;
+
+    // Stateless mode: pass sessionIdGenerator: undefined so the transport
+    // assigns no session ID and treats every request as independent.
+    const mcpServer = new McpServerClass({ name: 'kit', version: '1.0.0' });
+    const transport = new TransportClass({ sessionIdGenerator: undefined });
+
+    const { registerTools } = await import('./mcp/tools');
+    const { registerResources } = await import('./mcp/resources');
+    registerTools(mcpServer, this.sessionBinder, this.deps, this);
+    registerResources(mcpServer, this.sessionBinder, this.deps);
+
+    await mcpServer.connect(transport);
+
+    try {
+      await transport.handleRequest(req, res);
+    } finally {
+      try { await (transport as any).close?.(); } catch { /* ignore */ }
     }
   }
 
@@ -482,6 +527,12 @@ export class McpServerService extends BaseService {
   getUrl(): string | null {
     if (!this.port) return null;
     return `http://${MCP_SERVER_HOST}:${this.port}/mcp`;
+  }
+
+  /** Stateless JSON-RPC endpoint for Codex / type:"http" clients */
+  getRpcUrl(): string | null {
+    if (!this.port) return null;
+    return `http://${MCP_SERVER_HOST}:${this.port}/rpc`;
   }
 
   getStatus(): McpServerStatus {

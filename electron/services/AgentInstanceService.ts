@@ -95,6 +95,7 @@ export class AgentInstanceService extends BaseService {
   private instances: Map<string, AgentInstance> = new Map();
   private terminalLogService: TerminalLogService | null = null;
   private mcpServerUrl: string | null = null;
+  private rpcServerUrl: string | null = null;
   private configService: ConfigService | null = null;
 
   /**
@@ -124,6 +125,13 @@ export class AgentInstanceService extends BaseService {
    */
   setMcpServerUrl(url: string | null): void {
     this.mcpServerUrl = url;
+  }
+
+  /**
+   * Set the stateless JSON-RPC URL (/rpc) for Codex / type:"http" clients
+   */
+  setRpcServerUrl(url: string | null): void {
+    this.rpcServerUrl = url;
   }
 
   /**
@@ -569,7 +577,9 @@ ${DEVOPS_KIT_DIR}/
       const finalInstructionVars: InstructionVars = {
         ...instructionVars,
         repoPath: workingDirectory, // CRITICAL: Use worktree path, not main repo
+        baseBranch: config.baseBranch,
         mcpUrl: this.mcpServerUrl || undefined,
+        rpcUrl: this.rpcServerUrl || undefined,
         customMcpEnabled: config.customMcpEnabled,
       };
       instance.instructions = getAgentInstructions(config.agentType, finalInstructionVars);
@@ -928,12 +938,21 @@ ${DEVOPS_KIT_DIR}/
     if (!this.mcpServerUrl) return;
 
     try {
-      const mcpConfig = {
+      // Include both transport types so any agent (Claude Code, Codex, Cursor, etc.) can connect:
+      // - kit: streamable-http for Claude Code (stateful, requires MCP session protocol)
+      // - kit-rpc: http for Codex and other plain JSON-RPC clients (stateless /rpc endpoint)
+      const mcpConfig: Record<string, unknown> = {
         mcpServers: {
           kit: {
             type: 'streamable-http',
             url: this.mcpServerUrl,
           },
+          ...(this.rpcServerUrl ? {
+            'kit-rpc': {
+              type: 'http',
+              url: this.rpcServerUrl,
+            },
+          } : {}),
         },
       };
 
@@ -2193,6 +2212,8 @@ ${DEVOPS_KIT_DIR}/
         contextPreservation: instance.config.contextPreservation || '',
         rebaseFrequency: instance.config.rebaseFrequency || 'never',
         mcpUrl: this.mcpServerUrl || undefined,
+        rpcUrl: this.rpcServerUrl || undefined,
+        baseBranch: instance.config.baseBranch,
         multiRepoEntries: instance.multiRepoEntries,
         commitScope: instance.config.multiRepo?.commitScope,
       };

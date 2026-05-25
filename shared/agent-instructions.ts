@@ -9,12 +9,15 @@ export interface InstructionVars {
   repoPath: string;
   repoName: string;
   branchName: string;
+  baseBranch?: string;
   sessionId: string;
   taskDescription: string;
   systemPrompt: string;
   contextPreservation: string;
   rebaseFrequency: string;
   mcpUrl?: string;
+  /** Stateless JSON-RPC endpoint for Codex / type:"http" clients (/rpc) */
+  rpcUrl?: string;
   // Custom agent MCP opt-in
   customMcpEnabled?: boolean;
   // Multi-repo fields
@@ -271,13 +274,14 @@ YOU MUST WORK ONLY IN THIS DIRECTORY - NOT THE MAIN REPO
 
 BRANCH: ${vars.branchName}
 TASK: ${task}
-${vars.mcpUrl ? `
+${(vars.rpcUrl || vars.mcpUrl) ? `
 ## 🔌 MCP SERVER CONNECTION
-This session has a KIT MCP server at: \`${vars.mcpUrl}\`
-MCP config is provided via \`.mcp.json\` in this worktree (auto-detected by Codex).
-If not auto-detected, add to \`~/.codex/config.json\`:
+This session has a KIT MCP server.
+- **Stateless JSON-RPC endpoint (use this):** \`${vars.rpcUrl || vars.mcpUrl}\`
+- MCP config is provided via \`.mcp.json\` in this worktree (auto-detected by Codex).
+- If not auto-detected, add to \`~/.codex/config.json\`:
 \`\`\`json
-{ "mcpServers": { "kit": { "type": "http", "url": "${vars.mcpUrl}" } } }
+{ "mcpServers": { "kit": { "type": "http", "url": "${vars.rpcUrl || vars.mcpUrl}" } } }
 \`\`\`
 Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
 

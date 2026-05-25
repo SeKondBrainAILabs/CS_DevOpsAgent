@@ -296,8 +296,9 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   seedDataExecution.setMainWindow(mainWindow);
   console.log('[Services] Seed data execution service initialized');
 
-  // Pass MCP URL to AgentInstanceService for .mcp.json generation
+  // Pass MCP URLs to AgentInstanceService for .mcp.json generation
   agentInstance.setMcpServerUrl(mcpServer.getUrl());
+  agentInstance.setRpcServerUrl(mcpServer.getRpcUrl());
 
   // Wire session callbacks: register sessions with MCP session binder
   agentInstance.onSessionCreated = (sessionId, worktreePath) => {
