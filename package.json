@@ -1,6 +1,6 @@
 {
   "name": "sekondbrain-kanvas",
-  "version": "2.6.1",
+  "version": "2.6.2",
   "description": "Kanvas for Kit - AI Agent Dashboard",
   "main": "dist/electron/index.js",
   "type": "module",
@@ -78,7 +78,7 @@
       "dist/**/*",
       "package.json"
     ],
-    "afterPack": "./scripts/afterPack.cjs",
+    "afterSign": "./scripts/afterSign.cjs",
     "mac": {
       "target": [
         "dmg",
