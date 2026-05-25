@@ -78,6 +78,7 @@
       "dist/**/*",
       "package.json"
     ],
+    "afterPack": "./scripts/afterPack.cjs",
     "mac": {
       "target": [
         "dmg",
