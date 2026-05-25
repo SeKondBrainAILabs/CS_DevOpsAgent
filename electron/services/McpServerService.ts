@@ -131,13 +131,13 @@ export class McpServerService extends BaseService {
   }
 
   getMcpCallLog(limit = 200): McpCallLogEntry[] {
-    // Load from database if available and in-memory cache is empty
-    if (this.mcpCallLog.length === 0 && this._dbService) {
+    // Always read from DB when available — ensures calls from other clients (Chrome extension,
+    // remote agents) are included even if they never passed through this process's in-memory log
+    if (this._dbService) {
       try {
-        const rows = this._dbService.getMcpCalls(limit);
-        this.mcpCallLog = rows;
+        return this._dbService.getMcpCalls(limit);
       } catch {
-        // Fall back to empty
+        // Fall back to in-memory
       }
     }
     return this.mcpCallLog.slice(-limit);
