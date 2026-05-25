@@ -845,7 +845,10 @@ export class MergeConflictService extends BaseService {
 
       // Fetch latest
       try {
-        await this.git(['fetch', 'origin', targetBranch], repoPath);
+        await this.git(
+          ['-c', 'fetch.recurseSubmodules=false', 'fetch', 'origin', targetBranch],
+          repoPath
+        );
       } catch {
         throw new Error(`Failed to fetch ${targetBranch}`);
       }
@@ -1269,7 +1272,10 @@ export class MergeConflictService extends BaseService {
 
       // Start the rebase
       try {
-        await this.git(['fetch', 'origin', targetBranch], repoPath);
+        await this.git(
+          ['-c', 'fetch.recurseSubmodules=false', 'fetch', 'origin', targetBranch],
+          repoPath
+        );
       } catch (fetchError) {
         return {
           success: false,
