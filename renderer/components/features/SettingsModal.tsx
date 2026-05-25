@@ -1221,29 +1221,13 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
 
                 {manualSetupOpen && mcpStatus?.url && (
                   <div className="space-y-4 pl-5">
-                    {/* Global settings.json */}
-                    <div className="space-y-1.5">
-                      <label className="text-xs text-gray-500 uppercase tracking-wide">~/.claude/settings.json</label>
-                      <div className="bg-surface-tertiary rounded-lg p-3 relative">
-                        <pre className="text-xs font-mono text-gray-300 whitespace-pre overflow-x-auto pr-8">
-{JSON.stringify({ mcpServers: { kit: { type: 'streamable-http', url: mcpStatus.url } } }, null, 2)}
-                        </pre>
-                        <button
-                          onClick={() => {
-                            navigator.clipboard.writeText(JSON.stringify({ mcpServers: { kit: { type: 'streamable-http', url: mcpStatus.url } } }, null, 2));
-                            setMcpJsonCopied('global');
-                            setTimeout(() => setMcpJsonCopied(null), 2000);
-                          }}
-                          className="absolute top-2 right-2 btn-secondary px-2 py-1 text-xs"
-                        >
-                          {mcpJsonCopied === 'global' ? 'Copied!' : 'Copy'}
-                        </button>
-                      </div>
-                    </div>
+                    <p className="text-xs text-gray-500">
+                      Add the <code className="font-mono bg-surface-tertiary px-1 rounded">kit</code> entry to your agent's MCP config file, then restart the agent.
+                    </p>
 
-                    {/* .mcp.json */}
+                    {/* .mcp.json — universal project-level config (Claude Code, Codex, Cursor, Windsurf, etc.) */}
                     <div className="space-y-1.5">
-                      <label className="text-xs text-gray-500 uppercase tracking-wide">.mcp.json (project root)</label>
+                      <label className="text-xs text-gray-500 uppercase tracking-wide">.mcp.json — project root (all agents)</label>
                       <div className="bg-surface-tertiary rounded-lg p-3 relative">
                         <pre className="text-xs font-mono text-gray-300 whitespace-pre overflow-x-auto pr-8">
 {JSON.stringify({ mcpServers: { kit: { type: 'streamable-http', url: mcpStatus.url } } }, null, 2)}
@@ -1257,6 +1241,46 @@ export function SettingsModal({ onClose }: SettingsModalProps): React.ReactEleme
                           className="absolute top-2 right-2 btn-secondary px-2 py-1 text-xs"
                         >
                           {mcpJsonCopied === 'mcp' ? 'Copied!' : 'Copy'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Claude Code global */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-gray-500 uppercase tracking-wide">Claude Code — ~/.claude.json (global)</label>
+                      <div className="bg-surface-tertiary rounded-lg p-3 relative">
+                        <pre className="text-xs font-mono text-gray-300 whitespace-pre overflow-x-auto pr-8">
+{JSON.stringify({ mcpServers: { kit: { type: 'http', url: mcpStatus.url } } }, null, 2)}
+                        </pre>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(JSON.stringify({ mcpServers: { kit: { type: 'http', url: mcpStatus.url } } }, null, 2));
+                            setMcpJsonCopied('global');
+                            setTimeout(() => setMcpJsonCopied(null), 2000);
+                          }}
+                          className="absolute top-2 right-2 btn-secondary px-2 py-1 text-xs"
+                        >
+                          {mcpJsonCopied === 'global' ? 'Copied!' : 'Copy'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Codex CLI */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-gray-500 uppercase tracking-wide">OpenAI Codex CLI — ~/.codex/config.json</label>
+                      <div className="bg-surface-tertiary rounded-lg p-3 relative">
+                        <pre className="text-xs font-mono text-gray-300 whitespace-pre overflow-x-auto pr-8">
+{JSON.stringify({ mcpServers: { kit: { type: 'http', url: mcpStatus.url } } }, null, 2)}
+                        </pre>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(JSON.stringify({ mcpServers: { kit: { type: 'http', url: mcpStatus.url } } }, null, 2));
+                            setMcpJsonCopied('codex');
+                            setTimeout(() => setMcpJsonCopied(null), 2000);
+                          }}
+                          className="absolute top-2 right-2 btn-secondary px-2 py-1 text-xs"
+                        >
+                          {mcpJsonCopied === 'codex' ? 'Copied!' : 'Copy'}
                         </button>
                       </div>
                     </div>

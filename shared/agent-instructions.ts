@@ -242,6 +242,91 @@ cd /path/to/repo-worktree && git add -A && git commit -m "your message"
 ⛔ STOP: Run setup commands, read houserules.md, then await instructions.`;
 }
 
+/**
+ * Generate the standalone prompt for OpenAI Codex CLI agent.
+ * Formatted for Codex's task-based workflow — not Claude's conversation style.
+ * References ~/.codex/config.json for MCP, uses codex-session-* files.
+ */
+export function generateCodexPrompt(vars: InstructionVars): string {
+  const shortSessionId = vars.sessionId.replace('sess_', '').slice(0, 8);
+  const task = vars.taskDescription || vars.branchName || 'development';
+
+  return `# SESSION ${shortSessionId}
+
+# ⚠️ CRITICAL: WRONG DIRECTORY = WASTED WORK ⚠️
+WORKDIR: ${vars.repoPath}
+YOU MUST WORK ONLY IN THIS DIRECTORY - NOT THE MAIN REPO
+
+BRANCH: ${vars.branchName}
+TASK: ${task}
+${vars.mcpUrl ? `
+## 🔌 MCP SERVER CONNECTION
+This session has a KIT MCP server at: \`${vars.mcpUrl}\`
+MCP config is provided via \`.mcp.json\` in this worktree (auto-detected by Codex).
+If not auto-detected, add to \`~/.codex/config.json\`:
+\`\`\`json
+{ "mcpServers": { "kit": { "type": "http", "url": "${vars.mcpUrl}" } } }
+\`\`\`
+Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+
+**⚠️ These are MCP protocol tools — NOT bash commands. Do not run them in a terminal.**
+` : ''}
+## 1. SETUP (run first)
+\`\`\`bash
+cd "${vars.repoPath}"
+pwd
+cat houserules.md 2>/dev/null || echo "No houserules.md"
+cat FOLDER_STRUCTURE.md 2>/dev/null || echo "No FOLDER_STRUCTURE.md"
+ls House_Rules_Contracts/ 2>/dev/null && echo "Found contract docs - read relevant ones before making changes"
+\`\`\`
+
+## 2. CONTEXT FILE
+\`\`\`bash
+cat > .codex-session-${shortSessionId}.md << 'EOF'
+# Session ${shortSessionId}
+Dir: ${vars.repoPath}
+Branch: ${vars.branchName}
+Task: ${task}
+
+## Progress
+- [ ] Task started
+- [ ] Files identified
+- [ ] Implementation in progress
+- [ ] Testing complete
+- [ ] Ready for commit
+EOF
+\`\`\`
+
+## 3. FILE LOCKS (before editing any file)${vars.mcpUrl ? `
+🔧 **PREFERRED: Use MCP tool \`kit_lock_file\`** with session_id="${vars.sessionId}", files=["file.ts"]
+Release with \`kit_unlock_file\` when done.
+
+### ⚠️ FALLBACK: If MCP tools are not available` : ''}
+\`\`\`bash
+ls .file-coordination/active-edits/
+cat > .file-coordination/active-edits/codex-${shortSessionId}.json << 'EOF'
+{"agent":"codex","session":"${shortSessionId}","files":["<file1.ts>"],"operation":"edit","reason":"${task}"}
+EOF
+\`\`\`
+
+## 4. COMMITS${vars.mcpUrl ? `
+🔧 **PREFERRED: Use MCP tool \`kit_commit\`** (NOT a bash command — MCP protocol only)
+**session_id for all MCP calls: \`${vars.sessionId}\`**
+
+### ⚠️ FALLBACK: If MCP tools are not available` : ''}
+\`\`\`bash
+git add -A && git commit -m "your message"
+\`\`\`
+${vars.multiRepoEntries && vars.multiRepoEntries.length > 1 ? `
+## MULTI-REPO SESSION
+| Repo | Role | Branch | Path |
+|------|------|--------|------|
+${vars.multiRepoEntries.map(r => `| ${r.repoName} | ${r.role} | ${r.branchName} | ${r.worktreePath} |`).join('\n')}
+` : ''}
+---
+Run with: \`codex --approval-mode full-auto\``;
+}
+
 function getClaudeInstructions(vars: InstructionVars): string {
   const shortSessionId = vars.sessionId.replace('sess_', '').slice(0, 8);
   const rebaseNote = vars.rebaseFrequency !== 'never'

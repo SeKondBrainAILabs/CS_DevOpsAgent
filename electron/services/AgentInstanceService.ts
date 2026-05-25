@@ -49,7 +49,7 @@ async function execaCmd(cmd: string, args: string[], options?: { cwd?: string; t
   });
 }
 import { KANVAS_PATHS, FILE_COORDINATION_PATHS, DEVOPS_KIT_DIR } from '../../shared/agent-protocol';
-import { getAgentInstructions, generateClaudePrompt, InstructionVars } from '../../shared/agent-instructions';
+import { getAgentInstructions, generateClaudePrompt, generateCodexPrompt, InstructionVars } from '../../shared/agent-instructions';
 import type {
   AgentType,
   AgentInstance,
@@ -61,6 +61,12 @@ import type {
   RepoEntry,
   RepoRole,
 } from '../../shared/types';
+
+function generateAgentPrompt(agentType: AgentType, vars: InstructionVars): string | undefined {
+  if (agentType === 'claude') return generateClaudePrompt(vars);
+  if (agentType === 'codex') return generateCodexPrompt(vars);
+  return undefined;
+}
 import { generateSecondaryBranchName } from '../../shared/types';
 import { evaluateSingleSessionGuard } from '../../shared/single-session-guard';
 import { isActiveInstance } from '../../shared/instance-status';
@@ -518,10 +524,8 @@ ${DEVOPS_KIT_DIR}/
 
       const instructions = getAgentInstructions(config.agentType, instructionVars);
 
-      // Generate the standalone prompt for easy copying (only for Claude)
-      const prompt = config.agentType === 'claude'
-        ? generateClaudePrompt(instructionVars)
-        : undefined;
+      // Generate the standalone prompt for easy copying (agent-specific)
+      const prompt = generateAgentPrompt(config.agentType, instructionVars);
 
       // Create instance
       const instance: AgentInstance = {
@@ -569,9 +573,7 @@ ${DEVOPS_KIT_DIR}/
         customMcpEnabled: config.customMcpEnabled,
       };
       instance.instructions = getAgentInstructions(config.agentType, finalInstructionVars);
-      if (config.agentType === 'claude' || config.agentType === 'codex') {
-        instance.prompt = generateClaudePrompt(finalInstructionVars);
-      }
+      instance.prompt = generateAgentPrompt(config.agentType, finalInstructionVars);
 
       // Save instance with updated instructions
       this.instances.set(id, instance);
@@ -608,9 +610,7 @@ ${DEVOPS_KIT_DIR}/
             commitScope: config.multiRepo.commitScope,
           };
           instance.instructions = getAgentInstructions(config.agentType, multiRepoVars);
-          if (config.agentType === 'claude') {
-            instance.prompt = generateClaudePrompt(multiRepoVars);
-          }
+          instance.prompt = generateAgentPrompt(config.agentType, multiRepoVars);
 
           this.instances.set(id, instance);
           this.saveInstances();
