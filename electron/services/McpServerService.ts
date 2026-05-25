@@ -481,7 +481,20 @@ export class McpServerService extends BaseService {
       console.log(`[McpServerService] SSE session opened: ${sid} (${this.sseTransports.size} active)`);
     }
 
+    // Send SSE keep-alive comment every 25 s to prevent mcp-remote's body timeout
+    // (mcp-remote / node-fetch kills idle SSE streams after ~5 minutes without data)
+    const keepAlive = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        clearInterval(keepAlive);
+      }
+    }, 25_000);
+
+    res.on('close', () => clearInterval(keepAlive));
+
     transport.onclose = () => {
+      clearInterval(keepAlive);
       if (sid) {
         this.sseTransports.delete(sid);
         this.lastActivity.delete(sid);
