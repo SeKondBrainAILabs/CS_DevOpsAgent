@@ -287,6 +287,7 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   mcpServer.setDatabaseService(databaseService);
   mcpServer.setMcpCallDb(databaseService);
   await mcpServer.initialize();
+  mcpServer.wireCommitEmitter();
   console.log('[Services] MCP server initialized on port', mcpServer.getPort());
 
   // Initialize Seed Data Execution service

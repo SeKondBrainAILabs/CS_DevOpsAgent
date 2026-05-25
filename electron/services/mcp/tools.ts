@@ -194,7 +194,10 @@ export function registerTools(
           }
         }
 
-        // 5. Post-commit contract check (fire-and-forget)
+        // 5. Emit commit event so renderer CommitsTab updates in real-time
+        deps.emitCommitCompleted?.(session_id, hash, commitMessage, filesChanged);
+
+        // 6. Post-commit contract check (fire-and-forget)
         triggerContractCheck(session_id, worktree, hash).catch(() => {});
 
         const result = {

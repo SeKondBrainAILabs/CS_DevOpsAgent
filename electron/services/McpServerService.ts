@@ -21,6 +21,7 @@ import type { Server } from 'http';
 import { BaseService } from './BaseService';
 import { McpSessionBinder } from './mcp/session-binder';
 import { MCP_DEFAULT_PORT_START, MCP_SERVER_HOST } from '../../shared/mcp-types';
+import { IPC } from '../../shared/ipc-channels';
 import type { McpServerStatus, McpInstallConfigStatus, McpInstallTarget } from '../../shared/mcp-types';
 
 // Lazy imports for MCP SDK (ESM modules)
@@ -83,6 +84,7 @@ export interface McpServiceDeps {
   contractGenerationService?: {
     generateFeatureContract: (worktreePath: string, feature: any) => Promise<any>;
   };
+  emitCommitCompleted?: (sessionId: string, hash: string, message: string, filesChanged: number) => void;
 }
 
 export interface McpCallLogEntry {
@@ -188,6 +190,19 @@ export class McpServerService extends BaseService {
 
   getDeps(): McpServiceDeps {
     return this.deps;
+  }
+
+  wireCommitEmitter(): void {
+    this.deps.emitCommitCompleted = (sessionId, hash, message, filesChanged) => {
+      this.emitToRenderer(IPC.COMMIT_COMPLETED, {
+        sessionId,
+        commitHash: hash,
+        message,
+        filesChanged,
+        timestamp: new Date().toISOString(),
+        source: 'mcp',
+      });
+    };
   }
 
   // ==========================================================================

@@ -79,8 +79,25 @@ export function CommitsTab({ session }: CommitsTabProps): React.ReactElement {
     }
   }, [session.worktreePath, session.repoPath, session.baseBranch, session.branchName]);
 
+  // Initial load
   useEffect(() => {
     loadCommits();
+  }, [loadCommits]);
+
+  // Reload whenever a commit completes in this session (covers kit_commit via MCP)
+  useEffect(() => {
+    const unsub = window.api?.watcher?.onCommitCompleted?.((event: any) => {
+      if (!event?.sessionId || event.sessionId === session.sessionId) {
+        loadCommits();
+      }
+    });
+    return () => { unsub?.(); };
+  }, [session.sessionId, loadCommits]);
+
+  // Poll every 10s as a fallback for commits that arrive without a push event
+  useEffect(() => {
+    const id = setInterval(() => loadCommits(), 10_000);
+    return () => clearInterval(id);
   }, [loadCommits]);
 
   // Load diff detail for a commit
