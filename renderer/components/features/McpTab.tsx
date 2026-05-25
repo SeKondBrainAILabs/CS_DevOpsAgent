@@ -29,32 +29,58 @@ const TOOL_COLORS: Record<string, string> = {
   kit_request_review: 'text-cyan-400',
 };
 
+const POLL_INTERVAL_MS = 3000;
+
 export function McpTab({ sessionId }: McpTabProps): React.ReactElement {
   const [calls, setCalls] = useState<McpCallEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const knownTimestampsRef = useRef<Set<string>>(new Set());
 
-  // Load historical calls
-  useEffect(() => {
-    setLoading(true);
+  const fetchCalls = useCallback((initial = false) => {
+    if (initial) setLoading(true);
     window.api?.mcp?.getCallLog?.(200)
       .then((result) => {
         if (result?.success && result.data) {
           const filtered = (result.data as McpCallEntry[]).filter(
             (c) => c.sessionId === sessionId
           );
-          setCalls(filtered.reverse());
+          const sorted = filtered.reverse(); // newest first
+          if (initial) {
+            knownTimestampsRef.current = new Set(sorted.map(c => c.timestamp));
+            setCalls(sorted);
+          } else {
+            // Only add genuinely new entries to avoid flicker
+            const newEntries = sorted.filter(c => !knownTimestampsRef.current.has(c.timestamp));
+            if (newEntries.length > 0) {
+              newEntries.forEach(c => knownTimestampsRef.current.add(c.timestamp));
+              setCalls((prev) => [...newEntries, ...prev]);
+            }
+          }
         }
       })
-      .finally(() => setLoading(false));
+      .finally(() => { if (initial) setLoading(false); });
   }, [sessionId]);
 
-  // Subscribe to live events
+  // Initial load
+  useEffect(() => {
+    knownTimestampsRef.current = new Set();
+    fetchCalls(true);
+  }, [fetchCalls]);
+
+  // Poll every 3s as the reliable update path
+  useEffect(() => {
+    const id = setInterval(() => fetchCalls(false), POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [fetchCalls]);
+
+  // Also subscribe to push events for sub-second updates when they work
   useEffect(() => {
     const unsub = window.api?.mcp?.onToolCalled?.((entry: McpCallEntry) => {
-      if (entry.sessionId === sessionId) {
+      if (entry.sessionId === sessionId && !knownTimestampsRef.current.has(entry.timestamp)) {
+        knownTimestampsRef.current.add(entry.timestamp);
         setCalls((prev) => [entry, ...prev]);
       }
     });

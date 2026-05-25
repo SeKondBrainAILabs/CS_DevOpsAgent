@@ -414,93 +414,70 @@ Your activity will appear in KIT once Claude starts working.
 }
 
 function getCursorInstructions(vars: InstructionVars): string {
+  const mcpSection = vars.mcpUrl ? `
+### KIT MCP Setup
+Cursor supports MCP via \`.mcp.json\` in the project root (auto-created by KIT) or via Cursor Settings → MCP.
+
+If not auto-detected, add to **Cursor Settings → MCP → Add Server**:
+- Name: \`kit\`
+- Type: \`HTTP\`
+- URL: \`${vars.mcpUrl}\`
+
+Or add \`.mcp.json\` to the project root:
+\`\`\`json
+{ "mcpServers": { "kit": { "type": "streamable-http", "url": "${vars.mcpUrl}" } } }
+\`\`\`
+
+Available MCP tools: \`kit_commit\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+` : '';
+
   return `## Setup Cursor for ${vars.repoName}
 
 ### Quick Start
 
-1. **Open Cursor IDE**
+1. **Open Cursor IDE** and open folder: \`${vars.repoPath}\`
 
-2. **Open the repository folder**:
-   - File → Open Folder
-   - Select: \`${vars.repoPath}\`
-
-3. **Configure KIT reporting** (optional):
-   - Open Settings (Cmd/Ctrl + ,)
-   - Search for "Kanvas"
-   - Set Session ID: \`${vars.sessionId}\`
-
-### Workspace Settings
-Add to \`.vscode/settings.json\`:
-\`\`\`json
-{
-  "kanvas.sessionId": "${vars.sessionId}",
-  "kanvas.enabled": true
-}
-\`\`\`
-
-### Task
-${vars.taskDescription}
-
-### Branch
-Make sure you're on: \`${vars.branchName}\`
-
+2. **Checkout branch**:
 \`\`\`bash
 cd "${vars.repoPath}"
 git checkout ${vars.branchName}
 \`\`\`
 
+3. **Read house rules before making changes**:
+\`\`\`bash
+cat houserules.md 2>/dev/null
+cat FOLDER_STRUCTURE.md 2>/dev/null
+\`\`\`
+${mcpSection}
+### Task
+${vars.taskDescription}
+
 ---
 
-Cursor activity will appear in KIT when the extension is configured.
+Use Cursor's agent mode (Cmd+I) to work on the task. Commits appear in KIT automatically.
 `;
 }
 
 function getCopilotInstructions(vars: InstructionVars): string {
-  return `## Setup GitHub Copilot for ${vars.repoName}
+  const mcpSection = vars.mcpUrl ? `
+### KIT MCP Setup
+VS Code with Copilot supports MCP via \`.mcp.json\` in the project root (auto-created by KIT).
 
-### Prerequisites
-- VS Code with GitHub Copilot extension installed
-- Active GitHub Copilot subscription
-
-### Quick Start
-
-1. **Open VS Code**
-
-2. **Open the repository**:
-\`\`\`bash
-code "${vars.repoPath}"
-\`\`\`
-
-3. **Checkout the branch**:
-\`\`\`bash
-cd "${vars.repoPath}"
-git checkout ${vars.branchName}
-\`\`\`
-
-4. **Install KIT Reporter extension** (optional):
-   - Open Extensions (Cmd/Ctrl + Shift + X)
-   - Search for "KIT Reporter"
-   - Install and configure with Session ID: \`${vars.sessionId}\`
-
-### Task
-${vars.taskDescription}
-
-### Manual Activity Reporting
-If not using the extension, you can report activity manually by creating files in:
-\`${vars.repoPath}/.kanvas/activity/\`
-
----
-
-Start coding with Copilot and your activity will be tracked.
-`;
+If not auto-detected, add to \`~/.vscode/settings.json\` or workspace settings:
+\`\`\`json
+{
+  "mcp.servers": {
+    "kit": { "type": "http", "url": "${vars.mcpUrl}" }
+  }
 }
+\`\`\`
 
-function getClineInstructions(vars: InstructionVars): string {
-  return `## Setup Cline for ${vars.repoName}
+Or use the \`.mcp.json\` in the project root — VS Code Copilot discovers this automatically.
 
-### Prerequisites
-- VS Code with Cline extension installed
-- API key configured (Anthropic, OpenAI, etc.)
+Available MCP tools: \`kit_commit\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+` : '';
+
+  return `## Setup GitHub Copilot for ${vars.repoName}
 
 ### Quick Start
 
@@ -509,163 +486,164 @@ function getClineInstructions(vars: InstructionVars): string {
 code "${vars.repoPath}"
 \`\`\`
 
-2. **Open Cline panel** (Cmd/Ctrl + Shift + P → "Cline: Open")
-
-3. **Configure KIT integration**:
-   - Open Cline Settings
-   - Add custom environment:
-\`\`\`json
-{
-  "KANVAS_SESSION_ID": "${vars.sessionId}",
-  "KANVAS_REPO_PATH": "${vars.repoPath}"
-}
-\`\`\`
-
-### Task
-Paste this into Cline:
-\`\`\`
-${vars.taskDescription}
-
-Working in branch: ${vars.branchName}
-\`\`\`
-
-### Branch Setup
+2. **Checkout branch**:
 \`\`\`bash
 cd "${vars.repoPath}"
 git checkout ${vars.branchName}
 \`\`\`
 
+3. **Read house rules before making changes**:
+\`\`\`bash
+cat houserules.md 2>/dev/null
+\`\`\`
+${mcpSection}
+### Task
+${vars.taskDescription}
+
 ---
 
-Cline will autonomously work on the task. Activity appears in Kanvas.
+Use Copilot Chat (Cmd+Shift+I) or inline suggestions. Commits appear in KIT automatically.
+`;
+}
+
+function getClineInstructions(vars: InstructionVars): string {
+  const mcpSection = vars.mcpUrl ? `
+### KIT MCP Setup
+Cline supports MCP natively. Add the KIT server in **Cline Settings → MCP Servers → Add**:
+- Name: \`kit\`
+- Type: \`Streamable HTTP\`
+- URL: \`${vars.mcpUrl}\`
+
+Or KIT auto-creates \`.mcp.json\` in the project root which Cline discovers automatically.
+
+Available MCP tools: \`kit_commit\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+
+**session_id for all MCP calls: \`${vars.sessionId}\`**
+` : '';
+
+  return `## Setup Cline for ${vars.repoName}
+
+### Quick Start
+
+1. **Open VS Code**:
+\`\`\`bash
+code "${vars.repoPath}"
+cd "${vars.repoPath}" && git checkout ${vars.branchName}
+\`\`\`
+
+2. **Open Cline panel** (Cmd+Shift+P → "Cline: Open")
+${mcpSection}
+### Task
+Paste into Cline:
+\`\`\`
+${vars.taskDescription}
+
+Working directory: ${vars.repoPath}
+Branch: ${vars.branchName}
+
+Read houserules.md and FOLDER_STRUCTURE.md before making changes.
+\`\`\`
+
+---
+
+Cline will work autonomously. Activity appears in KIT once MCP is connected.
 `;
 }
 
 function getAiderInstructions(vars: InstructionVars): string {
+  const mcpSection = vars.mcpUrl ? `
+### KIT MCP Setup
+Aider does not natively support MCP. Use the \`.mcp.json\` in the project root for other agents.
+KIT tracks Aider activity via git commits automatically — no MCP needed.
+` : '';
+
   return `## Setup Aider for ${vars.repoName}
 
-### Prerequisites
-- Aider installed (\`pip install aider-chat\`)
-- API key configured (OPENAI_API_KEY or ANTHROPIC_API_KEY)
-
 ### Quick Start
-
-1. **Navigate to repository**:
 \`\`\`bash
 cd "${vars.repoPath}"
-\`\`\`
-
-2. **Checkout the branch**:
-\`\`\`bash
 git checkout ${vars.branchName}
+cat houserules.md 2>/dev/null
 \`\`\`
 
-3. **Start Aider with KIT reporting**:
+### Start Aider
 \`\`\`bash
-KANVAS_SESSION_ID="${vars.sessionId}" aider
+cd "${vars.repoPath}"
+KANVAS_SESSION_ID="${vars.sessionId}" aider --model claude-3-5-sonnet-20241022
 \`\`\`
-
-### Alternative: Using Aider flags
-\`\`\`bash
-aider --env KANVAS_SESSION_ID="${vars.sessionId}"
-\`\`\`
-
+${mcpSection}
 ### Task
-Once Aider starts, describe your task:
+Once Aider starts, paste:
 \`\`\`
 ${vars.taskDescription}
 \`\`\`
 
-### Useful Aider Commands
-- \`/add <file>\` - Add files to context
-- \`/drop <file>\` - Remove files from context
-- \`/commit\` - Commit changes
-- \`/diff\` - Show pending changes
+### Useful Commands
+- \`/add <file>\` — add files to context
+- \`/commit\` — commit changes
+- \`/diff\` — show pending changes
 
 ---
 
-Aider commits will appear in KIT automatically.
+Aider commits appear in KIT automatically via git watcher.
 `;
 }
 
 function getWarpInstructions(vars: InstructionVars): string {
+  const mcpSection = vars.mcpUrl ? `
+### KIT MCP Setup
+Warp does not natively support MCP. KIT tracks activity via git commits automatically.
+If Warp adds MCP support, add to \`.mcp.json\` in the project root:
+\`\`\`json
+{ "mcpServers": { "kit": { "type": "streamable-http", "url": "${vars.mcpUrl}" } } }
+\`\`\`
+` : '';
+
   return `## Setup Warp AI for ${vars.repoName}
 
-### Prerequisites
-- Warp terminal installed
-- Warp AI enabled in settings
-
 ### Quick Start
-
-1. **Open Warp**
-
-2. **Navigate to repository**:
 \`\`\`bash
 cd "${vars.repoPath}"
-\`\`\`
-
-3. **Set KIT environment**:
-\`\`\`bash
 export KANVAS_SESSION_ID="${vars.sessionId}"
-export KANVAS_REPO_PATH="${vars.repoPath}"
-\`\`\`
-
-4. **Checkout the branch**:
-\`\`\`bash
 git checkout ${vars.branchName}
+cat houserules.md 2>/dev/null
 \`\`\`
 
-### Warp Workflow (Optional)
-Create a workflow for this project:
+### Optional: Warp Workflow
 \`\`\`yaml
-name: ${vars.repoName} Dev Session
+name: ${vars.repoName} — KIT Session
 command: |
   cd "${vars.repoPath}"
   export KANVAS_SESSION_ID="${vars.sessionId}"
   git checkout ${vars.branchName}
 \`\`\`
-
+${mcpSection}
 ### Task
 ${vars.taskDescription}
 
 ---
 
-Use Warp AI (# key) to get help with your task. Activity tracked via git commits.
+Use Warp AI (# key) to get help. Commits appear in KIT via git watcher.
 `;
 }
 
 function getCodexInstructions(vars: InstructionVars): string {
   const mcpSection = vars.mcpUrl ? `
-### MCP Server Connection
-Connect Codex CLI to KIT's MCP server so it can log commits and read session context:
+### KIT MCP Setup
+KIT auto-creates \`.mcp.json\` in the project root — Codex picks this up automatically.
 
-\`\`\`bash
-codex --mcp-server "${vars.mcpUrl}" --session-id "${vars.sessionId}"
-\`\`\`
-
-Or add to your \`~/.codex/config.json\`:
+If not auto-detected, add to \`~/.codex/config.json\`:
 \`\`\`json
-{
-  "mcpServers": {
-    "kit": {
-      "url": "${vars.mcpUrl}",
-      "sessionId": "${vars.sessionId}"
-    }
-  }
-}
+{ "mcpServers": { "kit": { "type": "http", "url": "${vars.mcpUrl}" } } }
 \`\`\`
 
-**Available MCP tools:**
-- \`kit_log_commit\` — record commits with context
-- \`kit_get_session\` — read current session state
-- \`kit_update_status\` — push status updates to KIT dashboard
+Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+
+**session_id for all MCP calls: \`${vars.sessionId}\`**
 ` : `
 ### Activity Tracking (No MCP)
-Set these environment variables before starting Codex:
 \`\`\`bash
 export KANVAS_SESSION_ID="${vars.sessionId}"
-export KANVAS_REPO_PATH="${vars.repoPath}"
-export KANVAS_BRANCH="${vars.branchName}"
 \`\`\`
 `;
 
