@@ -361,7 +361,7 @@ function getClaudeInstructions(vars: InstructionVars): string {
   // Get the comprehensive prompt
   const agentPrompt = generateClaudePrompt(vars);
 
-  return `## Setup Claude Code for ${vars.repoName}
+  return `## Setup Coding Agent for ${vars.repoName}
 
 ### Session Info
 - **Session ID**: \`${shortSessionId}\`
@@ -380,7 +380,7 @@ cd "${vars.repoPath}"
 git checkout ${vars.branchName}
 \`\`\`
 
-3. **Start Claude Code**:
+3. **Start your coding agent**:
 \`\`\`bash
 claude
 \`\`\`
@@ -392,7 +392,7 @@ cd "${vars.repoPath}" && git checkout ${vars.branchName} && claude
 
 ---
 
-### Prompt for Claude Code
+### Prompt for your Coding Agent
 
 Copy and paste this ENTIRE prompt when starting your session:
 

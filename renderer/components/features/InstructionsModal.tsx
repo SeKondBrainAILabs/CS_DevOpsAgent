@@ -79,7 +79,7 @@ export function InstructionsModal({ instance, onClose }: InstructionsModalProps)
             <div>
               <h2 className="text-lg font-semibold text-text-primary">Agent Instance Created!</h2>
               <p className="text-sm text-text-secondary">
-                Copy the prompt below and paste it into Claude Code to start
+                Copy the prompt below and paste it into your coding agent to start
               </p>
             </div>
           </div>
@@ -246,9 +246,9 @@ function PromptView({
             <span className="text-kanvas-blue font-bold text-sm">2</span>
           </div>
           <div>
-            <p className="text-sm font-medium text-text-primary">Paste into Claude Code</p>
+            <p className="text-sm font-medium text-text-primary">Paste into your coding agent</p>
             <p className="text-xs text-text-secondary mt-0.5">
-              Start Claude Code in your terminal and paste this as your first message
+              Start your coding agent and paste this as your first message
             </p>
           </div>
         </div>
