@@ -79,6 +79,11 @@
       "package.json"
     ],
     "afterSign": "./scripts/afterSign.cjs",
+    "publish": {
+      "provider": "github",
+      "owner": "SeKondBrainAILabs",
+      "repo": "CS_DevOpsAgent"
+    },
     "mac": {
       "target": [
         "dmg",
