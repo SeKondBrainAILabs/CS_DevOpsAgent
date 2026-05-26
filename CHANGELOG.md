@@ -5,6 +5,24 @@ All notable changes to s9n-devops-agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.3] - 2026-05-26
+
+### Added
+- **Stateless `/rpc` MCP endpoint** — Codex and other `type:"http"` plain JSON-RPC clients now connect to `/rpc` instead of the stateful `/mcp` endpoint, eliminating JSON-RPC deserialize errors. Each new session's `.mcp.json` includes both `kit` (streamable-http) and `kit-rpc` (http) entries.
+- **SSE keep-alive pings** — The `/sse` endpoint now writes a `: ping` comment every 25 seconds, preventing `mcp-remote` from dropping the Claude Desktop connection with a Body Timeout Error after ~5 minutes of idle.
+
+### Fixed
+- **CommitsTab shows on merged/deleted worktrees** — When `git` fails to spawn (e.g. worktree directory no longer exists), the Commits tab now falls back to DB-recorded commits instead of showing an error.
+- **View Commits button** — Switching to the universal commits view was silently blocked when a session was selected. Fixed view priority order in App.tsx.
+- **Chrome extension MCP calls visible in MCP tab** — `getMcpCallLog` was returning stale in-memory entries, missing calls made by external clients (Chrome extension, remote agents). Now always reads from the database.
+- **Agent push-to-main blocked** — Added explicit ⛔ rules to both the Claude fallback block and the Codex prompt: agents must never push to `main`/base branch directly. Merging is human-initiated via Kanvas. If MCP and direct git both fail, agent must stop and report.
+- **Merge auto-commit excludes session files** — The pre-merge auto-commit no longer stages Kanvas session/runtime files (`.claude-session-*.md`, `.codex-session-*.md`, `.S9N_KIT_DevOpsAgent/config.json`, `.mcp.json`). `ensureAgentArtifactsIgnored` now adds all KIT patterns to `.gitignore`, not just the agent directory.
+- **`kit_commit` MCP emits COMMIT_COMPLETED** — The `CommitsTab` now updates in real time when a coding agent commits via MCP, without waiting for the 10-second poll interval.
+- **Neutral UI copy** — Instructional text in `InstructionsModal` and session setup docs now says "coding agent" instead of "Claude Code", making the UI agent-agnostic.
+
+### Security
+- **Agent push-to-main investigation** — Root-caused an incident where a Codex agent pushed directly to `main` when `kit_commit` kept failing. The agent used the git fallback from session instructions and invented a `HEAD:main` push strategy. Now blocked at the instruction level with explicit prohibition text.
+
 ## [2.0.18-dev.3] - 2026-01-06
 
 ### Added
