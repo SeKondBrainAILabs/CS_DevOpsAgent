@@ -481,6 +481,20 @@ export class MergeService extends BaseService {
               throw new Error(`git add -A failed (exit ${addResult.exitCode}): ${addResult.stderr}`);
             }
 
+            // Unstage known Kanvas session/runtime files that should never land on main.
+            // These may be tracked from a previous commit (gitignore only blocks untracked files).
+            const sessionPatterns = [
+              '.claude-session-*.md',
+              '.codex-session-*.md',
+              '.devops-commit-*.msg',
+              '.mcp.json',
+              '.claude/settings.json',
+              '.S9N_KIT_DevOpsAgent/config.json',
+            ];
+            await this.git(['restore', '--staged', ...sessionPatterns], options.worktreePath).catch(() => {
+              // restore --staged is a no-op if files aren't staged — ignore errors
+            });
+
             // Verify everything was staged — nothing should remain unstaged
             const { stdout: postAddStatus } = await this.git(['status', '--porcelain'], options.worktreePath);
             const unstaged = postAddStatus.trim().split('\n').filter((line) => {
@@ -735,12 +749,22 @@ export class MergeService extends BaseService {
   }
 
   /**
-   * Ensure agent artifacts (.S9N_KIT_DevOpsAgent/) are in the repo's .gitignore.
-   * This prevents untracked agent files from blocking git merge/checkout operations.
+   * Ensure Kanvas session artifacts are in the repo's .gitignore.
+   * This prevents agent runtime files from being committed or blocking merges.
    */
   private async ensureAgentArtifactsIgnored(repoPath: string): Promise<void> {
     const gitignorePath = path.join(repoPath, '.gitignore');
-    const agentDir = '.S9N_KIT_DevOpsAgent';
+
+    // Patterns to ensure are gitignored (checked by substring presence)
+    const patternsToAdd: Array<{ check: string; line: string }> = [
+      { check: '.S9N_KIT_DevOpsAgent', line: '.S9N_KIT_DevOpsAgent/' },
+      { check: '.claude-session-', line: '.claude-session-*.md' },
+      { check: '.codex-session-', line: '.codex-session-*.md' },
+      { check: '.devops-commit-', line: '.devops-commit-*.msg' },
+      { check: '.mcp.json', line: '.mcp.json' },
+      { check: '.claude/settings.json', line: '.claude/settings.json' },
+      { check: '.file-coordination/', line: '.file-coordination/' },
+    ];
 
     try {
       let content = '';
@@ -750,10 +774,12 @@ export class MergeService extends BaseService {
         // .gitignore doesn't exist yet
       }
 
-      if (!content.includes(agentDir)) {
-        content += `\n# DevOps Agent Kit (local runtime data - do not commit)\n${agentDir}/\n`;
+      const missing = patternsToAdd.filter(p => !content.includes(p.check));
+      if (missing.length > 0) {
+        content += `\n# KIT DevOps Agent — session/runtime files (do not commit)\n`;
+        content += missing.map(p => p.line).join('\n') + '\n';
         await fs.writeFile(gitignorePath, content, 'utf-8');
-        console.log(`[MergeService] Added ${agentDir}/ to .gitignore in ${repoPath}`);
+        console.log(`[MergeService] Added ${missing.length} KIT pattern(s) to .gitignore in ${repoPath}`);
       }
     } catch (err) {
       console.warn(`[MergeService] Could not update .gitignore: ${err}`);
