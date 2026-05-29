@@ -114,21 +114,27 @@ export class AutoUpdateService {
   // ---------------------------------------------------------------------------
 
   private fetchLatestVersion(): Promise<string | null> {
+    const startUrl = `https://github.com/${OWNER}/${REPO}/releases/latest/download/latest-mac.yml`;
+    return this.fetchFollowingRedirects(startUrl, 0);
+  }
+
+  /** Fetch a URL following up to maxRedirects 3xx hops (GitHub uses 2). */
+  private fetchFollowingRedirects(url: string, depth: number): Promise<string | null> {
+    if (depth > 5) return Promise.resolve(null); // safety cap
     return new Promise((resolve, reject) => {
-      const url = `https://github.com/${OWNER}/${REPO}/releases/latest/download/latest-mac.yml`;
-      const req = https.get(url, {
+      const isHttps = url.startsWith('https');
+      const client = isHttps ? https : (require('http') as typeof import('http'));
+      const req = client.get(url, {
         headers: { 'User-Agent': `KanvasForKit/${app.getVersion()}` },
       }, (res) => {
-        // Follow redirect (GitHub issues 302 for /latest/download/)
-        if (res.statusCode === 301 || res.statusCode === 302) {
+        if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307 || res.statusCode === 308) {
           const location = res.headers.location;
+          res.resume(); // drain & discard redirect body
           if (!location) { resolve(null); return; }
-          https.get(location, { headers: { 'User-Agent': `KanvasForKit/${app.getVersion()}` } }, (res2) => {
-            this.readBody(res2).then((body) => resolve(this.parseVersion(body))).catch(reject);
-          }).on('error', reject);
+          this.fetchFollowingRedirects(location, depth + 1).then(resolve).catch(reject);
           return;
         }
-        if (res.statusCode !== 200) { resolve(null); return; }
+        if (res.statusCode !== 200) { res.resume(); resolve(null); return; }
         this.readBody(res).then((body) => resolve(this.parseVersion(body))).catch(reject);
       });
       req.on('error', reject);
