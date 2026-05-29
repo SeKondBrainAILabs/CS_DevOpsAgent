@@ -735,13 +735,17 @@ ${DEVOPS_KIT_DIR}/
    */
   private async createBranchIfNeeded(config: AgentInstanceConfig): Promise<void> {
     try {
+      // Strip origin/ prefix — git checkout -b <branch> origin/main works, but
+      // normalizing avoids surprises with stored values like "origin/Development".
+      const baseBranch = config.baseBranch.replace(/^origin\//, '');
+
       // Check if branch exists
       const branchResult = await execaCmd('git', ['branch', '--list', config.branchName], { cwd: config.repoPath });
 
       if (!branchResult.stdout.trim()) {
         // Branch doesn't exist, create it
-        await execaCmd('git', ['checkout', '-b', config.branchName, config.baseBranch], { cwd: config.repoPath });
-        console.log(`[AgentInstanceService] Created branch ${config.branchName} from ${config.baseBranch}`);
+        await execaCmd('git', ['checkout', '-b', config.branchName, baseBranch], { cwd: config.repoPath });
+        console.log(`[AgentInstanceService] Created branch ${config.branchName} from ${baseBranch}`);
 
         // Switch back to original branch
         await execaCmd('git', ['checkout', '-'], { cwd: config.repoPath });
@@ -1691,7 +1695,7 @@ ${DEVOPS_KIT_DIR}/
           agentType: sessionData.agentType || 'claude',
           taskDescription: sessionData.task || 'Restarted session',
           branchName: sessionData.branchName,
-          baseBranch: sessionData.baseBranch || 'main',
+          baseBranch: (sessionData.baseBranch || 'main').replace(/^origin\//, ''),
           useWorktree: !!sessionData.worktreePath,
           autoCommit: true,
           commitInterval: 30000,

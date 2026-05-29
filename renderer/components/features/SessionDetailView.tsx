@@ -178,11 +178,12 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
     setShowRestartConfirm(false);
     setRestarting(true);
     setRestartError(null);
-    // Safety: if still mounted after 30s (e.g. IPC hung), reset state
+    // Safety: if still mounted after 2min (e.g. IPC hung), reset state.
+    // Large repos with pending commits can take 60-90s to restart.
     const safetyTimer = setTimeout(() => {
       setRestarting(false);
       setRestartError('Restart timed out — please try again');
-    }, 30_000);
+    }, 120_000);
     try {
       await onRestart?.(session.sessionId, session, commitChanges);
       // On success the component should unmount as the session changes.
