@@ -3,7 +3,7 @@
  * Handles app auto-updates via electron-updater with GitHub Releases
  */
 
-import { BrowserWindow, app } from 'electron';
+import { BrowserWindow, app, shell } from 'electron';
 import type { UpdateInfo, ProgressInfo } from 'electron-updater';
 import electronUpdater from 'electron-updater';
 const { autoUpdater } = electronUpdater;
@@ -130,10 +130,19 @@ export class AutoUpdateService {
 
   /**
    * Quit the app and install the downloaded update.
+   * Falls back to opening the GitHub releases page if quitAndInstall fails
+   * (e.g. when the app is not code-signed with a Developer ID certificate).
    */
   installUpdate(): void {
     if (!app.isPackaged) return;
-    autoUpdater.quitAndInstall(false, true);
+    try {
+      autoUpdater.quitAndInstall(false, true);
+    } catch (err) {
+      console.warn('[AutoUpdate] quitAndInstall failed, opening release page:', err);
+      const version = this.status.latestVersion;
+      const releaseUrl = `https://github.com/SeKondBrainAILabs/DevOps-Agent-KIT/releases/tag/v${version}`;
+      shell.openExternal(releaseUrl);
+    }
   }
 
   /**

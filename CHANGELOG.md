@@ -5,6 +5,12 @@ All notable changes to s9n-devops-agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.8] - 2026-05-29
+
+### Fixed
+- **Auto-update check failing silently** — `publish.repo` in `package.json` still pointed to the old `CS_DevOpsAgent` repo name. Updated to `DevOps-Agent-KIT` so `electron-updater` hits the correct GitHub API endpoint and the update notification pill now appears.
+- **Auto-update install fallback** — `quitAndInstall()` fails on macOS without a Developer ID code signature. Added a fallback that opens the GitHub releases page in the browser so users can manually download the DMG.
+
 ## [2.6.7] - 2026-05-29
 
 ### Fixed

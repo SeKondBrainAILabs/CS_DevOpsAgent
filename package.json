@@ -1,6 +1,6 @@
 {
   "name": "sekondbrain-kanvas",
-  "version": "2.6.7",
+  "version": "2.6.8",
   "description": "Kanvas for Kit - AI Agent Dashboard",
   "main": "dist/electron/index.js",
   "type": "module",
@@ -82,7 +82,7 @@
     "publish": {
       "provider": "github",
       "owner": "SeKondBrainAILabs",
-      "repo": "CS_DevOpsAgent"
+      "repo": "DevOps-Agent-KIT"
     },
     "mac": {
       "target": [
