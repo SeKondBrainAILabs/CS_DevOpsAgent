@@ -5,6 +5,11 @@ All notable changes to s9n-devops-agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.20] - 2026-05-29
+
+### Fixed
+- **"Restarting..." pill stuck after restart** — The success path assumed the old session component would unmount when the new session replaced it. But there's a timing gap between `restartInstance` returning and the `SESSION_REMOVED` IPC event re-rendering the list — during that gap `restarting` stayed `true` with nothing to clear it. Now always calls `setRestarting(false)` after the await resolves regardless of whether the component unmounts.
+
 ## [2.6.19] - 2026-05-29
 
 ### Fixed

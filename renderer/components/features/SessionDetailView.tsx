@@ -186,9 +186,10 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
     }, 120_000);
     try {
       await onRestart?.(session.sessionId, session, commitChanges);
-      // On success the component should unmount as the session changes.
-      // If it doesn't (edge case), clear the timer and reset.
       clearTimeout(safetyTimer);
+      // Always reset — component may not unmount immediately if SESSION_REMOVED
+      // IPC event is delayed, leaving the pill stuck on "Restarting..." forever.
+      setRestarting(false);
     } catch (error) {
       clearTimeout(safetyTimer);
       setRestartError(error instanceof Error ? error.message : 'Failed to restart session');
