@@ -5,6 +5,13 @@ All notable changes to s9n-devops-agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.19] - 2026-05-29
+
+### Fixed
+- **Auto-update never shows pill after startup** — The update check only ran once, 3 seconds after launch. If the app was already open when a new version was published, the notification never appeared. Added a periodic check every 30 minutes so long-running sessions catch new releases without requiring a restart.
+- **"AI could not auto-resolve any files" in Merge Workflow** — When the session branch was in a mid-rebase state (detached HEAD after a failed auto-rebase), the Merge Workflow's AI conflict step called `generateResolutionPreviews` which tried to start a fresh rebase on top of the stuck one. Git rejected it immediately, returning zero conflicts, so `resolvable.length === 0` → error. Fixed: both `generateResolutionPreviews` and `rebaseWithResolution` now abort any in-progress rebase before starting.
+- **Merge Workflow shows `origin/main` as target** — The `MergeWorkflowModal` component state was seeded from session props without stripping the legacy `origin/` prefix, so the UI header, dropdown, and error logs all showed `origin/main` instead of `main`. Both `useState` initializer and the `setTargetBranch` re-sync on open now strip the prefix.
+
 ## [2.6.18] - 2026-05-29
 
 ### Fixed

@@ -141,6 +141,15 @@ async function createWindow(): Promise<void> {
         });
       }
     }, 3000);
+
+    // Periodic update check every 30 minutes so long-running sessions catch new releases
+    setInterval(() => {
+      if (services?.autoUpdate) {
+        services.autoUpdate.checkForUpdates().catch((err) => {
+          console.warn('[Main] Periodic update check failed:', err);
+        });
+      }
+    }, 30 * 60 * 1000);
   });
 
   // Load the app
