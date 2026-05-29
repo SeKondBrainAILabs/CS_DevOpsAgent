@@ -613,6 +613,7 @@ export class GitService extends BaseService {
     incomingCommits?: string[];
   }>> {
     return this.wrap(async () => {
+      baseBranch = baseBranch.replace(/^origin\//, '');
       console.log(`[GitService] ========== REBASE OPERATION START ==========`);
       console.log(`[GitService] Repository: ${repoPath}`);
       console.log(`[GitService] Base branch: ${baseBranch}`);
@@ -722,6 +723,7 @@ export class GitService extends BaseService {
     resolutions?: import('./MergeConflictService').ResolutionResult[];
   }>> {
     return this.wrap(async () => {
+      baseBranch = baseBranch.replace(/^origin\//, '');
       console.log(`[GitService] Starting AI-powered rebase of ${repoPath} onto ${baseBranch}`);
 
       // 1. Fetch latest
