@@ -10,6 +10,7 @@ import { BrowserWindow, app, shell } from 'electron';
 import { IPC } from '../../shared/ipc-channels';
 import type { AppUpdateInfo } from '../../shared/types';
 import https from 'https';
+import type { DebugLogService } from './DebugLogService';
 
 const OWNER = 'SeKondBrainAILabs';
 const REPO = 'DevOps-Agent-KIT';
@@ -17,6 +18,7 @@ const REPO = 'DevOps-Agent-KIT';
 export class AutoUpdateService {
   private mainWindow: BrowserWindow | null = null;
   private status: AppUpdateInfo;
+  private debugLog: DebugLogService | null = null;
 
   constructor() {
     this.status = {
@@ -29,6 +31,10 @@ export class AutoUpdateService {
 
   setMainWindow(win: BrowserWindow): void {
     this.mainWindow = win;
+  }
+
+  setDebugLog(debugLog: DebugLogService): void {
+    this.debugLog = debugLog;
   }
 
   /**
@@ -50,6 +56,8 @@ export class AutoUpdateService {
       return { ...this.status };
     }
 
+    this.debugLog?.info('AutoUpdate', 'Checking for updates', { currentVersion: app.getVersion() });
+
     try {
       this.status.error = undefined;
       const latestVersion = await this.fetchLatestVersion();
@@ -62,17 +70,20 @@ export class AutoUpdateService {
         console.log(`[AutoUpdate] Update available: ${current} → ${latestVersion}`);
         this.status.updateAvailable = true;
         this.status.latestVersion = latestVersion;
+        this.debugLog?.info('AutoUpdate', 'Update available', { current, latestVersion });
         this.sendToRenderer(IPC.UPDATE_AVAILABLE, this.status);
       } else {
         console.log(`[AutoUpdate] Up to date: ${current}`);
         this.status.updateAvailable = false;
         this.status.latestVersion = latestVersion;
+        this.debugLog?.info('AutoUpdate', 'No update available', { current, latestVersion });
         this.sendToRenderer(IPC.UPDATE_NOT_AVAILABLE, this.status);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[AutoUpdate] Check failed:', msg);
       this.status.error = msg;
+      this.debugLog?.error('AutoUpdate', 'Update check failed', { error: msg });
       this.sendToRenderer(IPC.UPDATE_ERROR, this.status);
     }
 
@@ -88,6 +99,7 @@ export class AutoUpdateService {
     // Mark as downloaded so the pill switches to "Restart to update"
     this.status.downloading = false;
     this.status.downloaded = true;
+    this.debugLog?.info('AutoUpdate', 'Download complete — marked ready', { version: this.status.latestVersion });
     this.sendToRenderer(IPC.UPDATE_DOWNLOADED, this.status);
   }
 
@@ -101,6 +113,7 @@ export class AutoUpdateService {
       ? `https://github.com/${OWNER}/${REPO}/releases/tag/v${version}`
       : `https://github.com/${OWNER}/${REPO}/releases/latest`;
     console.log('[AutoUpdate] Opening release page:', releaseUrl);
+    this.debugLog?.info('AutoUpdate', 'Opening release page for install', { version: this.status.latestVersion });
     shell.openExternal(releaseUrl);
   }
 
