@@ -5,6 +5,11 @@ All notable changes to s9n-devops-agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.15] - 2026-05-29
+
+### Fixed
+- **Auto-update notification not appearing** — GitHub serves two 302 redirects before the `latest-mac.yml` content (`/releases/latest/download/` → `/releases/download/v{n}/` → CDN). The previous implementation only followed one redirect, so the second fetch got an empty 302 body, `parseVersion` returned null, and no update was detected. Replaced with a recursive redirect follower that handles up to 5 hops.
+
 ## [2.6.14] - 2026-05-29
 
 ### Fixed
