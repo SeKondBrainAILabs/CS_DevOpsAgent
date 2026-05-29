@@ -4,7 +4,7 @@
 
 DevOps Agent monitors Claude, Codex, Cursor, Copilot, Cline, Aider, Warp, and other AI coding agents working on your codebase. It handles git operations, prevents conflicts, tracks changes, generates contracts, and keeps multiple agents coordinated — all from a single desktop app.
 
-Version: **2.6.11**
+Version: **2.6.12**
 
 ---
 
