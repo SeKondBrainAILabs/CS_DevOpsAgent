@@ -10,6 +10,7 @@
 import React, { useMemo, useState } from 'react';
 import { AgentCardSkeleton } from './AgentCard';
 import { MergeWorkflowModal } from './MergeWorkflowModal';
+import { DeleteSessionDialog } from './DeleteSessionDialog';
 import { useAgentStore } from '../../store/agentStore';
 import type { SessionReport } from '../../../shared/agent-protocol';
 import type { AgentType } from '../../../shared/types';
@@ -173,7 +174,7 @@ export function AgentList(): React.ReactElement {
     <div>
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
-        <span className="text-xs font-medium text-text-secondary uppercase tracking-wider">
+        <span className="kb-eyebrow text-xs font-medium text-text-secondary uppercase tracking-wider">
           Repositories
         </span>
         <span className="text-xs px-1.5 py-0.5 rounded-full bg-kanvas-blue/10 text-kanvas-blue">
@@ -234,7 +235,7 @@ function RepoNode({
       </button>
 
       {expanded && (
-        <div className="ml-4 border-l border-border/50 pl-2 mt-0.5 space-y-0.5">
+        <div className="ml-4 border-l border-[rgba(0,0,0,0.10)] pl-2 mt-0.5 space-y-0.5">
           {repo.agents.length === 1 ? (
             /* Single agent — skip the agent row, show sessions directly */
             <SessionList
@@ -322,7 +323,7 @@ function SessionList({
   onSelectSession: (sessionId: string) => void;
 }): React.ReactElement {
   return (
-    <div className="ml-3 border-l border-border/40 pl-1.5 mt-0.5 space-y-px">
+    <div className="ml-3 border-l border-[rgba(0,0,0,0.10)] pl-1.5 mt-0.5 space-y-px">
       {agent.sessions.map((session, idx) => (
         <SessionRow
           key={session.sessionId}
@@ -356,7 +357,7 @@ function SessionRow({
   isSelected: boolean;
   onClick: () => void;
 }): React.ReactElement {
-  const [showConfirm, setShowConfirm] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showMergeModal, setShowMergeModal] = useState(false);
   const removeReportedSession = useAgentStore((state) => state.removeReportedSession);
 
@@ -385,15 +386,7 @@ function SessionRow({
 
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (showConfirm) {
-      const repoPath = session.repoPath || session.worktreePath || '';
-      window.api?.instance?.deleteSession?.(session.sessionId, repoPath);
-      removeReportedSession(session.sessionId);
-      setShowConfirm(false);
-    } else {
-      setShowConfirm(true);
-      setTimeout(() => setShowConfirm(false), 3000);
-    }
+    setShowDeleteDialog(true);
   };
 
   return (
@@ -438,16 +431,12 @@ function SessionRow({
           </button>
           <button
             onClick={handleDelete}
-            className={`p-0.5 rounded transition-all ${showConfirm ? 'bg-red-500 text-white' : 'text-text-secondary hover:text-red-500 hover:bg-red-500/10'}`}
-            title={showConfirm ? 'Click again to confirm' : 'Delete session'}
+            className="p-0.5 rounded transition-all text-text-secondary hover:text-red-500 hover:bg-red-500/10"
+            title="Delete session"
           >
-            {showConfirm ? (
-              <span className="text-[9px] px-0.5 font-medium">Del?</span>
-            ) : (
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-            )}
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
           </button>
         </span>
       </div>
@@ -465,6 +454,18 @@ function SessionRow({
           removeReportedSession(session.sessionId);
         }}
       />
+
+      {showDeleteDialog && (
+        <DeleteSessionDialog
+          sessionId={session.sessionId}
+          sessionName={session.name || session.branchName || session.sessionId}
+          onClose={() => setShowDeleteDialog(false)}
+          onDeleted={() => {
+            removeReportedSession(session.sessionId);
+            setShowDeleteDialog(false);
+          }}
+        />
+      )}
     </>
   );
 }
@@ -519,10 +520,10 @@ export function AgentListCompact(): React.ReactElement {
             selectedAgentType === agentType ? null : agentType
           )}
           className={`
-            flex items-center gap-2 px-3 py-1.5 rounded-lg
+            flex items-center gap-2 px-3 py-1.5 rounded-full
             text-sm transition-colors
             ${selectedAgentType === agentType
-              ? 'bg-kanvas-blue text-white'
+              ? 'bg-black text-white'
               : 'bg-surface-tertiary text-text-primary hover:bg-surface-secondary'
             }
           `}

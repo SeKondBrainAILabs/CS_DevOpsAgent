@@ -130,6 +130,9 @@ export class RebaseWatcherService extends BaseService {
     const state = this.watchedSessions.get(sessionId);
     if (!state || state.isPaused || state.isRebasing) return;
 
+    // First update from the worker establishes the baseline — don't treat
+    // pre-existing behind count as "new commits" requiring an immediate rebase.
+    const isInitialUpdate = state.lastChecked === null;
     state.lastChecked = new Date();
     const previousBehind = state.behindCount;
     state.behindCount = behind;
@@ -138,7 +141,12 @@ export class RebaseWatcherService extends BaseService {
     // Emit updated status to renderer
     this.emitStatus(sessionId);
 
-    // Detect new commits
+    if (isInitialUpdate) {
+      console.log(`[RebaseWatcher] Initial status for ${sessionId}: ${behind} behind (baseline recorded, no rebase triggered)`);
+      return;
+    }
+
+    // Detect new commits (only after we have a baseline)
     const hasNewCommits = behind > 0 && behind > previousBehind;
     if (hasNewCommits) {
       console.log(`[RebaseWatcher] Worker detected ${behind} commits behind for ${sessionId}`);
@@ -159,7 +167,10 @@ export class RebaseWatcherService extends BaseService {
       if (shouldAutoRebase) {
         console.log(`[RebaseWatcher] Scheduling auto-rebase for ${sessionId} (frequency: ${freq})`);
         state.lastAutoRebaseAt = new Date();
-        // Run async, don't block the status handler
+        // Set synchronously before the async call so concurrent status updates
+        // see isRebasing=true and don't schedule a second concurrent rebase.
+        state.isRebasing = true;
+        this.emitStatus(sessionId);
         this.performAutoRebase(state).catch((err) =>
           console.error(`[RebaseWatcher] Auto-rebase error for ${sessionId}:`, err)
         );
@@ -397,6 +408,9 @@ export class RebaseWatcherService extends BaseService {
     // Fetch and check remote status
     const status = await this.checkRemoteStatus(config.repoPath, config.baseBranch);
 
+    // First poll establishes the baseline — don't treat pre-existing behind count
+    // as "new commits" that need an immediate rebase on startup.
+    const isInitialPoll = state.lastRemoteCommit === null && !forceRebase;
     state.lastChecked = new Date();
     const previousBehind = state.behindCount;
     state.behindCount = status.behind;
@@ -405,7 +419,13 @@ export class RebaseWatcherService extends BaseService {
     // Emit updated status
     this.emitStatus(config.sessionId);
 
-    // Check if there are new commits
+    if (isInitialPoll) {
+      state.lastRemoteCommit = status.lastCommit;
+      console.log(`[RebaseWatcher] Initial poll for ${config.sessionId}: ${status.behind} behind (baseline recorded, no rebase triggered)`);
+      return { hasChanges: false };
+    }
+
+    // Check if there are new commits (only after baseline is established)
     const hasNewCommits = status.behind > 0 && (
       forceRebase ||
       state.lastRemoteCommit !== status.lastCommit ||
@@ -492,12 +512,18 @@ export class RebaseWatcherService extends BaseService {
     }
 
     // Otherwise create a transient state for this single rebase
+    // Resolve actual branch name so AI analysis gets proper context
+    let currentBranch = '';
+    try {
+      currentBranch = (await this.gitService.getCurrentBranch(repoPath))?.data || '';
+    } catch { /* fall through — empty is acceptable but not ideal */ }
+
     const state: WatchState = {
       config: {
         sessionId,
         repoPath,
         baseBranch,
-        currentBranch: '',
+        currentBranch,
         rebaseFrequency: 'on-demand',
         pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
       },
@@ -635,10 +661,19 @@ export class RebaseWatcherService extends BaseService {
       return { success: rebaseResult.success, message: rebaseResult.message };
     } catch (error) {
       state.isRebasing = false;
-      state.isPaused = true; // Pause on error
 
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const errorStack = error instanceof Error ? error.stack : undefined;
+
+      // Only pause watching for conflict or auth errors that require human intervention.
+      // Transient failures (network, git lock, process errors) should not permanently
+      // stop the watcher — the next poll cycle will retry automatically.
+      const isConflict = /conflict|CONFLICT|merge failed/i.test(errorMessage);
+      const isAuthError = /authentication|403|401|permission denied/i.test(errorMessage);
+      if (isConflict || isAuthError) {
+        state.isPaused = true;
+      }
+
       state.lastRebaseResult = {
         success: false,
         message: errorMessage,
@@ -654,11 +689,11 @@ export class RebaseWatcherService extends BaseService {
         errorStack,
         behindCount: state.behindCount,
         aheadCount: state.aheadCount,
-        watcherPaused: true,
+        watcherPaused: state.isPaused,
       });
 
       this.emitStatus(config.sessionId);
-      console.error(`[RebaseWatcher] Auto-rebase error for ${config.sessionId}:`, error);
+      console.error(`[RebaseWatcher] Auto-rebase error for ${config.sessionId} (paused: ${state.isPaused}):`, error);
 
       return { success: false, message: errorMessage };
     }

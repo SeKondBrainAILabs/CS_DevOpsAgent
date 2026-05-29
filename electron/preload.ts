@@ -23,10 +23,21 @@ import type {
   ActivityLogEntry,
   AppConfig,
   Credentials,
+  WorktreeMode,
+  Workspace,
+  WorkspaceCreateInput,
+  WorkspaceUpdateInput,
+  WorkspaceScanResult,
+  WorkspaceRepoChangeEvent,
+  ProjectGroup,
+  ProjectGroupCreateInput,
+  ProjectGroupUpdateInput,
   IpcResult,
   RepoVersionInfo,
   RepoVersionSettings,
   AppUpdateInfo,
+  StorageMetricsOverview,
+  WorktreeSafetyInfo,
 } from '../shared/types';
 import type {
   AgentInfo,
@@ -119,6 +130,24 @@ const api = {
     detectSubmodules: (repoPath: string): Promise<IpcResult<Array<{ name: string; path: string; url: string }>>> =>
       ipcRenderer.invoke(IPC.GIT_DETECT_SUBMODULES, repoPath),
 
+    /** Compact status snapshot for the RepoStatusCard (Day 1.5). */
+    getRepoStatus: (repoPath: string): Promise<IpcResult<import('../shared/types').RepoStatus>> =>
+      ipcRenderer.invoke(IPC.GIT_GET_REPO_STATUS, repoPath),
+
+    /** Branches with C7 hygiene metadata (Day 2). */
+    listBranchesForRepo: (repoPath: string): Promise<IpcResult<import('../shared/types').RepoBranchRow[]>> =>
+      ipcRenderer.invoke(IPC.GIT_LIST_BRANCHES_FOR_REPO, repoPath),
+
+    /** Worktree list keyed on repoPath (Day 2). */
+    listWorktrees: (repoPath: string): Promise<IpcResult<Array<{ path: string; branch: string; head: string; bare: boolean }>>> =>
+      ipcRenderer.invoke(IPC.GIT_LIST_WORKTREES, repoPath),
+
+    pruneWorktrees: (repoPath: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.GIT_PRUNE_WORKTREES, repoPath),
+
+    removeWorktreeByPath: (repoPath: string, worktreePath: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.GIT_REMOVE_WORKTREE_PATH, repoPath, worktreePath),
+
     getChangedFiles: (repoPath: string, baseBranch?: string): Promise<IpcResult<Array<{
       path: string;
       status: string;
@@ -195,6 +224,26 @@ const api = {
     }>> =>
       ipcRenderer.invoke(IPC.GIT_GET_COMMIT_DIFF, repoPath, commitHash),
 
+    analyzeStaleBranches: (repoPath: string, baseBranch?: string, staleDays?: number): Promise<IpcResult<Array<{
+      name: string;
+      lastCommitDate: string;
+      lastCommitIso: string;
+      daysSinceLastCommit: number;
+      isMerged: boolean;
+      hasNoDiffVsBase: boolean;
+      aheadCount: number;
+      behindCount: number;
+      isStale: boolean;
+      safeToPrune: boolean;
+    }>>> =>
+      ipcRenderer.invoke(IPC.GIT_ANALYZE_STALE_BRANCHES, repoPath, baseBranch, staleDays),
+
+    archiveBranch: (repoPath: string, branchName: string, options: {
+      deleteOriginal?: boolean;
+      deleteRemote?: boolean;
+    }): Promise<IpcResult<{ archiveBranchName: string }>> =>
+      ipcRenderer.invoke(IPC.GIT_ARCHIVE_BRANCH, repoPath, branchName, options),
+
     fetch: (repoPath: string, remote?: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.GIT_FETCH, repoPath, remote),
 
@@ -213,6 +262,9 @@ const api = {
       ipcRenderer.on(IPC.GIT_STATUS_CHANGED, handler);
       return () => ipcRenderer.removeListener(IPC.GIT_STATUS_CHANGED, handler);
     },
+
+    getWorktreeSafetyInfo: (worktreePath: string): Promise<IpcResult<WorktreeSafetyInfo>> =>
+      ipcRenderer.invoke(IPC.GIT_WORKTREE_SAFETY_INFO, worktreePath),
   },
 
   // ==========================================================================
@@ -319,6 +371,68 @@ const api = {
   },
 
   // ==========================================================================
+  // PER-REPO WORKSPACE API (C5 Single-Session Mode)
+  // ==========================================================================
+  repoWorkspace: {
+    getWorktreeMode: (repoPath: string): Promise<IpcResult<WorktreeMode>> =>
+      ipcRenderer.invoke(IPC.REPO_GET_WORKTREE_MODE, repoPath),
+
+    setWorktreeMode: (repoPath: string, mode: WorktreeMode): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.REPO_SET_WORKTREE_MODE, repoPath, mode),
+
+    getActiveSessionCount: (repoPath: string): Promise<IpcResult<number>> =>
+      ipcRenderer.invoke(IPC.REPO_GET_ACTIVE_SESSION_COUNT, repoPath),
+  },
+
+  // ==========================================================================
+  // WORKSPACE API (Epic A — multi-workspace, multi-repo discovery)
+  // ==========================================================================
+  workspace: {
+    list: (): Promise<IpcResult<Workspace[]>> =>
+      ipcRenderer.invoke(IPC.WORKSPACE_LIST),
+    get: (id: string): Promise<IpcResult<Workspace>> =>
+      ipcRenderer.invoke(IPC.WORKSPACE_GET, id),
+    add: (input: WorkspaceCreateInput): Promise<IpcResult<Workspace>> =>
+      ipcRenderer.invoke(IPC.WORKSPACE_ADD, input),
+    update: (id: string, patch: WorkspaceUpdateInput): Promise<IpcResult<Workspace>> =>
+      ipcRenderer.invoke(IPC.WORKSPACE_UPDATE, id, patch),
+    remove: (id: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.WORKSPACE_REMOVE, id),
+    getActive: (): Promise<IpcResult<Workspace | null>> =>
+      ipcRenderer.invoke(IPC.WORKSPACE_GET_ACTIVE),
+    setActive: (id: string | null): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.WORKSPACE_SET_ACTIVE, id),
+    scan: (id: string): Promise<IpcResult<WorkspaceScanResult>> =>
+      ipcRenderer.invoke(IPC.WORKSPACE_SCAN, id),
+    startWatching: (id: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.WORKSPACE_WATCH_START, id),
+    stopWatching: (id: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.WORKSPACE_WATCH_STOP, id),
+    /** Subscribe to repo-added / repo-removed events. Returns an unsubscribe fn. */
+    onRepoChange: (cb: (event: WorkspaceRepoChangeEvent) => void): (() => void) => {
+      const handler = (_: unknown, event: WorkspaceRepoChangeEvent) => cb(event);
+      ipcRenderer.on(IPC.WORKSPACE_REPO_CHANGE, handler);
+      return () => ipcRenderer.removeListener(IPC.WORKSPACE_REPO_CHANGE, handler);
+    },
+  },
+
+  // ==========================================================================
+  // PROJECT GROUP API (Epic F — cross-repo project groups)
+  // ==========================================================================
+  projectGroup: {
+    list: (): Promise<IpcResult<ProjectGroup[]>> =>
+      ipcRenderer.invoke(IPC.PROJECT_GROUP_LIST),
+    get: (id: string): Promise<IpcResult<ProjectGroup>> =>
+      ipcRenderer.invoke(IPC.PROJECT_GROUP_GET, id),
+    add: (input: ProjectGroupCreateInput): Promise<IpcResult<ProjectGroup>> =>
+      ipcRenderer.invoke(IPC.PROJECT_GROUP_ADD, input),
+    update: (id: string, patch: ProjectGroupUpdateInput): Promise<IpcResult<ProjectGroup>> =>
+      ipcRenderer.invoke(IPC.PROJECT_GROUP_UPDATE, id, patch),
+    remove: (id: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.PROJECT_GROUP_REMOVE, id),
+  },
+
+  // ==========================================================================
   // AI/CHAT API
   // ==========================================================================
   ai: {
@@ -391,6 +505,12 @@ const api = {
       submodulePath: string | null;
     }>> =>
       ipcRenderer.invoke(IPC.AI_GET_CONFIG_SOURCES),
+
+    isConfigured: (): Promise<IpcResult<boolean>> =>
+      ipcRenderer.invoke(IPC.AI_IS_CONFIGURED),
+
+    healthCheck: (): Promise<IpcResult<{ online: boolean; configured: boolean; error?: string }>> =>
+      ipcRenderer.invoke(IPC.AI_HEALTH_CHECK),
   },
 
   // ==========================================================================
@@ -519,6 +639,24 @@ const api = {
 
     deleteSession: (sessionId: string, repoPath?: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.INSTANCE_DELETE_SESSION, sessionId, repoPath),
+
+    deleteSafetyCheck: (sessionId: string): Promise<IpcResult<{
+      hasWorktree: boolean;
+      worktreePath: string | null;
+      hasUncommittedChanges: boolean;
+      unpushedCommitCount: number;
+      hasRemoteBranch: boolean;
+      branchName: string;
+      repoPath: string;
+    }>> =>
+      ipcRenderer.invoke(IPC.INSTANCE_DELETE_SAFETY_CHECK, sessionId),
+
+    deleteWithCleanup: (sessionId: string, options: {
+      deleteWorktree?: boolean;
+      deleteLocalBranch?: boolean;
+      deleteRemoteBranch?: boolean;
+    }): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.INSTANCE_DELETE_WITH_CLEANUP, sessionId, options),
 
     restart: (sessionId: string, sessionData?: {
       repoPath: string;
@@ -712,6 +850,9 @@ const api = {
       removedActivityFiles: number;
     }>> =>
       ipcRenderer.invoke(IPC.CLEANUP_KANVAS, repoPath),
+
+    getStorageMetrics: (repoPaths: string[]): Promise<IpcResult<StorageMetricsOverview>> =>
+      ipcRenderer.invoke(IPC.CLEANUP_GET_STORAGE_METRICS, repoPaths),
 
     onProgress: (callback: (data: { message: string; result: unknown }) => void): (() => void) => {
       const handler = (_event: IpcRendererEvent, data: { message: string; result: unknown }) => callback(data);
@@ -1678,6 +1819,9 @@ const api = {
 
     copyPath: (pathToCopy: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.SHELL_COPY_PATH, pathToCopy),
+
+    execGitSafe: (repoPath: string, command: string): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number }> =>
+      ipcRenderer.invoke(IPC.SHELL_EXEC_GIT_SAFE, repoPath, command),
   },
 
   // ==========================================================================
@@ -1947,24 +2091,46 @@ const api = {
   // ==========================================================================
   conflict: {
     /**
-     * Generate AI resolution previews for conflicted files
+     * Generate AI resolution previews for conflicted files.
+     * Returns the full ConflictPreviewResult (previews array + metrics + abort flags).
      */
-    generatePreviews: (repoPath: string, targetBranch: string): Promise<IpcResult<Array<{
-      filePath: string;
-      oursContent: string;
-      theirsContent: string;
-      resolvedContent: string;
-      resolution: 'ours' | 'theirs' | 'merged';
-    }>>> =>
+    generatePreviews: (repoPath: string, targetBranch: string): Promise<IpcResult<{
+      repoPath: string;
+      currentBranch: string;
+      targetBranch: string;
+      previews: Array<{
+        file: string;
+        language: string;
+        originalContent: string;
+        proposedContent: string;
+        status: 'pending' | 'approved' | 'rejected' | 'modified' | 'skipped';
+        userModifiedContent?: string;
+        skippedReason?: string;
+        analysis?: unknown;
+        triage?: unknown;
+      }>;
+      totalConflicts: number;
+      resolvedByAI: number;
+      failedToResolve: number;
+      skippedFiles: number;
+      metrics: unknown;
+      aborted?: boolean;
+      abortReason?: string;
+    }>> =>
       ipcRenderer.invoke(IPC.CONFLICT_GENERATE_PREVIEWS, repoPath, targetBranch),
 
     /**
-     * Apply user-approved conflict resolutions
+     * Apply user-approved conflict resolutions.
+     * Takes the full ConflictResolutionPreview objects from generatePreviews with status set.
      */
     applyApproved: (repoPath: string, previews: Array<{
-      filePath: string;
-      resolvedContent: string;
-      approved: boolean;
+      file: string;
+      language: string;
+      originalContent: string;
+      proposedContent: string;
+      status: 'pending' | 'approved' | 'rejected' | 'modified' | 'skipped';
+      userModifiedContent?: string;
+      skippedReason?: string;
     }>): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.CONFLICT_APPLY_APPROVED, repoPath, previews),
 

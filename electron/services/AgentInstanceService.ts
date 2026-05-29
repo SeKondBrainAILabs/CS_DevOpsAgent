@@ -36,12 +36,20 @@ async function getExeca() {
   return _execa;
 }
 
-async function execaCmd(cmd: string, args: string[], options?: { cwd?: string }): Promise<{ stdout: string; stderr: string }> {
+async function execaCmd(cmd: string, args: string[], options?: { cwd?: string; timeout?: number }): Promise<{ stdout: string; stderr: string }> {
   const execa = await getExeca();
-  return execa(cmd, args, options);
+  return execa(cmd, args, {
+    ...options,
+    timeout: options?.timeout ?? 30_000, // 30s default timeout to prevent hanging
+    env: {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: '0',   // Never prompt for credentials
+      GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o StrictHostKeyChecking=no',
+    },
+  });
 }
 import { KANVAS_PATHS, FILE_COORDINATION_PATHS, DEVOPS_KIT_DIR } from '../../shared/agent-protocol';
-import { getAgentInstructions, generateClaudePrompt, InstructionVars } from '../../shared/agent-instructions';
+import { getAgentInstructions, generateClaudePrompt, generateCodexPrompt, InstructionVars } from '../../shared/agent-instructions';
 import type {
   AgentType,
   AgentInstance,
@@ -53,8 +61,19 @@ import type {
   RepoEntry,
   RepoRole,
 } from '../../shared/types';
+
+function generateAgentPrompt(agentType: AgentType, vars: InstructionVars): string | undefined {
+  if (agentType === 'claude') return generateClaudePrompt(vars);
+  if (agentType === 'codex') return generateCodexPrompt(vars);
+  return undefined;
+}
 import { generateSecondaryBranchName } from '../../shared/types';
+import { evaluateSingleSessionGuard } from '../../shared/single-session-guard';
+import { isActiveInstance } from '../../shared/instance-status';
+import { planEnvSymlink } from '../../shared/env-symlink-plan';
+import { symlink, lstat } from 'fs/promises';
 import type { TerminalLogService } from './TerminalLogService';
+import type { ConfigService } from './ConfigService';
 import { MCP_CONFIG_FILE, CONTRACTS_PATHS } from '../../shared/agent-protocol';
 
 interface SessionState {
@@ -76,6 +95,8 @@ export class AgentInstanceService extends BaseService {
   private instances: Map<string, AgentInstance> = new Map();
   private terminalLogService: TerminalLogService | null = null;
   private mcpServerUrl: string | null = null;
+  private rpcServerUrl: string | null = null;
+  private configService: ConfigService | null = null;
 
   /**
    * Callback invoked after a single-repo session is created.
@@ -104,6 +125,40 @@ export class AgentInstanceService extends BaseService {
    */
   setMcpServerUrl(url: string | null): void {
     this.mcpServerUrl = url;
+  }
+
+  /**
+   * Set the stateless JSON-RPC URL (/rpc) for Codex / type:"http" clients
+   */
+  setRpcServerUrl(url: string | null): void {
+    this.rpcServerUrl = url;
+  }
+
+  /**
+   * Inject ConfigService so we can read per-repo worktree-mode settings.
+   * Used to enforce Single-Session Mode (Epic C, story C5).
+   */
+  setConfigService(svc: ConfigService): void {
+    this.configService = svc;
+    console.log('[AgentInstanceService] ConfigService configured');
+  }
+
+  /**
+   * Return all sessions for a given repo that are currently active
+   * (i.e. not 'completed' or 'closed'). Used by Single-Session Mode
+   * checks and by the renderer to power session-count badges.
+   */
+  getActiveSessionsForRepo(repoPath: string): AgentInstance[] {
+    return Array.from(this.instances.values()).filter(
+      (inst) => inst.config.repoPath === repoPath && isActiveInstance(inst)
+    );
+  }
+
+  /**
+   * IPC-friendly count of active sessions for a repo.
+   */
+  getActiveSessionCountForRepo(repoPath: string): IpcResult<number> {
+    return { success: true, data: this.getActiveSessionsForRepo(repoPath).length };
   }
 
   constructor() {
@@ -448,6 +503,17 @@ ${DEVOPS_KIT_DIR}/
         };
       }
 
+      // Single-Session Mode guard (Epic C / C5):
+      // when this repo has worktrees disabled, only ONE active session is allowed.
+      if (this.configService) {
+        const mode = this.configService.getRepoWorktreeMode(config.repoPath);
+        const activeCount = this.getActiveSessionsForRepo(config.repoPath).length;
+        const guard = evaluateSingleSessionGuard(mode, activeCount);
+        if (guard.blocked && guard.error) {
+          return { success: false, error: guard.error };
+        }
+      }
+
       // Generate unique ID
       const id = `inst_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -466,10 +532,8 @@ ${DEVOPS_KIT_DIR}/
 
       const instructions = getAgentInstructions(config.agentType, instructionVars);
 
-      // Generate the standalone prompt for easy copying (only for Claude)
-      const prompt = config.agentType === 'claude'
-        ? generateClaudePrompt(instructionVars)
-        : undefined;
+      // Generate the standalone prompt for easy copying (agent-specific)
+      const prompt = generateAgentPrompt(config.agentType, instructionVars);
 
       // Create instance
       const instance: AgentInstance = {
@@ -513,12 +577,13 @@ ${DEVOPS_KIT_DIR}/
       const finalInstructionVars: InstructionVars = {
         ...instructionVars,
         repoPath: workingDirectory, // CRITICAL: Use worktree path, not main repo
+        baseBranch: config.baseBranch,
         mcpUrl: this.mcpServerUrl || undefined,
+        rpcUrl: this.rpcServerUrl || undefined,
+        customMcpEnabled: config.customMcpEnabled,
       };
       instance.instructions = getAgentInstructions(config.agentType, finalInstructionVars);
-      if (config.agentType === 'claude') {
-        instance.prompt = generateClaudePrompt(finalInstructionVars);
-      }
+      instance.prompt = generateAgentPrompt(config.agentType, finalInstructionVars);
 
       // Save instance with updated instructions
       this.instances.set(id, instance);
@@ -555,9 +620,7 @@ ${DEVOPS_KIT_DIR}/
             commitScope: config.multiRepo.commitScope,
           };
           instance.instructions = getAgentInstructions(config.agentType, multiRepoVars);
-          if (config.agentType === 'claude') {
-            instance.prompt = generateClaudePrompt(multiRepoVars);
-          }
+          instance.prompt = generateAgentPrompt(config.agentType, multiRepoVars);
 
           this.instances.set(id, instance);
           this.saveInstances();
@@ -717,11 +780,64 @@ ${DEVOPS_KIT_DIR}/
       // Initialize .S9N_KIT_DevOpsAgent in the worktree
       await this.initializeKanvasDirectory(worktreeDir);
 
+      // C6: link the main repo's .env into the worktree so the agent inherits env vars.
+      await this.linkEnvIntoWorktree(config.repoPath, worktreeDir);
+
       return worktreeDir;
     } catch (error) {
       console.warn(`[AgentInstanceService] Could not create worktree: ${error}`);
       // Fall back to using main repo path
       return config.repoPath;
+    }
+  }
+
+  /**
+   * C6: Link the main repo's `.env` into the worktree if appropriate.
+   * Decision is delegated to the pure planner in `shared/env-symlink-plan.ts`;
+   * this method only handles the fs side. Failure is non-fatal — we log and
+   * carry on rather than blocking session start, except in the deliberate
+   * `block-missing-env` case (which is logged as a warning here; the
+   * stricter behavior is enforced higher up via the planner's error code).
+   */
+  private async linkEnvIntoWorktree(repoPath: string, worktreePath: string): Promise<void> {
+    try {
+      const repoEnvPath = join(repoPath, '.env');
+      const treeEnvPath = join(worktreePath, '.env');
+      const repoEnvExists = existsSync(repoEnvPath);
+
+      let worktreeEnvExists = false;
+      try {
+        await lstat(treeEnvPath);
+        worktreeEnvExists = true;
+      } catch {
+        // not present
+      }
+
+      const action = planEnvSymlink({
+        repoPath,
+        worktreePath,
+        repoEnvExists,
+        worktreeEnvExists,
+      });
+
+      switch (action.kind) {
+        case 'create-symlink':
+          await symlink(repoEnvPath, treeEnvPath);
+          console.log(`[AgentInstanceService] Linked .env into worktree: ${treeEnvPath} -> ${repoEnvPath}`);
+          break;
+        case 'skip-in-place':
+        case 'skip-already-exists':
+          console.log(`[AgentInstanceService] .env link skipped: ${action.reason}`);
+          break;
+        case 'allow-missing-env-override':
+          console.warn(`[AgentInstanceService] Starting session without .env (override): ${action.reason}`);
+          break;
+        case 'block-missing-env':
+          console.warn(`[AgentInstanceService] No .env file in repo — agent may fail at runtime: ${action.error.message}`);
+          break;
+      }
+    } catch (err) {
+      console.warn(`[AgentInstanceService] Could not link .env into worktree: ${err}`);
     }
   }
 
@@ -822,12 +938,21 @@ ${DEVOPS_KIT_DIR}/
     if (!this.mcpServerUrl) return;
 
     try {
-      const mcpConfig = {
+      // Include both transport types so any agent (Claude Code, Codex, Cursor, etc.) can connect:
+      // - kit: streamable-http for Claude Code (stateful, requires MCP session protocol)
+      // - kit-rpc: http for Codex and other plain JSON-RPC clients (stateless /rpc endpoint)
+      const mcpConfig: Record<string, unknown> = {
         mcpServers: {
           kit: {
             type: 'streamable-http',
             url: this.mcpServerUrl,
           },
+          ...(this.rpcServerUrl ? {
+            'kit-rpc': {
+              type: 'http',
+              url: this.rpcServerUrl,
+            },
+          } : {}),
         },
       };
 
@@ -1205,6 +1330,136 @@ ${DEVOPS_KIT_DIR}/
       success: true,
       data: this.instances.get(instanceId) || null,
     };
+  }
+
+  /**
+   * Pre-delete safety check: returns info about worktree, uncommitted changes,
+   * unpushed commits, and remote branch existence so the UI can show warnings.
+   */
+  async getDeleteSafetyInfo(sessionId: string): Promise<IpcResult<{
+    hasWorktree: boolean;
+    worktreePath: string | null;
+    hasUncommittedChanges: boolean;
+    unpushedCommitCount: number;
+    hasRemoteBranch: boolean;
+    branchName: string;
+    repoPath: string;
+  }>> {
+    // Find instance by sessionId
+    let instance: AgentInstance | undefined;
+    for (const inst of this.instances.values()) {
+      if (inst.sessionId === sessionId) {
+        instance = inst;
+        break;
+      }
+    }
+
+    if (!instance) {
+      return { success: false, error: { code: 'NOT_FOUND', message: 'Session not found' } };
+    }
+
+    const repoPath = instance.config.repoPath;
+    const branchName = instance.config.branchName;
+    const worktreePath = instance.worktreePath && instance.worktreePath !== repoPath
+      ? instance.worktreePath : null;
+
+    let hasUncommittedChanges = false;
+    let unpushedCommitCount = 0;
+    let hasRemoteBranch = false;
+
+    const checkPath = worktreePath || repoPath;
+
+    try {
+      // Check uncommitted changes
+      const statusOut = await execaCmd('git', ['status', '--porcelain'], { cwd: checkPath });
+      hasUncommittedChanges = statusOut.stdout.trim().length > 0;
+    } catch { /* ignore */ }
+
+    try {
+      // Check unpushed commits
+      const aheadOut = await execaCmd('git', ['rev-list', '--count', `origin/${branchName}..${branchName}`], { cwd: repoPath });
+      unpushedCommitCount = parseInt(aheadOut.stdout.trim(), 10) || 0;
+    } catch { /* branch may not track remote */ }
+
+    try {
+      // Check if remote branch exists
+      await execaCmd('git', ['ls-remote', '--exit-code', '--heads', 'origin', branchName], { cwd: repoPath });
+      hasRemoteBranch = true;
+    } catch { /* no remote branch */ }
+
+    return {
+      success: true,
+      data: {
+        hasWorktree: !!worktreePath,
+        worktreePath,
+        hasUncommittedChanges,
+        unpushedCommitCount,
+        hasRemoteBranch,
+        branchName,
+        repoPath,
+      },
+    };
+  }
+
+  /**
+   * Delete an instance with optional worktree and branch cleanup
+   */
+  async deleteInstanceWithCleanup(
+    sessionId: string,
+    options: { deleteWorktree?: boolean; deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean }
+  ): Promise<IpcResult<void>> {
+    // Find instance by sessionId
+    let instanceId: string | undefined;
+    let instance: AgentInstance | undefined;
+    for (const [id, inst] of this.instances) {
+      if (inst.sessionId === sessionId) {
+        instanceId = id;
+        instance = inst;
+        break;
+      }
+    }
+
+    if (!instance || !instanceId) {
+      return { success: false, error: { code: 'NOT_FOUND', message: 'Session not found' } };
+    }
+
+    const repoPath = instance.config.repoPath;
+    const branchName = instance.config.branchName;
+    const worktreePath = instance.worktreePath && instance.worktreePath !== repoPath
+      ? instance.worktreePath : null;
+
+    // 1. Remove worktree first (must happen before branch delete)
+    if (options.deleteWorktree && worktreePath) {
+      try {
+        await execaCmd('git', ['worktree', 'remove', worktreePath, '--force'], { cwd: repoPath });
+        console.log(`[AgentInstanceService] Removed worktree at ${worktreePath}`);
+      } catch (err) {
+        console.warn(`[AgentInstanceService] Failed to remove worktree: ${err}`);
+      }
+    }
+
+    // 2. Delete local branch
+    if (options.deleteLocalBranch) {
+      try {
+        await execaCmd('git', ['branch', '-D', branchName], { cwd: repoPath });
+        console.log(`[AgentInstanceService] Deleted local branch ${branchName}`);
+      } catch (err) {
+        console.warn(`[AgentInstanceService] Failed to delete local branch: ${err}`);
+      }
+    }
+
+    // 3. Delete remote branch
+    if (options.deleteRemoteBranch) {
+      try {
+        await execaCmd('git', ['push', 'origin', '--delete', branchName], { cwd: repoPath });
+        console.log(`[AgentInstanceService] Deleted remote branch ${branchName}`);
+      } catch (err) {
+        console.warn(`[AgentInstanceService] Failed to delete remote branch: ${err}`);
+      }
+    }
+
+    // 4. Delete the instance itself (files, state, etc.)
+    return this.deleteInstance(instanceId);
   }
 
   /**
@@ -1812,16 +2067,25 @@ ${DEVOPS_KIT_DIR}/
 
   /**
    * Update instance status
+   *
+   * R1 fix: when a session transitions across the active/inactive boundary
+   * (e.g. running → completed), we recalc `RecentRepo.agentCount` so the
+   * repo-picker session count stays accurate without restarting the app.
    */
   updateInstanceStatus(instanceId: string, status: AgentInstance['status'], error?: string): void {
     const instance = this.instances.get(instanceId);
     if (instance) {
+      const wasActive = isActiveInstance(instance);
       instance.status = status;
       if (error) {
         instance.error = error;
       }
+      const nowActive = isActiveInstance(instance);
       this.saveInstances();
       this.emitStatusChange(instance);
+      if (wasActive !== nowActive) {
+        this.recalculateRepoAgentCounts();
+      }
     }
   }
 
@@ -1881,12 +2145,17 @@ ${DEVOPS_KIT_DIR}/
   }
 
   /**
-   * Recalculate agent counts for all recent repos based on actual stored instances
-   * This fixes stale counts that got out of sync
+   * Recalculate agent counts for all recent repos based on actual stored instances.
+   * R1 fix: counts ONLY active sessions (filters out completed/closed/failed)
+   * so the "Setup new instance" repo picker shows the live session count, not
+   * a stale all-time tally.
+   *
+   * Active/inactive rule lives in `shared/instance-status.ts` so it stays in
+   * sync with the C5 Single-Session Mode guard.
    */
   recalculateRepoAgentCounts(): void {
     const repos = this.store.get('recentRepos', []) as RecentRepo[];
-    const instances = Array.from(this.instances.values());
+    const instances = Array.from(this.instances.values()).filter(isActiveInstance);
 
     // Count instances per repo
     const countByRepo = new Map<string, number>();
@@ -1943,6 +2212,8 @@ ${DEVOPS_KIT_DIR}/
         contextPreservation: instance.config.contextPreservation || '',
         rebaseFrequency: instance.config.rebaseFrequency || 'never',
         mcpUrl: this.mcpServerUrl || undefined,
+        rpcUrl: this.rpcServerUrl || undefined,
+        baseBranch: instance.config.baseBranch,
         multiRepoEntries: instance.multiRepoEntries,
         commitScope: instance.config.multiRepo?.commitScope,
       };

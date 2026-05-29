@@ -74,6 +74,18 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.git.detectSubmodules(repoPath);
   });
 
+  ipcMain.handle(IPC.GIT_GET_REPO_STATUS, async (_, repoPath: string) => {
+    return services.git.getRepoStatus(repoPath);
+  });
+
+  ipcMain.handle(IPC.GIT_LIST_BRANCHES_FOR_REPO, async (_, repoPath: string) => {
+    return services.git.listBranchesForRepo(repoPath);
+  });
+
+  ipcMain.handle(IPC.GIT_WORKTREE_SAFETY_INFO, async (_, worktreePath: string) => {
+    return services.git.getWorktreeSafetyInfo(worktreePath);
+  });
+
   // ==========================================================================
   // WATCHER HANDLERS
   // ==========================================================================
@@ -144,6 +156,39 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.config.hasCredential(key);
   });
 
+  // Per-repo workspace settings (C5 Single-Session Mode)
+  ipcMain.handle(IPC.REPO_GET_WORKTREE_MODE, async (_, repoPath: string) => {
+    return { success: true, data: services.config.getRepoWorktreeMode(repoPath) };
+  });
+
+  ipcMain.handle(IPC.REPO_SET_WORKTREE_MODE, async (_, repoPath: string, mode: 'in-place' | 'worktree') => {
+    services.config.setRepoWorktreeMode(repoPath, mode);
+    return { success: true };
+  });
+
+  ipcMain.handle(IPC.REPO_GET_ACTIVE_SESSION_COUNT, async (_, repoPath: string) => {
+    return services.agentInstance.getActiveSessionCountForRepo(repoPath);
+  });
+
+  // Workspaces (Epic A / story A1)
+  ipcMain.handle(IPC.WORKSPACE_LIST, async () => services.workspace.list());
+  ipcMain.handle(IPC.WORKSPACE_GET, async (_, id: string) => services.workspace.get(id));
+  ipcMain.handle(IPC.WORKSPACE_ADD, async (_, input) => services.workspace.add(input));
+  ipcMain.handle(IPC.WORKSPACE_UPDATE, async (_, id: string, patch) => services.workspace.update(id, patch));
+  ipcMain.handle(IPC.WORKSPACE_REMOVE, async (_, id: string) => services.workspace.remove(id));
+  ipcMain.handle(IPC.WORKSPACE_GET_ACTIVE, async () => services.workspace.getActive());
+  ipcMain.handle(IPC.WORKSPACE_SET_ACTIVE, async (_, id: string | null) => services.workspace.setActive(id));
+  ipcMain.handle(IPC.WORKSPACE_SCAN, async (_, id: string) => services.workspace.scan(id));
+  ipcMain.handle(IPC.WORKSPACE_WATCH_START, async (_, id: string) => services.workspace.startWatching(id));
+  ipcMain.handle(IPC.WORKSPACE_WATCH_STOP, async (_, id: string) => services.workspace.stopWatching(id));
+
+  // Project Groups (Epic F / story F1)
+  ipcMain.handle(IPC.PROJECT_GROUP_LIST, async () => services.projectGroup.list());
+  ipcMain.handle(IPC.PROJECT_GROUP_GET, async (_, id: string) => services.projectGroup.get(id));
+  ipcMain.handle(IPC.PROJECT_GROUP_ADD, async (_, input) => services.projectGroup.add(input));
+  ipcMain.handle(IPC.PROJECT_GROUP_UPDATE, async (_, id: string, patch) => services.projectGroup.update(id, patch));
+  ipcMain.handle(IPC.PROJECT_GROUP_REMOVE, async (_, id: string) => services.projectGroup.remove(id));
+
   // ==========================================================================
   // AI HANDLERS (streaming uses on/send pattern)
   // ==========================================================================
@@ -169,6 +214,15 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
 
   ipcMain.handle(IPC.AI_LIST_MODELS, async () => {
     return { success: true, data: services.ai.getAvailableModels() };
+  });
+
+  ipcMain.handle(IPC.AI_IS_CONFIGURED, async () => {
+    return { success: true, data: services.ai.hasApiKey() };
+  });
+
+  ipcMain.handle(IPC.AI_HEALTH_CHECK, async () => {
+    const result = await services.ai.healthCheck();
+    return { success: true, data: result };
   });
 
   ipcMain.on(IPC.AI_STREAM_START, async (_, messages, modelOverride?: string) => {
@@ -341,6 +395,20 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return await services.agentInstance.deleteSessionById(sessionId, repoPath);
   });
 
+  ipcMain.handle(IPC.INSTANCE_DELETE_SAFETY_CHECK, async (_, sessionId: string) => {
+    return services.agentInstance.getDeleteSafetyInfo(sessionId);
+  });
+
+  ipcMain.handle(IPC.INSTANCE_DELETE_WITH_CLEANUP, async (_, sessionId: string, options: {
+    deleteWorktree?: boolean;
+    deleteLocalBranch?: boolean;
+    deleteRemoteBranch?: boolean;
+  }) => {
+    // Stop watcher before deleting
+    await services.watcher.stop(sessionId).catch(() => {});
+    return await services.agentInstance.deleteInstanceWithCleanup(sessionId, options);
+  });
+
   ipcMain.handle(IPC.INSTANCE_RESTART, async (_, sessionId: string, sessionData?: {
     repoPath: string;
     branchName: string;
@@ -451,6 +519,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.repoCleanup.cleanupKanvasDirectory(repoPath);
   });
 
+  ipcMain.handle(IPC.CLEANUP_GET_STORAGE_METRICS, async (_, repoPaths: string[]) => {
+    return services.repoCleanup.getStorageMetrics(repoPaths);
+  });
+
   // ==========================================================================
   // GIT REBASE HANDLERS
   // ==========================================================================
@@ -519,6 +591,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.git.pruneWorktrees(repoPath);
   });
 
+  ipcMain.handle(IPC.GIT_REMOVE_WORKTREE_PATH, async (_, repoPath: string, worktreePath: string) => {
+    return services.git.removeWorktreeByPath(repoPath, worktreePath);
+  });
+
   ipcMain.handle(IPC.GIT_DELETE_BRANCH, async (_, repoPath: string, branchName: string, deleteRemote?: boolean) => {
     return services.git.deleteBranch(repoPath, branchName, deleteRemote);
   });
@@ -548,6 +624,17 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
 
   ipcMain.handle(IPC.GIT_GET_COMMIT_DIFF, async (_, repoPath: string, commitHash: string) => {
     return services.git.getCommitDiff(repoPath, commitHash);
+  });
+
+  ipcMain.handle(IPC.GIT_ANALYZE_STALE_BRANCHES, async (_, repoPath: string, baseBranch?: string, staleDays?: number) => {
+    return services.git.analyzeStaleBranches(repoPath, baseBranch, staleDays);
+  });
+
+  ipcMain.handle(IPC.GIT_ARCHIVE_BRANCH, async (_, repoPath: string, branchName: string, options: {
+    deleteOriginal?: boolean;
+    deleteRemote?: boolean;
+  }) => {
+    return services.git.archiveBranch(repoPath, branchName, options);
   });
 
   // ==========================================================================
@@ -1047,6 +1134,59 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
 
   ipcMain.handle(IPC.SHELL_COPY_PATH, async (_, pathToCopy: string) => {
     return services.quickAction.copyPath(pathToCopy);
+  });
+
+  // Safe git command execution — allowlisted commands only, sandboxed to repo path
+  ipcMain.handle(IPC.SHELL_EXEC_GIT_SAFE, async (_, repoPath: string, command: string): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number }> => {
+    const { execFile } = await import('child_process');
+    const { promisify } = await import('util');
+    const execFileAsync = promisify(execFile);
+
+    // Allowlist: only safe, non-destructive git operations
+    const ALLOWED_PREFIXES = [
+      'git pull',
+      'git fetch',
+      'git push',
+      'git add',
+      'git commit',
+      'git stash',
+      'git checkout',
+      'git switch',
+      'git restore',
+      'git rebase --abort',
+      'git merge --abort',
+      'git clean -fd',
+    ];
+    const BLOCKED_PATTERNS = [
+      /--force(?!-with-lease)/,   // block --force but allow --force-with-lease
+      /reset\s+--hard/,
+      /push\s+.*--force(?!-with-lease)/,
+      /branch\s+-[Dd]/,
+      /remote\s+rm/,
+      /\brf\b/,
+      /&&|;|\||\$\(|`/,           // no chaining
+    ];
+
+    const trimmed = command.trim();
+    const allowed = ALLOWED_PREFIXES.some(p => trimmed.startsWith(p));
+    const blocked = BLOCKED_PATTERNS.some(r => r.test(trimmed));
+
+    if (!allowed || blocked) {
+      return { ok: false, stdout: '', stderr: `Command not permitted: ${trimmed}`, exitCode: 1 };
+    }
+
+    const parts = trimmed.split(/\s+/);
+    try {
+      const { stdout, stderr } = await execFileAsync(parts[0], parts.slice(1), {
+        cwd: repoPath,
+        timeout: 30_000,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+      return { ok: true, stdout: stdout.trim(), stderr: stderr.trim(), exitCode: 0 };
+    } catch (err: unknown) {
+      const e = err as { stdout?: string; stderr?: string; code?: number };
+      return { ok: false, stdout: e.stdout?.trim() ?? '', stderr: e.stderr?.trim() ?? String(err), exitCode: e.code ?? 1 };
+    }
   });
 
   // ==========================================================================

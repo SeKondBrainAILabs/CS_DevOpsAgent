@@ -101,6 +101,68 @@ export class MergeService extends BaseService {
   }
 
   /**
+   * Parse "Your local changes to the following files would be overwritten by merge"
+   * error from git stderr. This fires when the target branch has tracked (committed)
+   * changes to files that also have uncommitted local modifications.
+   * Returns the list of blocking files, or null if not this type of error.
+   */
+  private parseTrackedDirtyFiles(stderr: string): string[] | null {
+    if (!stderr.includes('Your local changes to the following files would be overwritten')) {
+      return null;
+    }
+    // Git error format:
+    // error: Your local changes to the following files would be overwritten by merge:
+    //     path/to/file1
+    //     path/to/file2
+    // Please commit your changes or stash them before you merge.
+    // Aborting
+    const lines = stderr.split('\n');
+    const blockingFiles: string[] = [];
+    let capturing = false;
+    for (const line of lines) {
+      if (line.includes('Your local changes to the following files would be overwritten')) {
+        capturing = true;
+        continue;
+      }
+      if (capturing) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('Please ') || trimmed === 'Aborting' || trimmed === '') {
+          capturing = false;
+          continue;
+        }
+        if (trimmed) {
+          blockingFiles.push(trimmed);
+        }
+      }
+    }
+    return blockingFiles.length > 0 ? blockingFiles : null;
+  }
+
+  /**
+   * Stash tracked files that have uncommitted local changes blocking a merge.
+   * Uses a pathspec stash so only the blocking files are stashed — any other
+   * dirty files the user has stay put. Message prefix matches the untracked
+   * flow so popStashAfterMerge auto-recovers it after a successful merge.
+   */
+  private async stashTrackedDirtyFiles(
+    repoPath: string,
+    blockingFiles: string[]
+  ): Promise<{ stashed: string[]; stashRef: string } | null> {
+    const stashMsg = `[Kanvas] Pre-merge stash: ${blockingFiles.length} tracked file(s) blocking merge`;
+    const { exitCode: stashExit, stderr } = await this.git(
+      ['stash', 'push', '-m', stashMsg, '--', ...blockingFiles],
+      repoPath
+    );
+    if (stashExit !== 0) {
+      console.warn(`[MergeService] Failed to stash tracked blocking files: ${stderr}`);
+      return null;
+    }
+    const { stdout: stashRef } = await this.git(['stash', 'list', '--max-count=1'], repoPath);
+    console.log(`[MergeService] Stashed ${blockingFiles.length} tracked blocking files: ${stashRef}`);
+    return { stashed: blockingFiles, stashRef };
+  }
+
+  /**
    * Stash untracked files that are blocking a merge, then attempt the merge.
    * Uses `git stash --include-untracked` to safely preserve the files.
    * After merge, user can pop the stash if needed.
@@ -247,8 +309,27 @@ export class MergeService extends BaseService {
     targetBranch: string
   ): Promise<IpcResult<MergePreview>> {
     return this.wrap(async () => {
+      // Strip 'origin/' prefix — branch names may be stored as 'origin/main'
+      // from the branch picker dropdown which lists remote tracking branches.
+      targetBranch = targetBranch.replace(/^origin\//, '');
+
       // Fetch latest from remote
       await this.git(['fetch', 'origin'], repoPath);
+
+      // Verify target branch exists on remote — gives a clear error instead of
+      // cryptic rev-list failures when the repo uses a different default branch name.
+      const { exitCode: lsExit, stdout: remoteRefs } = await this.git(
+        ['ls-remote', '--heads', 'origin', targetBranch],
+        repoPath
+      );
+      if (lsExit !== 0 || !remoteRefs.trim()) {
+        const { stdout: remoteHead } = await this.git(['ls-remote', '--symref', 'origin', 'HEAD'], repoPath);
+        const defaultBranchMatch = remoteHead.match(/ref: refs\/heads\/(\S+)\s+HEAD/);
+        const hint = defaultBranchMatch
+          ? ` The remote default branch is '${defaultBranchMatch[1]}'. Update the session's base branch setting.`
+          : '';
+        throw new Error(`Remote branch 'origin/${targetBranch}' does not exist.${hint}`);
+      }
 
       // Get current branch
       const { stdout: currentBranch } = await this.git(['branch', '--show-current'], repoPath);
@@ -397,6 +478,10 @@ export class MergeService extends BaseService {
     } = {}
   ): Promise<IpcResult<MergeResult>> {
     return this.wrap(async () => {
+      // Strip 'origin/' prefix — branch names may be stored as 'origin/main'
+      // from the branch picker dropdown which lists remote tracking branches.
+      targetBranch = targetBranch.replace(/^origin\//, '');
+
       let didStash = false;
 
       // Ensure .S9N_KIT_DevOpsAgent/ is in .gitignore of the target repo
@@ -418,6 +503,20 @@ export class MergeService extends BaseService {
             if (addResult.exitCode !== 0) {
               throw new Error(`git add -A failed (exit ${addResult.exitCode}): ${addResult.stderr}`);
             }
+
+            // Unstage known Kanvas session/runtime files that should never land on main.
+            // These may be tracked from a previous commit (gitignore only blocks untracked files).
+            const sessionPatterns = [
+              '.claude-session-*.md',
+              '.codex-session-*.md',
+              '.devops-commit-*.msg',
+              '.mcp.json',
+              '.claude/settings.json',
+              '.S9N_KIT_DevOpsAgent/config.json',
+            ];
+            await this.git(['restore', '--staged', ...sessionPatterns], options.worktreePath).catch(() => {
+              // restore --staged is a no-op if files aren't staged — ignore errors
+            });
 
             // Verify everything was staged — nothing should remain unstaged
             const { stdout: postAddStatus } = await this.git(['status', '--porcelain'], options.worktreePath);
@@ -487,11 +586,33 @@ export class MergeService extends BaseService {
       // Get current branch
       const { stdout: currentBranch } = await this.git(['branch', '--show-current'], repoPath);
 
+      // Verify target branch exists on remote before checking out.
+      // Repos may use 'master', 'development', or another name instead of 'main'.
+      const { exitCode: lsRemoteExit } = await this.git(
+        ['ls-remote', '--exit-code', '--heads', 'origin', targetBranch],
+        repoPath
+      );
+      if (lsRemoteExit !== 0) {
+        // Try to find the actual default branch from the remote
+        const { stdout: remoteHead } = await this.git(
+          ['ls-remote', '--symref', 'origin', 'HEAD'],
+          repoPath
+        );
+        const defaultBranchMatch = remoteHead.match(/ref: refs\/heads\/(\S+)\s+HEAD/);
+        const suggestion = defaultBranchMatch
+          ? ` The remote default branch appears to be '${defaultBranchMatch[1]}'. Update the session's base branch setting.`
+          : ` Check that '${targetBranch}' exists on the remote.`;
+        return {
+          success: false,
+          message: `Cannot merge: remote branch 'origin/${targetBranch}' does not exist.${suggestion}`,
+        };
+      }
+
       // Checkout target branch if needed
       if (currentBranch !== targetBranch) {
-        const { exitCode } = await this.git(['checkout', targetBranch], repoPath);
-        if (exitCode !== 0) {
-          throw new Error(`Failed to checkout ${targetBranch}`);
+        const checkoutResult = await this.git(['checkout', targetBranch], repoPath);
+        if (checkoutResult.exitCode !== 0) {
+          throw new Error(`Failed to checkout ${targetBranch}: ${checkoutResult.stderr}`);
         }
       }
 
@@ -499,7 +620,7 @@ export class MergeService extends BaseService {
       const pullResult = await this.git(['pull', 'origin', targetBranch], repoPath);
       if (pullResult.exitCode !== 0) {
         console.error(`[MergeService] Pull failed:`, pullResult.stderr);
-        await this.git(['merge', '--abort'], repoPath);
+        // Restore original branch — no merge has been started so no merge --abort needed
         if (currentBranch !== targetBranch) {
           await this.git(['checkout', currentBranch], repoPath);
         }
@@ -538,6 +659,31 @@ export class MergeService extends BaseService {
               success: false,
               message: `Untracked files blocking merge could not be stashed: ${failedFiles.join(', ')}. Please move or remove them manually.`,
               conflictingFiles: blockingFiles,
+            };
+          }
+        }
+      }
+
+      // Handle tracked dirty files blocking the merge - stash those specific paths and retry.
+      // Mirrors the untracked-blocking path above: identical user outcome (merge just works),
+      // and popStashAfterMerge later auto-recovers the user's local edits.
+      if (mergeResult.exitCode !== 0) {
+        const trackedBlockers = this.parseTrackedDirtyFiles(mergeResult.stderr);
+        if (trackedBlockers && trackedBlockers.length > 0) {
+          console.log(`[MergeService] Tracked dirty files blocking merge, stashing: ${trackedBlockers.join(', ')}`);
+
+          const stashResult = await this.stashTrackedDirtyFiles(repoPath, trackedBlockers);
+          if (stashResult) {
+            didStash = true;
+            mergeResult = await this.git(
+              ['merge', sourceBranch, '-m', `Merge branch '${sourceBranch}' into ${targetBranch}`],
+              repoPath
+            );
+          } else {
+            return {
+              success: false,
+              message: `Local changes to ${trackedBlockers.join(', ')} would be overwritten by merge and could not be auto-stashed. Please commit or stash them manually.`,
+              conflictingFiles: trackedBlockers,
             };
           }
         }
@@ -648,12 +794,22 @@ export class MergeService extends BaseService {
   }
 
   /**
-   * Ensure agent artifacts (.S9N_KIT_DevOpsAgent/) are in the repo's .gitignore.
-   * This prevents untracked agent files from blocking git merge/checkout operations.
+   * Ensure Kanvas session artifacts are in the repo's .gitignore.
+   * This prevents agent runtime files from being committed or blocking merges.
    */
   private async ensureAgentArtifactsIgnored(repoPath: string): Promise<void> {
     const gitignorePath = path.join(repoPath, '.gitignore');
-    const agentDir = '.S9N_KIT_DevOpsAgent';
+
+    // Patterns to ensure are gitignored (checked by substring presence)
+    const patternsToAdd: Array<{ check: string; line: string }> = [
+      { check: '.S9N_KIT_DevOpsAgent', line: '.S9N_KIT_DevOpsAgent/' },
+      { check: '.claude-session-', line: '.claude-session-*.md' },
+      { check: '.codex-session-', line: '.codex-session-*.md' },
+      { check: '.devops-commit-', line: '.devops-commit-*.msg' },
+      { check: '.mcp.json', line: '.mcp.json' },
+      { check: '.claude/settings.json', line: '.claude/settings.json' },
+      { check: '.file-coordination/', line: '.file-coordination/' },
+    ];
 
     try {
       let content = '';
@@ -663,10 +819,12 @@ export class MergeService extends BaseService {
         // .gitignore doesn't exist yet
       }
 
-      if (!content.includes(agentDir)) {
-        content += `\n# DevOps Agent Kit (local runtime data - do not commit)\n${agentDir}/\n`;
+      const missing = patternsToAdd.filter(p => !content.includes(p.check));
+      if (missing.length > 0) {
+        content += `\n# KIT DevOps Agent — session/runtime files (do not commit)\n`;
+        content += missing.map(p => p.line).join('\n') + '\n';
         await fs.writeFile(gitignorePath, content, 'utf-8');
-        console.log(`[MergeService] Added ${agentDir}/ to .gitignore in ${repoPath}`);
+        console.log(`[MergeService] Added ${missing.length} KIT pattern(s) to .gitignore in ${repoPath}`);
       }
     } catch (err) {
       console.warn(`[MergeService] Could not update .gitignore: ${err}`);

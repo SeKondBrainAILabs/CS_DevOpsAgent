@@ -9,12 +9,17 @@ export interface InstructionVars {
   repoPath: string;
   repoName: string;
   branchName: string;
+  baseBranch?: string;
   sessionId: string;
   taskDescription: string;
   systemPrompt: string;
   contextPreservation: string;
   rebaseFrequency: string;
   mcpUrl?: string;
+  /** Stateless JSON-RPC endpoint for Codex / type:"http" clients (/rpc) */
+  rpcUrl?: string;
+  // Custom agent MCP opt-in
+  customMcpEnabled?: boolean;
   // Multi-repo fields
   multiRepoEntries?: RepoEntry[];
   commitScope?: 'all' | 'per-repo';
@@ -29,6 +34,7 @@ export function getAgentInstructions(
 ): string {
   const templates: Record<AgentType, (vars: InstructionVars) => string> = {
     claude: getClaudeInstructions,
+    codex: getCodexInstructions,
     cursor: getCursorInstructions,
     copilot: getCopilotInstructions,
     cline: getClineInstructions,
@@ -190,10 +196,22 @@ EOF
 ### ⚠️ FALLBACK: If MCP tools are NOT in your available tools list
 If the \`kit_commit\` MCP tool is not listed in your tools (MCP connection failed):
 1. Stage and commit directly: \`git add -A && git commit -m "your message"\`
-2. Or write commit message to \`.devops-commit-${shortSessionId}.msg\` or \`.claude-commit-msg\` — the KIT watcher will auto-commit.` : `
+2. Or write commit message to \`.devops-commit-${shortSessionId}.msg\` or \`.claude-commit-msg\` — the KIT watcher will auto-commit.
+
+⛔ **CRITICAL GIT PUSH RULES (read even if MCP is working):**
+- If you need to push manually, ONLY push to your session branch: \`git push origin HEAD:${vars.branchName || 'YOUR_SESSION_BRANCH'}\`
+- **NEVER** push to \`${vars.baseBranch || 'main'}\`, \`main\`, \`master\`, or any base/production branch directly
+- **NEVER** use \`HEAD:main\` or \`HEAD:master\` in a push command
+- Merging to the base branch is done by the human via Kanvas — NOT by the agent
+- If you cannot commit via MCP or git, STOP and ask the user — do not invent alternative push strategies` : `
 📝 **To commit**, either:
 1. Stage and commit directly: \`git add -A && git commit -m "your message"\`
-2. Or write your commit message to \`.devops-commit-${shortSessionId}.msg\` or \`.claude-commit-msg\` — the KIT watcher will auto-commit.`}
+2. Or write your commit message to \`.devops-commit-${shortSessionId}.msg\` or \`.claude-commit-msg\` — the KIT watcher will auto-commit.
+
+⛔ **CRITICAL GIT PUSH RULES:**
+- ONLY push to your session branch — NEVER to \`main\`, \`master\`, or any base/production branch
+- Merging to the base branch is done by the human via Kanvas — NOT by the agent
+- If you cannot commit, STOP and ask the user — do not invent alternative push strategies`}
 
 **One story = one commit.** If given multiple stories, complete and commit each separately.
 
@@ -223,7 +241,11 @@ ${vars.multiRepoEntries.map(r => `| ${r.repoName} | ${r.role} | ${r.branchName} 
 | \`kit_get_commit_history\` | repo (optional) | History for a specific repo |
 
 When no \`repo\` parameter is specified, operations target the **primary** repo.
-Secondary repo branches use the naming convention: \`From_{PrimaryRepoName}_{DDMMYY}\`.
+
+### ⚠️ Branch naming — read carefully
+- **Primary repo**: use the branch name shown in the table above — do NOT invent or rename it.
+- **Secondary (child) repos only**: branches follow \`Upgrade_From_{PrimaryRepoName}\` (no date suffix).
+- 🚫 DO NOT apply the \`Upgrade_From_*\` pattern to the primary repo. That naming exists solely to trace child-repo commits back to the primary repo's session. Using it on the primary creates a confusing self-referential branch.
 
 ### ⚠️ FALLBACK: If MCP tools are NOT available
 If \`kit_commit_all\` is not in your tools list, commit each repo manually:
@@ -235,6 +257,101 @@ cd /path/to/repo-worktree && git add -A && git commit -m "your message"
 ⛔ STOP: Run setup commands, read houserules.md, then await instructions.`;
 }
 
+/**
+ * Generate the standalone prompt for OpenAI Codex CLI agent.
+ * Formatted for Codex's task-based workflow — not Claude's conversation style.
+ * References ~/.codex/config.json for MCP, uses codex-session-* files.
+ */
+export function generateCodexPrompt(vars: InstructionVars): string {
+  const shortSessionId = vars.sessionId.replace('sess_', '').slice(0, 8);
+  const task = vars.taskDescription || vars.branchName || 'development';
+
+  return `# SESSION ${shortSessionId}
+
+# ⚠️ CRITICAL: WRONG DIRECTORY = WASTED WORK ⚠️
+WORKDIR: ${vars.repoPath}
+YOU MUST WORK ONLY IN THIS DIRECTORY - NOT THE MAIN REPO
+
+BRANCH: ${vars.branchName}
+TASK: ${task}
+${(vars.rpcUrl || vars.mcpUrl) ? `
+## 🔌 MCP SERVER CONNECTION
+This session has a KIT MCP server.
+- **Stateless JSON-RPC endpoint (use this):** \`${vars.rpcUrl || vars.mcpUrl}\`
+- MCP config is provided via \`.mcp.json\` in this worktree (auto-detected by Codex).
+- If not auto-detected, add to \`~/.codex/config.json\`:
+\`\`\`json
+{ "mcpServers": { "kit": { "type": "http", "url": "${vars.rpcUrl || vars.mcpUrl}" } } }
+\`\`\`
+Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+
+**⚠️ These are MCP protocol tools — NOT bash commands. Do not run them in a terminal.**
+` : ''}
+## 1. SETUP (run first)
+\`\`\`bash
+cd "${vars.repoPath}"
+pwd
+cat houserules.md 2>/dev/null || echo "No houserules.md"
+cat FOLDER_STRUCTURE.md 2>/dev/null || echo "No FOLDER_STRUCTURE.md"
+ls House_Rules_Contracts/ 2>/dev/null && echo "Found contract docs - read relevant ones before making changes"
+\`\`\`
+
+## 2. CONTEXT FILE
+\`\`\`bash
+cat > .codex-session-${shortSessionId}.md << 'EOF'
+# Session ${shortSessionId}
+Dir: ${vars.repoPath}
+Branch: ${vars.branchName}
+Task: ${task}
+
+## Progress
+- [ ] Task started
+- [ ] Files identified
+- [ ] Implementation in progress
+- [ ] Testing complete
+- [ ] Ready for commit
+EOF
+\`\`\`
+
+## 3. FILE LOCKS (before editing any file)${vars.mcpUrl ? `
+🔧 **PREFERRED: Use MCP tool \`kit_lock_file\`** with session_id="${vars.sessionId}", files=["file.ts"]
+Release with \`kit_unlock_file\` when done.
+
+### ⚠️ FALLBACK: If MCP tools are not available` : ''}
+\`\`\`bash
+ls .file-coordination/active-edits/
+cat > .file-coordination/active-edits/codex-${shortSessionId}.json << 'EOF'
+{"agent":"codex","session":"${shortSessionId}","files":["<file1.ts>"],"operation":"edit","reason":"${task}"}
+EOF
+\`\`\`
+
+## 4. COMMITS${vars.mcpUrl ? `
+🔧 **PREFERRED: Use MCP tool \`kit_commit\`** (NOT a bash command — MCP protocol only)
+**session_id for all MCP calls: \`${vars.sessionId}\`**
+
+### ⚠️ FALLBACK: If MCP tools are not available` : ''}
+\`\`\`bash
+git add -A && git commit -m "your message"
+# Push ONLY to your session branch:
+git push origin HEAD:${vars.branchName || 'YOUR_SESSION_BRANCH'}
+\`\`\`
+
+⛔ **CRITICAL GIT PUSH RULES — READ BEFORE ANY PUSH:**
+- ONLY push to your session branch (\`${vars.branchName || 'YOUR_SESSION_BRANCH'}\`)
+- **NEVER** push to \`${vars.baseBranch || 'main'}\`, \`main\`, \`master\`, or any base/production branch directly
+- **NEVER** use \`HEAD:main\` or \`HEAD:master\` in any git push command
+- Merging to the base branch is done by the human via Kanvas — NOT by the agent
+- If MCP commit fails and direct git also fails, **STOP and tell the user** — do not invent alternative strategies
+${vars.multiRepoEntries && vars.multiRepoEntries.length > 1 ? `
+## MULTI-REPO SESSION
+| Repo | Role | Branch | Path |
+|------|------|--------|------|
+${vars.multiRepoEntries.map(r => `| ${r.repoName} | ${r.role} | ${r.branchName} | ${r.worktreePath} |`).join('\n')}
+` : ''}
+---
+Run with: \`codex --approval-mode full-auto\``;
+}
+
 function getClaudeInstructions(vars: InstructionVars): string {
   const shortSessionId = vars.sessionId.replace('sess_', '').slice(0, 8);
   const rebaseNote = vars.rebaseFrequency !== 'never'
@@ -244,7 +361,7 @@ function getClaudeInstructions(vars: InstructionVars): string {
   // Get the comprehensive prompt
   const agentPrompt = generateClaudePrompt(vars);
 
-  return `## Setup Claude Code for ${vars.repoName}
+  return `## Setup Coding Agent for ${vars.repoName}
 
 ### Session Info
 - **Session ID**: \`${shortSessionId}\`
@@ -263,7 +380,7 @@ cd "${vars.repoPath}"
 git checkout ${vars.branchName}
 \`\`\`
 
-3. **Start Claude Code**:
+3. **Start your coding agent**:
 \`\`\`bash
 claude
 \`\`\`
@@ -275,7 +392,7 @@ cd "${vars.repoPath}" && git checkout ${vars.branchName} && claude
 
 ---
 
-### Prompt for Claude Code
+### Prompt for your Coding Agent
 
 Copy and paste this ENTIRE prompt when starting your session:
 
@@ -322,93 +439,70 @@ Your activity will appear in KIT once Claude starts working.
 }
 
 function getCursorInstructions(vars: InstructionVars): string {
+  const mcpSection = vars.mcpUrl ? `
+### KIT MCP Setup
+Cursor supports MCP via \`.mcp.json\` in the project root (auto-created by KIT) or via Cursor Settings → MCP.
+
+If not auto-detected, add to **Cursor Settings → MCP → Add Server**:
+- Name: \`kit\`
+- Type: \`HTTP\`
+- URL: \`${vars.mcpUrl}\`
+
+Or add \`.mcp.json\` to the project root:
+\`\`\`json
+{ "mcpServers": { "kit": { "type": "streamable-http", "url": "${vars.mcpUrl}" } } }
+\`\`\`
+
+Available MCP tools: \`kit_commit\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+` : '';
+
   return `## Setup Cursor for ${vars.repoName}
 
 ### Quick Start
 
-1. **Open Cursor IDE**
+1. **Open Cursor IDE** and open folder: \`${vars.repoPath}\`
 
-2. **Open the repository folder**:
-   - File → Open Folder
-   - Select: \`${vars.repoPath}\`
-
-3. **Configure KIT reporting** (optional):
-   - Open Settings (Cmd/Ctrl + ,)
-   - Search for "Kanvas"
-   - Set Session ID: \`${vars.sessionId}\`
-
-### Workspace Settings
-Add to \`.vscode/settings.json\`:
-\`\`\`json
-{
-  "kanvas.sessionId": "${vars.sessionId}",
-  "kanvas.enabled": true
-}
-\`\`\`
-
-### Task
-${vars.taskDescription}
-
-### Branch
-Make sure you're on: \`${vars.branchName}\`
-
+2. **Checkout branch**:
 \`\`\`bash
 cd "${vars.repoPath}"
 git checkout ${vars.branchName}
 \`\`\`
 
+3. **Read house rules before making changes**:
+\`\`\`bash
+cat houserules.md 2>/dev/null
+cat FOLDER_STRUCTURE.md 2>/dev/null
+\`\`\`
+${mcpSection}
+### Task
+${vars.taskDescription}
+
 ---
 
-Cursor activity will appear in KIT when the extension is configured.
+Use Cursor's agent mode (Cmd+I) to work on the task. Commits appear in KIT automatically.
 `;
 }
 
 function getCopilotInstructions(vars: InstructionVars): string {
-  return `## Setup GitHub Copilot for ${vars.repoName}
+  const mcpSection = vars.mcpUrl ? `
+### KIT MCP Setup
+VS Code with Copilot supports MCP via \`.mcp.json\` in the project root (auto-created by KIT).
 
-### Prerequisites
-- VS Code with GitHub Copilot extension installed
-- Active GitHub Copilot subscription
-
-### Quick Start
-
-1. **Open VS Code**
-
-2. **Open the repository**:
-\`\`\`bash
-code "${vars.repoPath}"
-\`\`\`
-
-3. **Checkout the branch**:
-\`\`\`bash
-cd "${vars.repoPath}"
-git checkout ${vars.branchName}
-\`\`\`
-
-4. **Install KIT Reporter extension** (optional):
-   - Open Extensions (Cmd/Ctrl + Shift + X)
-   - Search for "KIT Reporter"
-   - Install and configure with Session ID: \`${vars.sessionId}\`
-
-### Task
-${vars.taskDescription}
-
-### Manual Activity Reporting
-If not using the extension, you can report activity manually by creating files in:
-\`${vars.repoPath}/.kanvas/activity/\`
-
----
-
-Start coding with Copilot and your activity will be tracked.
-`;
+If not auto-detected, add to \`~/.vscode/settings.json\` or workspace settings:
+\`\`\`json
+{
+  "mcp.servers": {
+    "kit": { "type": "http", "url": "${vars.mcpUrl}" }
+  }
 }
+\`\`\`
 
-function getClineInstructions(vars: InstructionVars): string {
-  return `## Setup Cline for ${vars.repoName}
+Or use the \`.mcp.json\` in the project root — VS Code Copilot discovers this automatically.
 
-### Prerequisites
-- VS Code with Cline extension installed
-- API key configured (Anthropic, OpenAI, etc.)
+Available MCP tools: \`kit_commit\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+` : '';
+
+  return `## Setup GitHub Copilot for ${vars.repoName}
 
 ### Quick Start
 
@@ -417,132 +511,203 @@ function getClineInstructions(vars: InstructionVars): string {
 code "${vars.repoPath}"
 \`\`\`
 
-2. **Open Cline panel** (Cmd/Ctrl + Shift + P → "Cline: Open")
-
-3. **Configure KIT integration**:
-   - Open Cline Settings
-   - Add custom environment:
-\`\`\`json
-{
-  "KANVAS_SESSION_ID": "${vars.sessionId}",
-  "KANVAS_REPO_PATH": "${vars.repoPath}"
-}
-\`\`\`
-
-### Task
-Paste this into Cline:
-\`\`\`
-${vars.taskDescription}
-
-Working in branch: ${vars.branchName}
-\`\`\`
-
-### Branch Setup
+2. **Checkout branch**:
 \`\`\`bash
 cd "${vars.repoPath}"
 git checkout ${vars.branchName}
 \`\`\`
 
+3. **Read house rules before making changes**:
+\`\`\`bash
+cat houserules.md 2>/dev/null
+\`\`\`
+${mcpSection}
+### Task
+${vars.taskDescription}
+
 ---
 
-Cline will autonomously work on the task. Activity appears in Kanvas.
+Use Copilot Chat (Cmd+Shift+I) or inline suggestions. Commits appear in KIT automatically.
+`;
+}
+
+function getClineInstructions(vars: InstructionVars): string {
+  const mcpSection = vars.mcpUrl ? `
+### KIT MCP Setup
+Cline supports MCP natively. Add the KIT server in **Cline Settings → MCP Servers → Add**:
+- Name: \`kit\`
+- Type: \`Streamable HTTP\`
+- URL: \`${vars.mcpUrl}\`
+
+Or KIT auto-creates \`.mcp.json\` in the project root which Cline discovers automatically.
+
+Available MCP tools: \`kit_commit\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+
+**session_id for all MCP calls: \`${vars.sessionId}\`**
+` : '';
+
+  return `## Setup Cline for ${vars.repoName}
+
+### Quick Start
+
+1. **Open VS Code**:
+\`\`\`bash
+code "${vars.repoPath}"
+cd "${vars.repoPath}" && git checkout ${vars.branchName}
+\`\`\`
+
+2. **Open Cline panel** (Cmd+Shift+P → "Cline: Open")
+${mcpSection}
+### Task
+Paste into Cline:
+\`\`\`
+${vars.taskDescription}
+
+Working directory: ${vars.repoPath}
+Branch: ${vars.branchName}
+
+Read houserules.md and FOLDER_STRUCTURE.md before making changes.
+\`\`\`
+
+---
+
+Cline will work autonomously. Activity appears in KIT once MCP is connected.
 `;
 }
 
 function getAiderInstructions(vars: InstructionVars): string {
+  const mcpSection = vars.mcpUrl ? `
+### KIT MCP Setup
+Aider does not natively support MCP. Use the \`.mcp.json\` in the project root for other agents.
+KIT tracks Aider activity via git commits automatically — no MCP needed.
+` : '';
+
   return `## Setup Aider for ${vars.repoName}
 
-### Prerequisites
-- Aider installed (\`pip install aider-chat\`)
-- API key configured (OPENAI_API_KEY or ANTHROPIC_API_KEY)
-
 ### Quick Start
-
-1. **Navigate to repository**:
 \`\`\`bash
 cd "${vars.repoPath}"
-\`\`\`
-
-2. **Checkout the branch**:
-\`\`\`bash
 git checkout ${vars.branchName}
+cat houserules.md 2>/dev/null
 \`\`\`
 
-3. **Start Aider with KIT reporting**:
+### Start Aider
 \`\`\`bash
-KANVAS_SESSION_ID="${vars.sessionId}" aider
+cd "${vars.repoPath}"
+KANVAS_SESSION_ID="${vars.sessionId}" aider --model claude-3-5-sonnet-20241022
 \`\`\`
-
-### Alternative: Using Aider flags
-\`\`\`bash
-aider --env KANVAS_SESSION_ID="${vars.sessionId}"
-\`\`\`
-
+${mcpSection}
 ### Task
-Once Aider starts, describe your task:
+Once Aider starts, paste:
 \`\`\`
 ${vars.taskDescription}
 \`\`\`
 
-### Useful Aider Commands
-- \`/add <file>\` - Add files to context
-- \`/drop <file>\` - Remove files from context
-- \`/commit\` - Commit changes
-- \`/diff\` - Show pending changes
+### Useful Commands
+- \`/add <file>\` — add files to context
+- \`/commit\` — commit changes
+- \`/diff\` — show pending changes
 
 ---
 
-Aider commits will appear in KIT automatically.
+Aider commits appear in KIT automatically via git watcher.
 `;
 }
 
 function getWarpInstructions(vars: InstructionVars): string {
+  const mcpSection = vars.mcpUrl ? `
+### KIT MCP Setup
+Warp does not natively support MCP. KIT tracks activity via git commits automatically.
+If Warp adds MCP support, add to \`.mcp.json\` in the project root:
+\`\`\`json
+{ "mcpServers": { "kit": { "type": "streamable-http", "url": "${vars.mcpUrl}" } } }
+\`\`\`
+` : '';
+
   return `## Setup Warp AI for ${vars.repoName}
 
-### Prerequisites
-- Warp terminal installed
-- Warp AI enabled in settings
-
 ### Quick Start
-
-1. **Open Warp**
-
-2. **Navigate to repository**:
 \`\`\`bash
 cd "${vars.repoPath}"
-\`\`\`
-
-3. **Set KIT environment**:
-\`\`\`bash
 export KANVAS_SESSION_ID="${vars.sessionId}"
-export KANVAS_REPO_PATH="${vars.repoPath}"
-\`\`\`
-
-4. **Checkout the branch**:
-\`\`\`bash
 git checkout ${vars.branchName}
+cat houserules.md 2>/dev/null
 \`\`\`
 
-### Warp Workflow (Optional)
-Create a workflow for this project:
+### Optional: Warp Workflow
 \`\`\`yaml
-name: ${vars.repoName} Dev Session
+name: ${vars.repoName} — KIT Session
 command: |
   cd "${vars.repoPath}"
   export KANVAS_SESSION_ID="${vars.sessionId}"
   git checkout ${vars.branchName}
 \`\`\`
-
+${mcpSection}
 ### Task
 ${vars.taskDescription}
 
 ---
 
-Use Warp AI (# key) to get help with your task. Activity tracked via git commits.
+Use Warp AI (# key) to get help. Commits appear in KIT via git watcher.
+`;
+}
+
+function getCodexInstructions(vars: InstructionVars): string {
+  const mcpSection = vars.mcpUrl ? `
+### KIT MCP Setup
+KIT auto-creates \`.mcp.json\` in the project root — Codex picks this up automatically.
+
+If not auto-detected, add to \`~/.codex/config.json\`:
+\`\`\`json
+{ "mcpServers": { "kit": { "type": "http", "url": "${vars.mcpUrl}" } } }
+\`\`\`
+
+Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+
+**session_id for all MCP calls: \`${vars.sessionId}\`**
+` : `
+### Activity Tracking (No MCP)
+\`\`\`bash
+export KANVAS_SESSION_ID="${vars.sessionId}"
+\`\`\`
+`;
+
+  return `## Codex Agent Setup for ${vars.repoName}
+
+### Repository
+\`\`\`bash
+cd "${vars.repoPath}"
+git checkout ${vars.branchName}
+\`\`\`
+
+### Task
+${vars.taskDescription}
+${mcpSection}
+### System Context
+${vars.systemPrompt}
+
+---
+
+Run Codex in full-auto mode with: \`codex --approval-mode full-auto\`
+Activity will appear in the KIT dashboard once the MCP server is connected.
 `;
 }
 
 function getCustomInstructions(vars: InstructionVars): string {
+  const mcpSection = vars.customMcpEnabled && vars.mcpUrl ? `
+### MCP Server (Detected as Supported)
+Connect your agent to KIT's MCP server for full dashboard integration:
+
+**MCP Server URL:** \`${vars.mcpUrl}\`
+**Session ID:** \`${vars.sessionId}\`
+
+Configure your agent to use this MCP server URL. Once connected the following
+tools become available:
+- \`kit_log_commit\` — record commits with context
+- \`kit_get_session\` — read current session state
+- \`kit_update_status\` — push status updates to KIT dashboard
+` : '';
+
   return `## Custom Agent Setup for ${vars.repoName}
 
 ### Kanvas Integration
@@ -612,7 +777,7 @@ git checkout ${vars.branchName}
 ---
 
 Your custom agent's activity will appear in KIT when files are written correctly.
-`;
+${mcpSection}`;
 }
 
 /**
@@ -621,6 +786,7 @@ Your custom agent's activity will appear in KIT when files are written correctly
 export function getAgentTypeDescription(agentType: AgentType): string {
   const descriptions: Record<AgentType, string> = {
     claude: 'Claude Code - Full AI coding assistant with terminal access',
+    codex: 'Codex CLI - OpenAI\'s autonomous coding agent with MCP support',
     cursor: 'Cursor IDE - AI-powered code editing and completion',
     copilot: 'GitHub Copilot - AI pair programmer in VS Code',
     cline: 'Cline - Autonomous coding agent for VS Code',
@@ -638,6 +804,7 @@ export function getAgentTypeDescription(agentType: AgentType): string {
 export function getAgentLaunchMethod(agentType: AgentType): 'cli' | 'ide' | 'terminal' | 'manual' {
   const methods: Record<AgentType, 'cli' | 'ide' | 'terminal' | 'manual'> = {
     claude: 'cli',
+    codex: 'cli',
     cursor: 'ide',
     copilot: 'ide',
     cline: 'ide',

@@ -13,11 +13,13 @@ import { StatusBar } from './components/layouts/StatusBar';
 import { DashboardCanvas } from './components/features/DashboardCanvas';
 import { SessionDetailView } from './components/features/SessionDetailView';
 import { UniversalCommitsView } from './components/features/UniversalCommitsView';
+import { WorkspaceBrowserView } from './components/features/WorkspaceBrowserView';
 import { HomeArtefactLeft } from './components/ui/HomeArtefactLeft';
 import { NewSessionWizard } from './components/features/NewSessionWizard';
 import { CloseSessionDialog } from './components/features/CloseSessionDialog';
 import { SettingsModal } from './components/features/SettingsModal';
 import { CreateAgentWizard } from './components/features/CreateAgentWizard';
+import { RepoDetailModal } from './components/features/RepoDetailModal';
 import { RebaseMergeErrorDialog } from './components/features/RebaseMergeErrorDialog';
 import { OnboardingModal } from './components/features/OnboardingModal';
 import { useAgentStore, selectAgentList, selectSessionById } from './store/agentStore';
@@ -49,6 +51,10 @@ export default function App(): React.ReactElement {
     setShowSettingsModal,
     showCreateAgentWizard,
     setShowCreateAgentWizard,
+    createAgentWizardRepoPath,
+    createAgentWizardTask,
+    repoDetailPath,
+    closeRepoDetail,
     showOnboarding,
     setShowOnboarding,
   } = useUIStore();
@@ -184,10 +190,11 @@ export default function App(): React.ReactElement {
         }
         console.log(`Session restarted: ${sessionId} -> ${newSessionId}`);
       } else {
-        console.error('Failed to restart session:', result?.error);
+        throw new Error(result?.error || 'Restart failed — no session data returned');
       }
     } catch (error) {
       console.error('Failed to restart session:', error);
+      throw error;
     }
   };
 
@@ -195,20 +202,22 @@ export default function App(): React.ReactElement {
   const setMainView = useUIStore((state) => state.setMainView);
 
   // Determine what to show in main content
-  // Priority: 1) Session detail, 2) Commits view, 3) Artefacts view, 4) Dashboard
-  const mainContent = selectedSession ? (
+  // Priority: 1) Commits/Workspaces views (always on top), 2) Session detail, 3) Dashboard
+  const mainContent = mainView === 'commits' ? (
+    <UniversalCommitsView />
+  ) : mainView === 'workspaces' ? (
+    <WorkspaceBrowserView />
+  ) : mainView === 'artefacts' ? (
+    <div className="h-full p-6 overflow-auto">
+      <HomeArtefactLeft className="max-w-5xl aspect-[1440/1024] rounded-2xl shadow-card" />
+    </div>
+  ) : selectedSession ? (
     <SessionDetailView
       session={selectedSession}
       onBack={() => setSelectedSession(null)}
       onDelete={handleDeleteSession}
       onRestart={handleRestartSession}
     />
-  ) : mainView === 'commits' ? (
-    <UniversalCommitsView />
-  ) : mainView === 'artefacts' ? (
-    <div className="h-full p-6 overflow-auto">
-      <HomeArtefactLeft className="max-w-5xl aspect-[1440/1024] rounded-2xl shadow-card" />
-    </div>
   ) : (
     <DashboardCanvas agent={selectedAgent} />
   );
@@ -248,7 +257,14 @@ export default function App(): React.ReactElement {
       )}
 
       {showCreateAgentWizard && (
-        <CreateAgentWizard onClose={() => setShowCreateAgentWizard(false)} />
+        <CreateAgentWizard
+          onClose={() => setShowCreateAgentWizard(false)}
+          initialRepoPath={createAgentWizardRepoPath}
+          initialTask={createAgentWizardTask}
+        />
+      )}
+      {repoDetailPath && (
+        <RepoDetailModal repoPath={repoDetailPath} onClose={closeRepoDetail} />
       )}
 
       {/* Onboarding - shown on first launch */}

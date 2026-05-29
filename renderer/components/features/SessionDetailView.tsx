@@ -12,6 +12,7 @@ import type { AgentInstance, ContractType, Contract, ActivityLogEntry, Discovere
 import { computeFeatureFileStats, getFeatureRelativePath, getFileTooltip } from '../../../shared/feature-utils';
 import { useAgentStore } from '../../store/agentStore';
 import { useContractStore } from '../../store/contractStore';
+import { useConflictStore } from '../../store/conflictStore';
 import { CommitsTab } from './CommitsTab';
 import { McpTab } from './McpTab';
 
@@ -110,6 +111,19 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
   const [editingBaseBranch, setEditingBaseBranch] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
   const [loadingBranches, setLoadingBranches] = useState(false);
+  const [aiHealth, setAiHealth] = useState<{ online: boolean; configured: boolean; error?: string } | null>(null);
+  const showConflictDialog = useConflictStore((state) => state.showDialog);
+
+  useEffect(() => {
+    const check = () => {
+      window.api?.ai?.healthCheck?.().then((result) => {
+        setAiHealth(result.success && result.data ? result.data : { online: false, configured: false, error: 'Health check failed' });
+      }).catch(() => setAiHealth({ online: false, configured: false, error: 'Unreachable' }));
+    };
+    check();
+    const interval = setInterval(check, 60_000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Load instance data to get the prompt
   useEffect(() => {
@@ -164,13 +178,21 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
     setShowRestartConfirm(false);
     setRestarting(true);
     setRestartError(null);
+    // Safety: if still mounted after 30s (e.g. IPC hung), reset state
+    const safetyTimer = setTimeout(() => {
+      setRestarting(false);
+      setRestartError('Restart timed out — please try again');
+    }, 30_000);
     try {
       await onRestart?.(session.sessionId, session, commitChanges);
+      // On success the component should unmount as the session changes.
+      // If it doesn't (edge case), clear the timer and reset.
+      clearTimeout(safetyTimer);
     } catch (error) {
+      clearTimeout(safetyTimer);
       setRestartError(error instanceof Error ? error.message : 'Failed to restart session');
       setRestarting(false);
     }
-    // Note: on success, the component will unmount as the session changes, so no need to setRestarting(false)
   };
 
   const handleSync = async () => {
@@ -204,17 +226,31 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
 
       if (rebaseResult?.success && rebaseResult.data) {
         const resultMessage = rebaseResult.data.message || (rebaseResult.data.success ? 'Synced successfully' : 'Rebase failed');
-        setSyncResult({
-          success: rebaseResult.data.success,
-          message: resultMessage,
-        });
 
-        // Show popup only for failures; success always auto-clears
-        if (!rebaseResult.data.success) {
-          setShowErrorPopup(true);
-        } else {
-          // Clear success message after 5 seconds
+        if (rebaseResult.data.success) {
+          setSyncResult({ success: true, message: resultMessage });
           setTimeout(() => setSyncResult(null), 5000);
+        } else {
+          // Route unresolved-conflict failures to the rich RebaseMergeErrorDialog so
+          // the user has auto-fix-with-backup / manual-fix paths instead of a
+          // dead-end Retry button that just re-hits the same wall.
+          const failed = (rebaseResult.data as { conflictsFailed?: number }).conflictsFailed ?? 0;
+          const resolutions = (rebaseResult.data as { resolutions?: Array<{ file: string }> }).resolutions ?? [];
+          const isConflictFailure = failed > 0 || resolutions.length > 0 || /conflict/i.test(resultMessage);
+
+          if (isConflictFailure) {
+            showConflictDialog({
+              sessionId: session.sessionId,
+              repoPath,
+              baseBranch,
+              currentBranch: session.branchName || '',
+              conflictedFiles: resolutions.map((r) => r.file),
+              errorMessage: resultMessage,
+            });
+          } else {
+            setSyncResult({ success: false, message: resultMessage });
+            setShowErrorPopup(true);
+          }
         }
       } else {
         const errorMessage = rebaseResult?.error?.message || 'Rebase failed - check console for details';
@@ -330,7 +366,7 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
                     setShowErrorPopup(false);
                     handleSync();
                   }}
-                  className="px-4 py-2 text-sm font-medium bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                  className="px-4 py-2 text-sm font-medium bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors"
                 >
                   Retry
                 </button>
@@ -340,12 +376,27 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
         </div>
       )}
 
+      {/* Offline / Not Connected Banner */}
+      {aiHealth && !aiHealth.online && (
+        <div className="px-4 py-2 bg-red-50 border-b border-red-200 flex items-center gap-2 text-sm text-red-800">
+          <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 5.636a9 9 0 010 12.728M5.636 18.364a9 9 0 010-12.728M15.536 8.464a5 5 0 010 7.072M8.464 15.536a5 5 0 010-7.072" />
+          </svg>
+          <span>
+            {!aiHealth.configured
+              ? 'Not connected — Groq API key not configured. Go to Settings to add your API key.'
+              : `Not connected — unable to reach AI service. ${aiHealth.error || 'Check your internet connection.'}`
+            }
+          </span>
+        </div>
+      )}
+
       {/* Header */}
-      <div className="p-4 border-b border-border">
+      <div className="p-4 border-b border-[rgba(0,0,0,0.10)]">
         <div className="flex items-center gap-3 mb-3">
           <button
             onClick={onBack}
-            className="p-1.5 rounded-lg hover:bg-surface-secondary transition-colors"
+            className="p-1.5 rounded-full hover:bg-surface-secondary transition-colors"
           >
             <svg className="w-5 h-5 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -386,7 +437,7 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
                   onChange={(e) => handleBaseBranchChange(e.target.value)}
                   onBlur={() => setEditingBaseBranch(false)}
                   autoFocus
-                  className="px-2 py-1.5 rounded-lg text-xs font-mono bg-surface-tertiary border border-border text-text-primary focus:outline-none focus:ring-1 focus:ring-blue-500 max-w-[140px]"
+                  className="px-2 py-1.5 rounded-full text-xs font-mono bg-surface-tertiary border border-[rgba(0,0,0,0.10)] text-text-primary focus:outline-none focus:ring-1 focus:ring-blue-500 max-w-[140px]"
                 >
                   {branches.map((branch) => (
                     <option key={branch} value={branch}>{branch}</option>
@@ -396,7 +447,7 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
                 <button
                   onClick={handleEditBaseBranch}
                   disabled={loadingBranches}
-                  className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-mono text-text-secondary hover:text-text-primary hover:bg-surface-tertiary transition-colors"
+                  className="flex items-center gap-1 px-2 py-1.5 rounded-full text-xs font-mono text-text-secondary hover:text-text-primary hover:bg-surface-tertiary transition-colors"
                   title="Target branch — used for rebase (sync) and merge. Click to change."
                 >
                   {loadingBranches ? '...' : (session.baseBranch || 'main')}
@@ -408,7 +459,7 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
               <button
                 onClick={handleSync}
                 disabled={syncing}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors
                   ${syncing
                     ? 'bg-blue-500 text-white cursor-wait'
                     : 'bg-surface-secondary text-text-primary hover:bg-blue-50 hover:text-blue-600'
@@ -419,14 +470,14 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                     d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
                 </svg>
-                {syncing ? 'Syncing...' : 'Sync'}
+                {syncing ? 'Syncing...' : 'Sync (rebase)'}
               </button>
             </div>
 
             {onRestart && !showRestartConfirm && !restarting && (
               <button
                 onClick={() => setShowRestartConfirm(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors bg-surface-secondary text-text-primary hover:bg-surface-tertiary"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors bg-surface-secondary text-text-primary hover:bg-surface-tertiary"
                 title="Restart session"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -441,22 +492,22 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
                 <span className="text-xs text-text-secondary mr-1">Commit changes?</span>
                 <button
                   onClick={() => handleRestart(true)}
-                  className="px-2 py-1 rounded text-xs font-medium bg-kanvas-blue text-white hover:bg-kanvas-blue/80 transition-colors"
+                  className="px-2 py-1 rounded-full text-xs font-medium bg-kanvas-blue text-white hover:bg-kanvas-blue/80 transition-colors"
                   title="Commit uncommitted changes, then restart"
                 >Yes</button>
                 <button
                   onClick={() => handleRestart(false)}
-                  className="px-2 py-1 rounded text-xs font-medium bg-surface-tertiary text-text-primary hover:bg-red-50 hover:text-red-600 transition-colors"
+                  className="px-2 py-1 rounded-full text-xs font-medium bg-surface-tertiary text-text-primary hover:bg-red-50 hover:text-red-600 transition-colors"
                   title="Discard uncommitted changes and restart"
                 >No</button>
                 <button
                   onClick={() => setShowRestartConfirm(false)}
-                  className="px-2 py-1 rounded text-xs text-text-secondary hover:text-text-primary transition-colors"
+                  className="px-2 py-1 rounded-full text-xs text-text-secondary hover:text-text-primary transition-colors"
                 >✕</button>
               </div>
             )}
             {onRestart && restarting && (
-              <button disabled className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-kanvas-blue text-white cursor-wait">
+              <button disabled className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium bg-kanvas-blue text-white cursor-wait">
                 <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                     d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -467,7 +518,7 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
             {onDelete && (
               <button
                 onClick={handleDelete}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors
                   ${showDeleteConfirm
                     ? 'bg-red-500 text-white'
                     : 'bg-surface-secondary text-text-secondary hover:text-red-500 hover:bg-red-50'
@@ -490,10 +541,10 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors
+              className={`px-3 py-1 text-sm font-medium transition-colors
                 ${activeTab === tab
-                  ? 'bg-kanvas-blue text-white'
-                  : 'bg-surface-secondary text-text-secondary hover:text-text-primary'
+                  ? 'bg-black text-white rounded-full'
+                  : 'text-text-secondary hover:text-black rounded-full hover:bg-[rgba(0,0,0,0.04)]'
                 }`}
             >
               {tab === 'mcp' ? 'MCP' : tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -569,8 +620,8 @@ function PromptTab({
       <div className="flex gap-2 mb-4">
         <button
           onClick={onCopyPrompt}
-          className="flex items-center gap-2 px-4 py-2 bg-kanvas-blue text-white rounded-lg
-            hover:bg-kanvas-blue/90 transition-colors"
+          className="flex items-center gap-2 px-4 py-2 bg-black text-white rounded-full
+            hover:bg-black/80 transition-colors"
         >
           {copySuccess ? (
             <>
@@ -592,7 +643,7 @@ function PromptTab({
         {instance?.instructions && (
           <button
             onClick={onCopyInstructions}
-            className="flex items-center gap-2 px-4 py-2 bg-surface-secondary text-text-primary rounded-lg
+            className="flex items-center gap-2 px-4 py-2 bg-surface-secondary text-text-primary rounded-full
               hover:bg-surface-tertiary transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -615,7 +666,7 @@ function PromptTab({
       {/* Prompt display */}
       <div className="flex-1 min-h-0">
         <h3 className="text-sm font-medium text-text-secondary mb-2">Prompt for Agent</h3>
-        <div className="h-full bg-surface-secondary rounded-xl border border-border overflow-auto">
+        <div className="h-full bg-surface-secondary rounded-[14px] border border-[rgba(0,0,0,0.10)] overflow-auto">
           <pre className="p-4 text-sm text-text-primary whitespace-pre-wrap font-mono select-text cursor-text">
             {prompt}
           </pre>
@@ -627,7 +678,7 @@ function PromptTab({
 
 function InfoCard({ label, value, mono = false }: { label: string; value: string; mono?: boolean }): React.ReactElement {
   return (
-    <div className="p-3 bg-surface-secondary rounded-lg border border-border">
+    <div className="p-3 bg-surface-secondary rounded-[14px] border border-[rgba(0,0,0,0.10)]">
       <div className="text-xs text-text-secondary mb-1">{label}</div>
       <div className={`text-sm text-text-primary truncate ${mono ? 'font-mono' : ''}`}>
         {value}
@@ -835,9 +886,9 @@ function ActivityTab({ sessionId, repoPath, baseBranch, branchName }: { sessionI
   return (
     <div className="h-full flex flex-col">
       {/* Header with verbose toggle */}
-      <div className="px-4 py-3 border-b border-border bg-surface flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-[rgba(0,0,0,0.10)] bg-surface flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <span className="text-sm font-medium text-text-primary">Timeline</span>
+          <span className="text-sm font-medium text-text-primary kb-eyebrow">Timeline</span>
           <span className="text-xs px-2 py-0.5 rounded-full bg-surface-tertiary text-text-secondary">
             {filteredTimeline.length} events
           </span>
@@ -1430,13 +1481,13 @@ function FilesTab({ session }: { session: SessionReport }): React.ReactElement {
   return (
     <div className="h-full flex flex-col">
       {/* Header with view toggle, manual commit, and refresh */}
-      <div className="px-4 py-3 border-b border-border bg-surface flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-[rgba(0,0,0,0.10)] bg-surface flex items-center justify-between">
         <div className="flex items-center gap-2">
           <button
             onClick={() => setViewMode('git')}
-            className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+            className={`px-3 py-1.5 text-sm rounded-full transition-colors ${
               viewMode === 'git'
-                ? 'bg-kanvas-blue text-white'
+                ? 'bg-black text-white'
                 : 'bg-surface-secondary text-text-secondary hover:text-text-primary'
             }`}
           >
@@ -1444,9 +1495,9 @@ function FilesTab({ session }: { session: SessionReport }): React.ReactElement {
           </button>
           <button
             onClick={() => setViewMode('recent')}
-            className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+            className={`px-3 py-1.5 text-sm rounded-full transition-colors ${
               viewMode === 'recent'
-                ? 'bg-kanvas-blue text-white'
+                ? 'bg-black text-white'
                 : 'bg-surface-secondary text-text-secondary hover:text-text-primary'
             }`}
           >
@@ -1459,7 +1510,7 @@ function FilesTab({ session }: { session: SessionReport }): React.ReactElement {
             <button
               onClick={generateCommitMessage}
               disabled={generatingMessage || committing}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-full transition-colors ${
                 generatingMessage || committing
                   ? 'bg-kanvas-blue/50 text-white cursor-wait'
                   : 'bg-green-600 text-white hover:bg-green-700'
@@ -1488,7 +1539,7 @@ function FilesTab({ session }: { session: SessionReport }): React.ReactElement {
           <button
             onClick={loadChangedFiles}
             disabled={loading}
-            className="p-2 rounded-lg bg-surface-secondary hover:bg-surface-tertiary transition-colors"
+            className="p-2 rounded-full bg-surface-secondary hover:bg-surface-tertiary transition-colors"
             title="Refresh"
           >
             <svg className={`w-4 h-4 text-text-secondary ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1501,7 +1552,7 @@ function FilesTab({ session }: { session: SessionReport }): React.ReactElement {
 
       {/* Commit Message Editor */}
       {commitMessage && (
-        <div className="mx-4 mt-4 p-4 bg-surface-secondary rounded-xl border border-kanvas-blue">
+        <div className="mx-4 mt-4 p-4 bg-surface-secondary rounded-[14px] border border-kanvas-blue">
           <div className="flex items-start gap-3">
             <div className="flex-1">
               <label className="text-xs font-medium text-text-secondary mb-2 block">
@@ -1510,7 +1561,7 @@ function FilesTab({ session }: { session: SessionReport }): React.ReactElement {
               <textarea
                 value={commitMessage}
                 onChange={(e) => setCommitMessage(e.target.value)}
-                className="w-full h-24 px-3 py-2 text-sm font-mono bg-surface border border-border rounded-lg
+                className="w-full h-24 px-3 py-2 text-sm font-mono bg-surface border border-[rgba(0,0,0,0.10)] rounded-[14px]
                   focus:outline-none focus:ring-2 focus:ring-kanvas-blue resize-none text-text-primary"
                 placeholder="Commit message..."
               />
@@ -1521,7 +1572,7 @@ function FilesTab({ session }: { session: SessionReport }): React.ReactElement {
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setCommitMessage(null)}
-                    className="px-3 py-1.5 text-sm rounded-lg bg-surface-tertiary text-text-secondary
+                    className="px-3 py-1.5 text-sm rounded-full bg-surface-tertiary text-text-secondary
                       hover:bg-surface hover:text-text-primary transition-colors"
                   >
                     Cancel
@@ -1529,7 +1580,7 @@ function FilesTab({ session }: { session: SessionReport }): React.ReactElement {
                   <button
                     onClick={handleCommit}
                     disabled={committing || !commitMessage.trim()}
-                    className={`flex items-center gap-1.5 px-4 py-1.5 text-sm rounded-lg transition-colors ${
+                    className={`flex items-center gap-1.5 px-4 py-1.5 text-sm rounded-full transition-colors ${
                       committing
                         ? 'bg-green-600/50 text-white cursor-wait'
                         : 'bg-green-600 text-white hover:bg-green-700'
@@ -1561,19 +1612,19 @@ function FilesTab({ session }: { session: SessionReport }): React.ReactElement {
 
       {/* Error/Success Messages */}
       {commitError && (
-        <div className="mx-4 mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+        <div className="mx-4 mt-4 p-3 bg-red-50 border border-red-200 rounded-[14px]">
           <p className="text-sm text-red-700">{commitError}</p>
         </div>
       )}
       {commitSuccess && (
-        <div className="mx-4 mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+        <div className="mx-4 mt-4 p-3 bg-green-50 border border-green-200 rounded-[14px]">
           <p className="text-sm text-green-700">Commit successful!</p>
         </div>
       )}
 
       {/* Error state */}
       {error && viewMode === 'git' && (
-        <div className="mx-4 mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+        <div className="mx-4 mt-4 p-3 bg-red-50 border border-red-200 rounded-[14px]">
           <p className="text-sm text-red-700">{error}</p>
         </div>
       )}
@@ -1601,13 +1652,13 @@ function FilesTab({ session }: { session: SessionReport }): React.ReactElement {
               {/* Uncommitted Files Section */}
               {uncommittedFiles.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-text-secondary mb-2 flex items-center gap-2">
+                  <h4 className="text-sm font-medium text-text-secondary mb-2 flex items-center gap-2 kb-eyebrow">
                     <span className="w-2 h-2 rounded-full bg-yellow-500"></span>
                     Uncommitted ({uncommittedFiles.length})
                   </h4>
                   <div className="space-y-2">
                     {uncommittedFiles.map((file) => (
-                      <div key={file.path} className="p-3 bg-surface-secondary rounded-lg border border-border">
+                      <div key={file.path} className="p-3 bg-surface-secondary rounded-[14px] border border-[rgba(0,0,0,0.10)]">
                         <div className="flex items-center gap-3">
                           <GitStateIcon gitState={file.gitState} />
                           <span className="flex-1 font-mono text-sm text-text-primary truncate">{file.path}</span>
@@ -1625,13 +1676,13 @@ function FilesTab({ session }: { session: SessionReport }): React.ReactElement {
               {/* Committed Files Section */}
               {committedFiles.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-text-secondary mb-2 flex items-center gap-2">
+                  <h4 className="text-sm font-medium text-text-secondary mb-2 flex items-center gap-2 kb-eyebrow">
                     <span className="w-2 h-2 rounded-full bg-green-500"></span>
                     Committed ({committedFiles.length})
                   </h4>
                   <div className="space-y-2">
                     {committedFiles.map((file) => (
-                      <div key={file.path} className="p-3 bg-surface-secondary rounded-lg border border-border">
+                      <div key={file.path} className="p-3 bg-surface-secondary rounded-[14px] border border-[rgba(0,0,0,0.10)]">
                         <div className="flex items-center gap-3">
                           <GitStateIcon gitState={file.gitState} />
                           <div className="flex-1 min-w-0">
@@ -1680,7 +1731,7 @@ function FilesTab({ session }: { session: SessionReport }): React.ReactElement {
           ) : (
             <div className="space-y-2">
               {recentChanges.map((change, idx) => (
-                <div key={`${change.path}-${idx}`} className="p-3 bg-surface-secondary rounded-lg border border-border">
+                <div key={`${change.path}-${idx}`} className="p-3 bg-surface-secondary rounded-[14px] border border-[rgba(0,0,0,0.10)]">
                   <div className="flex items-center gap-3">
                     <span className={`text-xs font-medium px-2 py-0.5 rounded ${
                       change.type === 'add' ? 'bg-green-100 text-green-700' :
@@ -2209,10 +2260,10 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
   return (
     <div className="h-full flex flex-col">
       {/* Header with Generate Contracts Button */}
-      <div className="p-4 border-b border-border bg-surface flex justify-between items-start gap-4">
+      <div className="p-4 border-b border-[rgba(0,0,0,0.10)] bg-surface flex justify-between items-start gap-4">
         <div className="flex-1">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-lg font-semibold text-text-primary">Contracts</h3>
+            <h3 className="text-lg font-semibold text-text-primary kb-eyebrow">Contracts</h3>
             {/* Show warning if no repo path */}
             {!getScanPath() && (
               <span className="text-xs text-orange-600 px-2 py-1 bg-orange-50 rounded">
@@ -2229,7 +2280,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
                     setDiscoveredFeatures([]); // Clear on path change
                   }}
                   disabled={isDiscovering || isGenerating}
-                  className="px-2 py-1.5 rounded-lg text-sm bg-surface-secondary text-text-primary border border-border"
+                  className="px-2 py-1.5 rounded-full text-sm bg-surface-secondary text-text-primary border border-[rgba(0,0,0,0.10)]"
                 >
                   <option value="main">Main Repo</option>
                   <option value="worktree">Worktree</option>
@@ -2238,7 +2289,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
               <button
                 onClick={handleDiscoverFeatures}
                 disabled={isDiscovering || isGenerating}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
+                className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors
                   ${isDiscovering
                     ? 'bg-surface-tertiary text-text-secondary cursor-wait'
                     : 'bg-surface-secondary text-text-primary hover:bg-surface-tertiary'
@@ -2259,7 +2310,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
                   <button
                     onClick={() => handleGenerateAll(false)}
                     disabled={isGenerating || !getScanPath()}
-                    className={`px-3 py-1.5 rounded-l-lg text-sm font-medium transition-colors
+                    className={`px-3 py-1.5 rounded-l-full text-sm font-medium transition-colors
                       ${isGenerating
                         ? 'bg-kanvas-blue text-white cursor-wait'
                         : !getScanPath()
@@ -2280,7 +2331,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
                   <button
                     onClick={() => setShowGenerateDropdown(!showGenerateDropdown)}
                     disabled={isGenerating || !getScanPath()}
-                    className={`px-2 py-1.5 rounded-r-lg text-sm font-medium transition-colors border-l border-white/20
+                    className={`px-2 py-1.5 rounded-r-full text-sm font-medium transition-colors border-l border-white/20
                       ${isGenerating
                         ? 'bg-kanvas-blue text-white cursor-wait'
                         : !getScanPath()
@@ -2294,7 +2345,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
                   </button>
                 </div>
                 {showGenerateDropdown && (
-                  <div className="absolute right-0 top-full mt-1 bg-surface border border-border rounded-lg shadow-lg z-10 min-w-[180px]">
+                  <div className="absolute right-0 top-full mt-1 bg-surface border border-[rgba(0,0,0,0.10)] rounded-[14px] shadow-lg z-10 min-w-[180px]">
                     <button
                       onClick={() => { handleGenerateAll(false); setShowGenerateDropdown(false); }}
                       className="w-full px-3 py-2 text-left text-sm hover:bg-surface-secondary flex items-center gap-2 rounded-t-lg"
@@ -2307,7 +2358,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
                     </button>
                     <button
                       onClick={() => { handleGenerateAll(true); setShowGenerateDropdown(false); }}
-                      className="w-full px-3 py-2 text-left text-sm hover:bg-surface-secondary flex items-center gap-2 rounded-b-lg border-t border-border"
+                      className="w-full px-3 py-2 text-left text-sm hover:bg-surface-secondary flex items-center gap-2 rounded-b-lg border-t border-[rgba(0,0,0,0.10)]"
                     >
                       <span className="text-orange-500">🔄</span>
                       <div>
@@ -2327,9 +2378,9 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
               <button
                 key={type}
                 onClick={() => setActiveContractType(type)}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5
+                className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors flex items-center gap-1.5
                   ${activeContractType === type
-                    ? 'bg-kanvas-blue text-white'
+                    ? 'bg-black text-white'
                     : 'bg-surface-secondary text-text-secondary hover:text-text-primary hover:bg-surface-tertiary'
                   }`}
               >
@@ -2348,7 +2399,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
 
       {/* Discovery Progress */}
       {isDiscovering && (
-        <div className="mx-4 mt-4 p-3 bg-purple-50 border border-purple-200 rounded-xl">
+        <div className="mx-4 mt-4 p-3 bg-purple-50 border border-purple-200 rounded-[14px]">
           <div className="flex items-center gap-3">
             <span className="animate-spin w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full" />
             <div className="flex-1">
@@ -2373,7 +2424,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
 
       {/* Generation Progress */}
       {isGenerating && generationProgress && (
-        <div className="mx-4 mt-4 p-3 bg-blue-50 border border-blue-200 rounded-xl">
+        <div className="mx-4 mt-4 p-3 bg-blue-50 border border-blue-200 rounded-[14px]">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className="animate-spin w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full" />
@@ -2430,7 +2481,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
 
       {/* Generation Result */}
       {generationResult && (
-        <div className={`mx-4 mt-4 p-3 rounded-xl border ${generationResult.failed > 0 ? 'bg-yellow-50 border-yellow-200' : 'bg-green-50 border-green-200'}`}>
+        <div className={`mx-4 mt-4 p-3 rounded-[14px] border ${generationResult.failed > 0 ? 'bg-yellow-50 border-yellow-200' : 'bg-green-50 border-green-200'}`}>
           <div className="flex items-center gap-2">
             <span>{generationResult.failed > 0 ? '⚠️' : '✅'}</span>
             <span className="text-sm font-medium">
@@ -2443,7 +2494,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
 
       {/* Discovered Features - Table View */}
       {discoveredFeatures.length > 0 && (
-        <div className="mx-4 mt-4 p-3 bg-surface-secondary rounded-xl border border-border flex flex-col">
+        <div className="mx-4 mt-4 p-3 bg-surface-secondary rounded-[14px] border border-[rgba(0,0,0,0.10)] flex flex-col">
           <div className="flex items-center justify-between flex-shrink-0">
             <button
               onClick={() => setFeaturesCollapsed(!featuresCollapsed)}
@@ -2473,7 +2524,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
           <div className="overflow-auto flex-1 min-h-0 max-h-[350px] mt-3">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-border text-left text-text-secondary">
+                <tr className="border-b border-[rgba(0,0,0,0.10)] text-left text-text-secondary">
                   <th className="pb-2 pr-4 font-medium">Feature</th>
                   <th className="pb-2 pr-4 font-medium">Location</th>
                   <th className="pb-2 pr-2 font-medium text-center" title="API/Route files">🔌</th>
@@ -2501,7 +2552,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
                   return (
                     <tr
                       key={f.name}
-                      className={`border-b border-border/50 hover:bg-surface transition-colors ${
+                      className={`border-b border-[rgba(0,0,0,0.10)]/50 hover:bg-surface transition-colors ${
                         hasBreaking ? 'bg-red-50/50' : hasChanges ? 'bg-yellow-50/50' : ''
                       }`}
                     >
@@ -2582,7 +2633,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
           </div>
 
           {/* Legend */}
-          <div className="mt-3 pt-2 border-t border-border flex flex-wrap gap-3 text-[10px] text-text-secondary">
+          <div className="mt-3 pt-2 border-t border-[rgba(0,0,0,0.10)] flex flex-wrap gap-3 text-[10px] text-text-secondary">
             <span>🔌 API/Routes</span>
             <span>📐 Schema/Types</span>
             <span>⚡ Config</span>
@@ -2597,7 +2648,7 @@ function ContractsTab({ session }: { session: SessionReport }): React.ReactEleme
 
       {/* Contract Changes Alert */}
       {contractChanges.length > 0 && (
-        <div className="mx-4 mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-xl">
+        <div className="mx-4 mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-[14px]">
           <div className="flex items-start gap-2">
             <span className="text-yellow-600">⚠️</span>
             <div>
@@ -4235,14 +4286,14 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
     <>
       <div
         className={`
-          bg-surface rounded-xl border transition-all cursor-pointer
-          ${expanded ? 'border-kanvas-blue shadow-kanvas' : 'border-border hover:border-kanvas-blue/30 hover:shadow-card-hover'}
+          bg-surface rounded-[14px] border transition-all cursor-pointer
+          ${expanded ? 'border-kanvas-blue shadow-[0_1px_3px_rgba(0,0,0,0.08)]' : 'border-[rgba(0,0,0,0.10)] hover:border-kanvas-blue/30 hover:shadow-[0_1px_3px_rgba(0,0,0,0.08)]'}
         `}
         onClick={() => setExpanded(!expanded)}
       >
         <div className="p-4">
           <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-lg bg-surface-secondary flex items-center justify-center flex-shrink-0">
+            <div className="w-10 h-10 rounded-[14px] bg-surface-secondary flex items-center justify-center flex-shrink-0">
               <span className="text-xl">{typeIcons[contract.type]}</span>
             </div>
             <div className="flex-1 min-w-0">
@@ -4316,7 +4367,7 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
 
         {/* Expanded details */}
         {expanded && (
-          <div className="px-4 pb-4 border-t border-border pt-3 space-y-3">
+          <div className="px-4 pb-4 border-t border-[rgba(0,0,0,0.10)] pt-3 space-y-3">
             {/* Actions row */}
             <div className="flex items-center gap-2">
               {!fileExists ? (
@@ -4324,8 +4375,8 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                   <button
                     onClick={handleGenerate}
                     disabled={generating || !repoPath}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-                      bg-kanvas-blue text-white hover:bg-kanvas-blue/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium
+                      bg-black text-white hover:bg-black/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {generating ? (
                       <>
@@ -4352,8 +4403,8 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                 <>
                   <button
                     onClick={handleOpenFile}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-                      bg-kanvas-blue text-white hover:bg-kanvas-blue/90 transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium
+                      bg-black text-white hover:bg-black/80 transition-colors"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -4363,7 +4414,7 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                   </button>
                   <button
                     onClick={handleOpenInEditor}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium
                       bg-surface-secondary text-text-primary hover:bg-surface-tertiary transition-colors"
                   >
                     <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
@@ -4374,7 +4425,7 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                   <button
                     onClick={handleGenerate}
                     disabled={generating || !repoPath}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium
                       bg-surface-secondary text-text-primary hover:bg-surface-tertiary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     title={!repoPath ? "Repository path not available" : "Regenerate this contract"}
                   >
@@ -4499,13 +4550,13 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
           onClick={() => setShowContent(false)}
         >
           <div
-            className="bg-surface border border-border rounded-xl shadow-xl w-full max-w-4xl max-h-[85vh] mx-4 flex flex-col"
+            className="bg-surface border border-[rgba(0,0,0,0.10)] rounded-[14px] shadow-xl w-full max-w-4xl max-h-[85vh] mx-4 flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="flex items-center justify-between p-4 border-b border-border">
+            <div className="flex items-center justify-between p-4 border-b border-[rgba(0,0,0,0.10)]">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-surface-secondary flex items-center justify-center">
+                <div className="w-8 h-8 rounded-[14px] bg-surface-secondary flex items-center justify-center">
                   <span className="text-lg">{typeIcons[contract.type]}</span>
                 </div>
                 <div>
@@ -4515,7 +4566,7 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                 {/* Consolidated badge */}
                 {featureContracts.length > 0 && (
                   <div className="ml-4">
-                    <span className="px-3 py-1.5 text-xs rounded-lg border border-border bg-surface-secondary text-text-primary">
+                    <span className="px-3 py-1.5 text-xs rounded-full border border-[rgba(0,0,0,0.10)] bg-surface-secondary text-text-primary">
                       Repo-Level (Consolidated)
                     </span>
                   </div>
@@ -4537,10 +4588,10 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                 <button
                   onClick={handleGenerate}
                   disabled={generating || !repoPath}
-                  className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  className={`flex items-center gap-1 px-2 py-1.5 rounded-full text-xs font-medium transition-colors ${
                     generating || !repoPath
                       ? 'bg-surface-secondary text-text-secondary opacity-50 cursor-not-allowed'
-                      : 'bg-kanvas-blue text-white hover:bg-kanvas-blue/90'
+                      : 'bg-black text-white hover:bg-black/80'
                   }`}
                   title="Regenerate consolidated contract"
                 >
@@ -4556,12 +4607,12 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                   )}
                 </button>
                 {/* View Mode Toggle */}
-                <div className="flex items-center rounded-lg border border-border overflow-hidden">
+                <div className="flex items-center rounded-full border border-[rgba(0,0,0,0.10)] overflow-hidden">
                   <button
                     onClick={() => setViewMode('markdown')}
                     className={`px-2 py-1.5 text-xs font-medium transition-colors ${
                       viewMode === 'markdown'
-                        ? 'bg-kanvas-blue text-white'
+                        ? 'bg-black text-white'
                         : 'bg-surface-secondary text-text-secondary hover:text-text-primary'
                     }`}
                     title="Markdown View"
@@ -4572,7 +4623,7 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                     onClick={() => setViewMode('json')}
                     className={`px-2 py-1.5 text-xs font-medium transition-colors ${
                       viewMode === 'json'
-                        ? 'bg-kanvas-blue text-white'
+                        ? 'bg-black text-white'
                         : 'bg-surface-secondary text-text-secondary hover:text-text-primary'
                     }`}
                     title="Raw JSON View"
@@ -4582,7 +4633,7 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                 </div>
                 <button
                   onClick={handleOpenInEditor}
-                  className="p-1.5 rounded-lg hover:bg-surface-secondary transition-colors"
+                  className="p-1.5 rounded-full hover:bg-surface-secondary transition-colors"
                   title="Open in Editor"
                 >
                   <svg className="w-4 h-4 text-text-secondary" viewBox="0 0 24 24" fill="currentColor">
@@ -4591,7 +4642,7 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                 </button>
                 <button
                   onClick={() => setShowContent(false)}
-                  className="p-1.5 rounded-lg hover:bg-surface-secondary transition-colors"
+                  className="p-1.5 rounded-full hover:bg-surface-secondary transition-colors"
                   title="Close"
                 >
                   <svg className="w-4 h-4 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4660,7 +4711,7 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                 <>
                   {/* Truncation warning */}
                   {isTruncated && (
-                    <div className="p-2 bg-yellow-50 border border-yellow-200 text-yellow-700 text-xs rounded-lg mb-3 flex items-center gap-2">
+                    <div className="p-2 bg-yellow-50 border border-yellow-200 text-yellow-700 text-xs rounded-[14px] mb-3 flex items-center gap-2">
                       <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                       </svg>
@@ -4671,8 +4722,8 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                   <div className="prose prose-sm dark:prose-invert max-w-none select-text
                     prose-headings:text-text-primary prose-p:text-text-secondary
                     prose-table:border-collapse prose-table:w-full prose-table:my-4
-                    prose-th:border prose-th:border-border prose-th:bg-surface-secondary prose-th:px-3 prose-th:py-2 prose-th:text-left prose-th:text-text-primary prose-th:font-semibold
-                    prose-td:border prose-td:border-border prose-td:px-3 prose-td:py-2 prose-td:text-text-secondary
+                    prose-th:border prose-th:border-[rgba(0,0,0,0.10)] prose-th:bg-surface-secondary prose-th:px-3 prose-th:py-2 prose-th:text-left prose-th:text-text-primary prose-th:font-semibold
+                    prose-td:border prose-td:border-[rgba(0,0,0,0.10)] prose-td:px-3 prose-td:py-2 prose-td:text-text-secondary
                     prose-code:bg-surface-secondary prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-kanvas-blue prose-code:font-mono prose-code:text-sm
                     prose-pre:bg-surface-secondary prose-pre:p-4 prose-pre:rounded-lg prose-pre:overflow-auto
                     prose-blockquote:border-l-4 prose-blockquote:border-kanvas-blue prose-blockquote:pl-4 prose-blockquote:italic prose-blockquote:text-text-secondary
@@ -4680,7 +4731,7 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                     prose-li:text-text-secondary prose-li:my-1
                     prose-a:text-kanvas-blue prose-a:no-underline hover:prose-a:underline
                     prose-strong:text-text-primary prose-em:text-text-secondary
-                    prose-hr:border-border"
+                    prose-hr:border-[rgba(0,0,0,0.10)]"
                     style={{ userSelect: 'text', WebkitUserSelect: 'text' }}>
                     <ReactMarkdown
                       remarkPlugins={[remarkGfm]}
@@ -4695,19 +4746,19 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
                           <tbody>{children}</tbody>
                         ),
                         tr: ({ children }) => (
-                          <tr className="border-b border-border">{children}</tr>
+                          <tr className="border-b border-[rgba(0,0,0,0.10)]">{children}</tr>
                         ),
                         th: ({ children }) => (
-                          <th className="border border-border bg-surface-secondary px-3 py-2 text-left text-text-primary font-semibold">{children}</th>
+                          <th className="border border-[rgba(0,0,0,0.10)] bg-surface-secondary px-3 py-2 text-left text-text-primary font-semibold">{children}</th>
                         ),
                         td: ({ children }) => (
-                          <td className="border border-border px-3 py-2 text-text-secondary">{children}</td>
+                          <td className="border border-[rgba(0,0,0,0.10)] px-3 py-2 text-text-secondary">{children}</td>
                         ),
                         h1: ({ children }) => (
                           <h1 className="text-2xl font-bold text-text-primary mt-6 mb-4">{children}</h1>
                         ),
                         h2: ({ children }) => (
-                          <h2 className="text-xl font-semibold text-text-primary mt-5 mb-3 border-b border-border pb-2">{children}</h2>
+                          <h2 className="text-xl font-semibold text-text-primary mt-5 mb-3 border-b border-[rgba(0,0,0,0.10)] pb-2">{children}</h2>
                         ),
                         h3: ({ children }) => (
                           <h3 className="text-lg font-medium text-text-primary mt-4 mb-2">{children}</h3>
@@ -4746,7 +4797,7 @@ function ContractCard({ contract, repoPath, hasChanges, discoveredFeatures }: {
             </div>
 
             {/* Modal Footer */}
-            <div className="flex items-center justify-between p-4 border-t border-border text-xs text-text-secondary gap-4">
+            <div className="flex items-center justify-between p-4 border-t border-[rgba(0,0,0,0.10)] text-xs text-text-secondary gap-4">
               <span className="truncate flex-1">
                 {contract.filePath}
               </span>
@@ -4813,13 +4864,13 @@ function QuickActionsBar({ worktreePath }: { worktreePath?: string }): React.Rea
   if (!path) return <></>;
 
   return (
-    <div className="px-4 py-2 border-b border-border bg-surface-secondary">
+    <div className="px-4 py-2 border-b border-[rgba(0,0,0,0.10)] bg-surface-secondary">
       <div className="flex items-center gap-2">
         <span className="text-xs text-text-secondary mr-2">Quick Actions:</span>
 
         <button
           onClick={handleOpenTerminal}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium
             bg-surface text-text-primary hover:bg-surface-tertiary transition-colors"
           title="Open Terminal"
         >
@@ -4832,7 +4883,7 @@ function QuickActionsBar({ worktreePath }: { worktreePath?: string }): React.Rea
 
         <button
           onClick={handleOpenVSCode}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium
             bg-surface text-text-primary hover:bg-surface-tertiary transition-colors"
           title="Open in VS Code"
         >
@@ -4844,7 +4895,7 @@ function QuickActionsBar({ worktreePath }: { worktreePath?: string }): React.Rea
 
         <button
           onClick={handleOpenFinder}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium
             bg-surface text-text-primary hover:bg-surface-tertiary transition-colors"
           title="Show in Finder"
         >
@@ -4857,7 +4908,7 @@ function QuickActionsBar({ worktreePath }: { worktreePath?: string }): React.Rea
 
         <button
           onClick={handleCopyPath}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium
             bg-surface text-text-primary hover:bg-surface-tertiary transition-colors"
           title="Copy Path"
         >

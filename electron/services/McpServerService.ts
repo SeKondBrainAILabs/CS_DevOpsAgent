@@ -21,6 +21,7 @@ import type { Server } from 'http';
 import { BaseService } from './BaseService';
 import { McpSessionBinder } from './mcp/session-binder';
 import { MCP_DEFAULT_PORT_START, MCP_SERVER_HOST } from '../../shared/mcp-types';
+import { IPC } from '../../shared/ipc-channels';
 import type { McpServerStatus, McpInstallConfigStatus, McpInstallTarget } from '../../shared/mcp-types';
 
 // Lazy imports for MCP SDK (ESM modules)
@@ -83,6 +84,7 @@ export interface McpServiceDeps {
   contractGenerationService?: {
     generateFeatureContract: (worktreePath: string, feature: any) => Promise<any>;
   };
+  emitCommitCompleted?: (sessionId: string, hash: string, message: string, filesChanged: number) => void;
 }
 
 export interface McpCallLogEntry {
@@ -119,17 +121,36 @@ export class McpServerService extends BaseService {
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private static readonly SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
-  // MCP call log for debug observability
+  // MCP call log — in-memory cache backed by persistent database
   private mcpCallLog: McpCallLogEntry[] = [];
+  private _dbService: { recordMcpCall: (entry: any) => void; getMcpCalls: (limit?: number, sessionId?: string) => any[] } | null = null;
 
-  getMcpCallLog(limit = 50): McpCallLogEntry[] {
+  /** Inject DatabaseService reference for persistent MCP call logging */
+  setMcpCallDb(db: { recordMcpCall: (entry: any) => void; getMcpCalls: (limit?: number, sessionId?: string) => any[] }): void {
+    this._dbService = db;
+  }
+
+  getMcpCallLog(limit = 200): McpCallLogEntry[] {
+    // Always read from DB when available — ensures calls from other clients (Chrome extension,
+    // remote agents) are included even if they never passed through this process's in-memory log
+    if (this._dbService) {
+      try {
+        return this._dbService.getMcpCalls(limit);
+      } catch {
+        // Fall back to in-memory
+      }
+    }
     return this.mcpCallLog.slice(-limit);
   }
 
   addCallLogEntry(entry: McpCallLogEntry): void {
     this.mcpCallLog.push(entry);
-    if (this.mcpCallLog.length > 200) {
-      this.mcpCallLog.shift();
+    if (this.mcpCallLog.length > 500) {
+      this.mcpCallLog = this.mcpCallLog.slice(-200);
+    }
+    // Persist to database
+    if (this._dbService) {
+      this._dbService.recordMcpCall(entry);
     }
     // Emit real-time event to renderer
     this.emitToRenderer('mcp:tool-called', entry);
@@ -169,6 +190,19 @@ export class McpServerService extends BaseService {
 
   getDeps(): McpServiceDeps {
     return this.deps;
+  }
+
+  wireCommitEmitter(): void {
+    this.deps.emitCommitCompleted = (sessionId, hash, message, filesChanged) => {
+      this.emitToRenderer(IPC.COMMIT_COMPLETED, {
+        sessionId,
+        commitHash: hash,
+        message,
+        filesChanged,
+        timestamp: new Date().toISOString(),
+        source: 'mcp',
+      });
+    };
   }
 
   // ==========================================================================
@@ -298,6 +332,12 @@ export class McpServerService extends BaseService {
       return;
     }
 
+    // ---- Stateless JSON-RPC route (for Codex / type:"http" clients) ----
+    if (url.pathname === '/rpc') {
+      await this.handleStatelessRpc(req, res);
+      return;
+    }
+
     // ---- Streamable HTTP transport route (for Claude Code) ----
     if (url.pathname !== '/mcp') {
       res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -371,6 +411,45 @@ export class McpServerService extends BaseService {
   }
 
   // ==========================================================================
+  // STATELESS JSON-RPC (Codex / type:"http" clients)
+  // ==========================================================================
+
+  /**
+   * Handles a single stateless JSON-RPC request (no session management).
+   * Codex uses `type: "http"` which sends plain JSON-RPC POST requests without
+   * the MCP Streamable HTTP session protocol. A fresh server + stateless transport
+   * is created for each request and torn down after the response is sent.
+   */
+  private async handleStatelessRpc(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method !== 'POST') {
+      res.writeHead(405, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Method not allowed' }));
+      return;
+    }
+
+    const McpServerClass = _McpServer!;
+    const TransportClass = _StreamableHTTPServerTransport!;
+
+    // Stateless mode: pass sessionIdGenerator: undefined so the transport
+    // assigns no session ID and treats every request as independent.
+    const mcpServer = new McpServerClass({ name: 'kit', version: '1.0.0' });
+    const transport = new TransportClass({ sessionIdGenerator: undefined });
+
+    const { registerTools } = await import('./mcp/tools');
+    const { registerResources } = await import('./mcp/resources');
+    registerTools(mcpServer, this.sessionBinder, this.deps, this);
+    registerResources(mcpServer, this.sessionBinder, this.deps);
+
+    await mcpServer.connect(transport);
+
+    try {
+      await transport.handleRequest(req, res);
+    } finally {
+      try { await (transport as any).close?.(); } catch { /* ignore */ }
+    }
+  }
+
+  // ==========================================================================
   // SSE TRANSPORT (Claude Desktop compatibility)
   // ==========================================================================
 
@@ -402,7 +481,20 @@ export class McpServerService extends BaseService {
       console.log(`[McpServerService] SSE session opened: ${sid} (${this.sseTransports.size} active)`);
     }
 
+    // Send SSE keep-alive comment every 25 s to prevent mcp-remote's body timeout
+    // (mcp-remote / node-fetch kills idle SSE streams after ~5 minutes without data)
+    const keepAlive = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        clearInterval(keepAlive);
+      }
+    }, 25_000);
+
+    res.on('close', () => clearInterval(keepAlive));
+
     transport.onclose = () => {
+      clearInterval(keepAlive);
       if (sid) {
         this.sseTransports.delete(sid);
         this.lastActivity.delete(sid);
@@ -448,6 +540,12 @@ export class McpServerService extends BaseService {
   getUrl(): string | null {
     if (!this.port) return null;
     return `http://${MCP_SERVER_HOST}:${this.port}/mcp`;
+  }
+
+  /** Stateless JSON-RPC endpoint for Codex / type:"http" clients */
+  getRpcUrl(): string | null {
+    if (!this.port) return null;
+    return `http://${MCP_SERVER_HOST}:${this.port}/rpc`;
   }
 
   getStatus(): McpServerStatus {

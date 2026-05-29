@@ -96,16 +96,19 @@ export function RebaseMergeErrorDialog(): React.ReactElement | null {
       );
 
       if (result?.success && result.data) {
-        const previewsWithApproval = (result.data as Array<{
-          filePath: string;
-          oursContent: string;
-          theirsContent: string;
-          resolvedContent: string;
-          resolution: 'ours' | 'theirs' | 'merged';
-        }>).map((p) => ({
+        if (result.data.aborted) {
+          setResult(false, result.data.abortReason || 'Conflict resolution aborted');
+          return;
+        }
+        const previewsWithApproval = (result.data.previews ?? []).map((p) => ({
           ...p,
-          approved: true, // Default to approved
+          // Default to approved only for previews the AI actually resolved.
+          approved: p.status !== 'skipped' && p.status !== 'rejected' && !!p.proposedContent,
         }));
+        if (previewsWithApproval.length === 0) {
+          setResult(false, 'No conflicts found to resolve (rebase may have already succeeded).');
+          return;
+        }
         setPreviews(previewsWithApproval);
         setStep('review_plan');
       } else {
@@ -133,9 +136,11 @@ export function RebaseMergeErrorDialog(): React.ReactElement | null {
         return;
       }
 
+      // Backend applyApprovedResolutions only applies previews with status 'approved' or 'modified'.
+      // Force status='approved' for everything the user checked so the backend honors them.
       const result = await window.api?.conflict?.applyApproved?.(
         errorDetails.repoPath,
-        approvedPreviews
+        approvedPreviews.map((p) => ({ ...p, status: 'approved' as const }))
       );
 
       if (result?.success) {
@@ -223,7 +228,7 @@ export function RebaseMergeErrorDialog(): React.ReactElement | null {
 
             <div className="space-y-2">
               <h4 className="text-sm font-medium text-text-primary">Conflicted Files:</h4>
-              <div className="max-h-32 overflow-y-auto bg-surface-secondary rounded-lg p-2">
+              <div className="max-h-32 overflow-y-auto bg-white rounded-[14px] border border-[rgba(0,0,0,0.10)] p-2">
                 {errorDetails.conflictedFiles.map((file) => (
                   <div key={file} className="text-xs font-mono text-text-secondary py-0.5 flex items-center gap-2">
                     <span className="text-red-500">!</span>
@@ -234,7 +239,7 @@ export function RebaseMergeErrorDialog(): React.ReactElement | null {
             </div>
 
             {/* Advanced error details (collapsible) */}
-            <div className="border border-border rounded-lg overflow-hidden">
+            <div className="border border-[rgba(0,0,0,0.10)] rounded-[14px] overflow-hidden">
               <button
                 onClick={() => setShowAdvanced(!showAdvanced)}
                 className="w-full px-3 py-2 flex items-center justify-between text-xs text-text-secondary hover:bg-surface-secondary transition-colors"
@@ -248,7 +253,7 @@ export function RebaseMergeErrorDialog(): React.ReactElement | null {
                 </svg>
               </button>
               {showAdvanced && (
-                <div className="border-t border-border bg-surface-secondary p-3 space-y-2 max-h-48 overflow-y-auto">
+                <div className="border-t border-[rgba(0,0,0,0.10)] bg-surface-secondary p-3 space-y-2 max-h-48 overflow-y-auto">
                   <div className="text-xs font-mono text-text-secondary space-y-1">
                     <p><span className="text-text-primary font-medium">Error:</span> {errorDetails.errorMessage}</p>
                     {errorDetails.rawError && errorDetails.rawError !== errorDetails.errorMessage && (
@@ -270,12 +275,12 @@ export function RebaseMergeErrorDialog(): React.ReactElement | null {
               )}
             </div>
 
-            <div className="border-t border-border pt-4">
+            <div className="border-t border-[rgba(0,0,0,0.10)] pt-4">
               <p className="text-sm text-text-secondary mb-3">How would you like to resolve these conflicts?</p>
               <div className="flex gap-3">
                 <button
                   onClick={handleAutoFix}
-                  className="flex-1 px-4 py-2.5 bg-kanvas-blue text-white rounded-lg hover:bg-blue-600 transition-colors text-sm font-medium flex items-center justify-center gap-2"
+                  className="btn-primary flex-1 flex items-center justify-center gap-2"
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -284,7 +289,7 @@ export function RebaseMergeErrorDialog(): React.ReactElement | null {
                 </button>
                 <button
                   onClick={handleManualFix}
-                  className="flex-1 px-4 py-2.5 bg-surface-secondary text-text-primary rounded-lg hover:bg-surface-tertiary transition-colors text-sm font-medium flex items-center justify-center gap-2"
+                  className="kb-btn flex-1 flex items-center justify-center gap-2"
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
@@ -319,46 +324,54 @@ export function RebaseMergeErrorDialog(): React.ReactElement | null {
             </div>
 
             <div className="max-h-64 overflow-y-auto space-y-2">
-              {previews.map((preview) => (
-                <div
-                  key={preview.filePath}
-                  className={`p-3 rounded-lg border ${
-                    preview.approved ? 'bg-green-50 border-green-200' : 'bg-surface-secondary border-border'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={preview.approved}
-                        onChange={(e) => setPreviewApproval(preview.filePath, e.target.checked)}
-                        className="w-4 h-4 rounded border-border text-kanvas-blue focus:ring-kanvas-blue"
-                      />
-                      <span className="text-sm font-mono text-text-primary">{preview.filePath}</span>
+              {previews.map((preview) => {
+                const isSkipped = preview.status === 'skipped' || !!preview.skippedReason;
+                return (
+                  <div
+                    key={preview.file}
+                    className={`p-3 rounded-lg border ${
+                      isSkipped ? 'bg-yellow-50 border-yellow-200' :
+                      preview.approved ? 'bg-green-50 border-green-200' : 'bg-surface-secondary border-border'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={preview.approved}
+                          disabled={isSkipped}
+                          onChange={(e) => setPreviewApproval(preview.file, e.target.checked)}
+                          className="w-4 h-4 rounded border-border text-kanvas-blue focus:ring-kanvas-blue disabled:opacity-50"
+                        />
+                        <span className="text-sm font-mono text-text-primary">{preview.file}</span>
+                      </div>
+                      <span className={`text-xs px-2 py-0.5 rounded ${
+                        isSkipped ? 'bg-yellow-100 text-yellow-700' :
+                        preview.status === 'approved' ? 'bg-green-100 text-green-700' :
+                        'bg-blue-100 text-blue-700'
+                      }`}>
+                        {isSkipped ? 'skipped' : preview.status}
+                      </span>
                     </div>
-                    <span className={`text-xs px-2 py-0.5 rounded ${
-                      preview.resolution === 'merged' ? 'bg-purple-100 text-purple-700' :
-                      preview.resolution === 'ours' ? 'bg-green-100 text-green-700' :
-                      'bg-blue-100 text-blue-700'
-                    }`}>
-                      {preview.resolution}
-                    </span>
+                    {preview.skippedReason && (
+                      <p className="text-xs text-yellow-700 mt-1 pl-6">{preview.skippedReason}</p>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             <div className="flex gap-3 pt-2">
               <button
                 onClick={handleApplyResolutions}
                 disabled={isProcessing || previews.every((p) => !p.approved)}
-                className="flex-1 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                className="btn-primary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Apply {previews.filter((p) => p.approved).length} Resolution(s)
               </button>
               <button
                 onClick={handleAbort}
-                className="px-4 py-2.5 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-sm font-medium"
+                className="px-4 py-2.5 bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors text-sm font-medium"
               >
                 Abort
               </button>
@@ -377,7 +390,7 @@ export function RebaseMergeErrorDialog(): React.ReactElement | null {
       case 'manual':
         return (
           <div className="space-y-4">
-            <div className="p-4 bg-surface-secondary rounded-lg">
+            <div className="p-4 bg-white border border-[rgba(0,0,0,0.10)] rounded-[14px]">
               <h4 className="font-medium text-text-primary mb-2">Manual Resolution Instructions</h4>
               <ol className="text-sm text-text-secondary space-y-2 list-decimal list-inside">
                 <li>Open a terminal in the repository directory</li>
@@ -410,13 +423,13 @@ export function RebaseMergeErrorDialog(): React.ReactElement | null {
               <button
                 onClick={handleManualFixComplete}
                 disabled={!manualFixAcknowledged || isProcessing}
-                className="flex-1 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                className="btn-primary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Verify & Complete
               </button>
               <button
                 onClick={handleAbort}
-                className="px-4 py-2.5 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-sm font-medium"
+                className="px-4 py-2.5 bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors text-sm font-medium"
               >
                 Abort Rebase
               </button>
@@ -453,7 +466,7 @@ export function RebaseMergeErrorDialog(): React.ReactElement | null {
 
             {/* Advanced details on failure */}
             {!resultSuccess && (
-              <div className="border border-border rounded-lg overflow-hidden">
+              <div className="border border-[rgba(0,0,0,0.10)] rounded-[14px] overflow-hidden">
                 <button
                   onClick={() => setShowAdvanced(!showAdvanced)}
                   className="w-full px-3 py-2 flex items-center justify-between text-xs text-text-secondary hover:bg-surface-secondary transition-colors"
@@ -467,7 +480,7 @@ export function RebaseMergeErrorDialog(): React.ReactElement | null {
                   </svg>
                 </button>
                 {showAdvanced && (
-                  <div className="border-t border-border bg-surface-secondary p-3 space-y-2 max-h-48 overflow-y-auto">
+                  <div className="border-t border-[rgba(0,0,0,0.10)] bg-surface-secondary p-3 space-y-2 max-h-48 overflow-y-auto">
                     <div className="text-xs font-mono text-text-secondary space-y-1">
                       <p><span className="text-text-primary font-medium">Result:</span> {resultMessage}</p>
                       {errorDetails.rawError && (
@@ -495,7 +508,7 @@ export function RebaseMergeErrorDialog(): React.ReactElement | null {
 
             <button
               onClick={handleClose}
-              className="w-full px-4 py-2.5 bg-surface-secondary text-text-primary rounded-lg hover:bg-surface-tertiary transition-colors text-sm font-medium"
+              className="kb-btn w-full"
             >
               Close
             </button>
@@ -508,10 +521,10 @@ export function RebaseMergeErrorDialog(): React.ReactElement | null {
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-surface border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-hidden flex flex-col">
+    <div className="fixed inset-0 bg-black/15 backdrop-blur-[2px] flex items-center justify-center z-50">
+      <div className="bg-white border border-[rgba(0,0,0,0.10)] rounded-[22px] shadow-[0_4px_6px_rgba(0,0,0,0.08)] w-full max-w-lg mx-4 max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border flex-shrink-0">
+        <div className="flex items-center justify-between p-4 border-b border-[rgba(0,0,0,0.10)] flex-shrink-0">
           <h2 className="text-lg font-semibold text-text-primary">
             {currentStep === 'result' ? (resultSuccess ? 'Resolution Complete' : 'Resolution Failed') :
              currentStep === 'manual' ? 'Manual Resolution' :

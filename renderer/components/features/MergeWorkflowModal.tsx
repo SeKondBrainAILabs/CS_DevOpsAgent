@@ -93,6 +93,21 @@ export function MergeWorkflowModal({
 
   // Track whether auto-fix has been triggered for current preview
   const autoFixTriggered = useRef(false);
+  // Session deletion is deferred until the user dismisses the success screen
+  // (see handleExecuteMerge). Stored sessionId gets deleted in handleClose.
+  const pendingSessionDelete = useRef<string | null>(null);
+  const [offline, setOffline] = useState(false);
+
+  // Wrap onClose so the deferred session delete fires after the user
+  // acknowledges the success screen, rather than immediately on merge complete.
+  const handleClose = useCallback(() => {
+    const sessionToDelete = pendingSessionDelete.current;
+    pendingSessionDelete.current = null;
+    onClose();
+    if (sessionToDelete && onDeleteSession) {
+      onDeleteSession(sessionToDelete);
+    }
+  }, [onClose, onDeleteSession]);
 
   // Helper to add/update progress entries
   const addProgress = useCallback((message: string, status: ProgressEntry['status'] = 'active', detail?: string) => {
@@ -125,6 +140,12 @@ export function MergeWorkflowModal({
     setTargetBranch(initialTargetBranch);
 
     const init = async () => {
+      // Check AI connectivity
+      try {
+        const health = await window.api?.ai?.healthCheck?.();
+        setOffline(!(health?.success && health.data?.online));
+      } catch { setOffline(true); }
+
       // Step 1: Resolve the ACTUAL active branch from the worktree
       // The session's branchName may be stale if the developer switched branches
       let resolvedBranch = sourceBranch;
@@ -263,11 +284,18 @@ export function MergeWorkflowModal({
     setProgressLog([]);
 
     try {
+      // Run conflict resolution on the worktree (where the session branch lives)
+      // rather than the primary repo. After a failed merge + abort, the primary
+      // is clean, so generatePreviews would do a no-op rebase and find zero
+      // conflicts. Rebasing the session branch on the worktree against the
+      // target reproduces the real conflicts and resolves them in place.
+      const conflictPath = worktreePath || repoPath;
+
       addProgress('Creating backup branch for safety...');
 
       // Create backup if we have a sessionId
       if (sessionId) {
-        const backupResult = await window.api?.conflict?.createBackup?.(repoPath, sessionId);
+        const backupResult = await window.api?.conflict?.createBackup?.(conflictPath, sessionId);
         if (backupResult?.success) {
           updateLastProgress('done', `Backup: backup_kit/${sessionId}`);
         } else {
@@ -277,42 +305,57 @@ export function MergeWorkflowModal({
         updateLastProgress('done', 'No session ID for backup');
       }
 
-      addProgress('Analyzing conflicts with AI (llama/qwen)...');
+      addProgress('Analyzing conflicts with AI...');
 
-      const result = await window.api?.conflict?.generatePreviews?.(repoPath, targetBranch);
+      const result = await window.api?.conflict?.generatePreviews?.(conflictPath, targetBranch);
 
       if (result?.success && result.data) {
-        const previews = result.data as Array<{
-          filePath: string;
-          resolvedContent: string;
-          resolution: string;
-        }>;
+        if (result.data.aborted) {
+          updateLastProgress('error');
+          setErrorWithLog(result.data.abortReason || 'Conflict resolution aborted');
+          setStep('error');
+          return;
+        }
 
-        updateLastProgress('done', `Generated ${previews.length} resolution(s)`);
+        const previews = result.data.previews ?? [];
+        const resolvable = previews.filter((p) => p.status !== 'skipped' && !!p.proposedContent);
 
-        // Show each file resolution
+        updateLastProgress('done', `Generated ${resolvable.length} resolution(s) (${previews.length - resolvable.length} skipped)`);
+
+        // Show each file outcome
         for (const p of previews) {
-          addProgress(`Resolved: ${p.filePath} (${p.resolution})`, 'done');
+          if (p.status === 'skipped' || p.skippedReason) {
+            addProgress(`Skipped: ${p.file} — ${p.skippedReason || 'requires manual review'}`, 'error');
+          } else {
+            addProgress(`Resolved: ${p.file} (${p.status})`, 'done');
+          }
+        }
+
+        if (resolvable.length === 0) {
+          setErrorWithLog('AI could not auto-resolve any files. Use manual fix.');
+          setStep('error');
+          return;
         }
 
         addProgress('Applying approved resolutions...');
 
+        // Backend applyApprovedResolutions gates on status 'approved' or 'modified' — force 'approved'.
         const applyResult = await window.api?.conflict?.applyApproved?.(
-          repoPath,
-          previews.map((p) => ({ ...p, approved: true }))
+          conflictPath,
+          resolvable.map((p) => ({ ...p, status: 'approved' as const }))
         );
 
         if (applyResult?.success) {
           updateLastProgress('done');
 
-          // Clean up backup
+          // Clean up backup on the same path we created it on
           if (sessionId) {
-            await window.api?.conflict?.deleteBackup?.(repoPath, sessionId);
+            await window.api?.conflict?.deleteBackup?.(conflictPath, sessionId);
           }
 
           addProgress('All conflicts resolved! Proceeding to merge options...', 'done');
 
-          // Reload preview using actual branch
+          // Reload preview against the primary repo (merge happens there, not in the worktree)
           const previewResult = await window.api?.merge?.preview?.(repoPath, actualBranch, targetBranch);
           if (previewResult?.success && previewResult.data) {
             setPreview(previewResult.data);
@@ -336,7 +379,7 @@ export function MergeWorkflowModal({
       setErrorWithLog(err instanceof Error ? err.message : 'Auto-fix failed');
       setStep('error');
     }
-  }, [sessionId, repoPath, targetBranch, actualBranch, addProgress, updateLastProgress, setErrorWithLog]);
+  }, [sessionId, repoPath, worktreePath, targetBranch, actualBranch, addProgress, updateLastProgress, setErrorWithLog]);
 
   // Reset auto-fix trigger when modal closes
   const autoStashTriggered = useRef(false);
@@ -401,8 +444,12 @@ export function MergeWorkflowModal({
             updateLastProgress('done');
             setStep('complete');
             onMergeComplete?.();
+            // Defer session deletion until the user dismisses the success screen.
+            // Deleting the session immediately unmounts this modal (via parent
+            // state changes) before the "complete" step can render, making the
+            // dialog appear to vanish silently after a successful merge.
             if (deleteSession && sessionId && onDeleteSession) {
-              onDeleteSession(sessionId);
+              pendingSessionDelete.current = sessionId;
             }
           } else {
             updateLastProgress('error');
@@ -429,10 +476,10 @@ export function MergeWorkflowModal({
   const hasCodeConflicts = preview?.hasConflicts && !hasUntrackedBlocking;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+    <div className="fixed inset-0 bg-black/15 backdrop-blur-[2px] flex items-center justify-center z-50">
+      <div className="bg-white border border-[rgba(0,0,0,0.10)] rounded-[22px] shadow-[0_4px_6px_rgba(0,0,0,0.08)] w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="p-4 border-b border-border flex-shrink-0">
+        <div className="p-4 border-b border-[rgba(0,0,0,0.10)] flex-shrink-0">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-text-primary">Merge Workflow</h2>
@@ -444,7 +491,7 @@ export function MergeWorkflowModal({
                   <select
                     value={targetBranch}
                     onChange={(e) => setTargetBranch(e.target.value)}
-                    className="px-2 py-1 rounded bg-surface-secondary border border-border text-kanvas-blue text-sm font-mono focus:outline-none focus:ring-2 focus:ring-kanvas-blue/50"
+                    className="px-2 py-1 rounded-[14px] bg-surface-secondary border border-[rgba(0,0,0,0.10)] text-kanvas-blue text-sm font-mono focus:outline-none focus:ring-2 focus:ring-kanvas-blue/50"
                   >
                     {!branches.find(b => b.name === targetBranch) && (
                       <option value={targetBranch}>{targetBranch}</option>
@@ -461,7 +508,7 @@ export function MergeWorkflowModal({
               </div>
             </div>
             <button
-              onClick={onClose}
+              onClick={handleClose}
               className="p-2 rounded-lg hover:bg-surface-secondary transition-colors"
             >
               <svg className="w-5 h-5 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -478,6 +525,15 @@ export function MergeWorkflowModal({
                 Session was created as <code className="bg-blue-100 px-1 rounded">{sourceBranch}</code>,{' '}
                 but the worktree is on <code className="bg-blue-100 px-1 rounded">{actualBranch}</code>.{' '}
                 Using the actual active branch.
+              </p>
+            </div>
+          )}
+
+          {/* Offline warning */}
+          {offline && (
+            <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded-lg">
+              <p className="text-xs text-red-700">
+                <span className="font-medium">Not connected</span> — AI conflict resolution is unavailable. Clean merges will still work.
               </p>
             </div>
           )}
@@ -596,15 +652,15 @@ export function MergeWorkflowModal({
 
                   {/* Stats */}
                   <div className="grid grid-cols-3 gap-3">
-                    <div className="p-3 bg-surface-secondary rounded-lg">
+                    <div className="p-3 bg-surface-secondary rounded-[14px] border border-[rgba(0,0,0,0.10)]">
                       <div className="text-2xl font-bold text-text-primary">{preview.commitCount}</div>
                       <div className="text-sm text-text-secondary">Commits</div>
                     </div>
-                    <div className="p-3 bg-surface-secondary rounded-lg">
+                    <div className="p-3 bg-surface-secondary rounded-[14px] border border-[rgba(0,0,0,0.10)]">
                       <div className="text-2xl font-bold text-text-primary">{preview.filesChanged.length}</div>
                       <div className="text-sm text-text-secondary">Files Changed</div>
                     </div>
-                    <div className="p-3 bg-surface-secondary rounded-lg">
+                    <div className="p-3 bg-surface-secondary rounded-[14px] border border-[rgba(0,0,0,0.10)]">
                       <div className="text-2xl font-bold text-text-primary">
                         +{preview.aheadBy} / -{preview.behindBy}
                       </div>
@@ -870,7 +926,7 @@ export function MergeWorkflowModal({
                 </div>
               )}
               {/* Advanced error details */}
-              <div className="border border-border rounded-lg overflow-hidden text-left">
+              <div className="border border-[rgba(0,0,0,0.10)] rounded-[14px] overflow-hidden text-left">
                 <button
                   onClick={() => setShowAdvancedError(!showAdvancedError)}
                   className="w-full px-3 py-2 flex items-center justify-between text-xs text-text-secondary hover:bg-surface-secondary transition-colors"
@@ -884,7 +940,7 @@ export function MergeWorkflowModal({
                   </svg>
                 </button>
                 {showAdvancedError && (
-                  <div className="border-t border-border bg-surface-secondary p-3 space-y-1 max-h-48 overflow-y-auto">
+                  <div className="border-t border-[rgba(0,0,0,0.10)] bg-surface-secondary p-3 space-y-1 max-h-48 overflow-y-auto">
                     <div className="text-xs font-mono text-text-secondary space-y-1">
                       <p><span className="text-text-primary font-medium">Error:</span> {error}</p>
                       <p><span className="text-text-primary font-medium">Repo:</span> {repoPath}</p>
@@ -909,13 +965,13 @@ export function MergeWorkflowModal({
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-border bg-surface-secondary">
+        <div className="p-4 border-t border-[rgba(0,0,0,0.10)] bg-surface-secondary">
           <div className="flex items-center justify-between">
             {step === 'preview' && (
               <>
                 <button
                   onClick={onClose}
-                  className="px-4 py-2 rounded-lg text-text-secondary hover:bg-surface transition-colors"
+                  className="kb-btn"
                 >
                   Cancel
                 </button>
@@ -924,7 +980,7 @@ export function MergeWorkflowModal({
                   {hasUntrackedBlocking && (
                     <button
                       onClick={handleStashAndRetry}
-                      className="px-4 py-2 rounded-lg bg-yellow-500 text-white font-medium hover:bg-yellow-600 transition-colors flex items-center gap-2"
+                      className="px-4 py-2 rounded-full bg-yellow-500 text-white font-medium hover:bg-yellow-600 transition-colors flex items-center gap-2"
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
@@ -936,7 +992,7 @@ export function MergeWorkflowModal({
                   {hasCodeConflicts && (
                     <button
                       onClick={handleAutoFix}
-                      className="px-4 py-2 rounded-lg bg-purple-600 text-white font-medium hover:bg-purple-700 transition-colors flex items-center gap-2"
+                      className="px-4 py-2 rounded-full bg-purple-600 text-white font-medium hover:bg-purple-700 transition-colors flex items-center gap-2"
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -948,9 +1004,9 @@ export function MergeWorkflowModal({
                   <button
                     onClick={() => setStep('options')}
                     disabled={!preview?.canMerge}
-                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                    className={`px-4 py-2 rounded-full font-medium transition-colors ${
                       preview?.canMerge
-                        ? 'bg-kanvas-blue text-white hover:bg-kanvas-blue/90'
+                        ? 'bg-black text-white hover:bg-black/90'
                         : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                     }`}
                   >
@@ -965,7 +1021,7 @@ export function MergeWorkflowModal({
                   setStep('preview');
                   setProgressLog([]);
                 }}
-                className="ml-auto px-4 py-2 rounded-lg text-text-secondary hover:bg-surface transition-colors"
+                className="ml-auto kb-btn"
               >
                 Back to Preview
               </button>
@@ -974,22 +1030,46 @@ export function MergeWorkflowModal({
               <>
                 <button
                   onClick={() => setStep('preview')}
-                  className="px-4 py-2 rounded-lg text-text-secondary hover:bg-surface transition-colors"
+                  className="kb-btn"
                 >
                   Back
                 </button>
                 <button
                   onClick={handleExecuteMerge}
-                  className="px-4 py-2 rounded-lg bg-kanvas-blue text-white font-medium hover:bg-kanvas-blue/90 transition-colors"
+                  className="btn-primary"
                 >
                   Execute Merge
                 </button>
               </>
             )}
-            {(step === 'complete' || step === 'error') && (
+            {step === 'error' && (
+              <>
+                <button
+                  onClick={onClose}
+                  className="kb-btn"
+                >
+                  Close
+                </button>
+                {/conflict/i.test(error || '') && (
+                  <button
+                    onClick={() => {
+                      autoFixTriggered.current = false;
+                      handleAutoFix();
+                    }}
+                    className="btn-primary flex items-center gap-2"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                    Auto-Fix with AI
+                  </button>
+                )}
+              </>
+            )}
+            {step === 'complete' && (
               <button
-                onClick={onClose}
-                className="ml-auto px-4 py-2 rounded-lg bg-surface text-text-primary hover:bg-surface-tertiary transition-colors font-medium"
+                onClick={handleClose}
+                className="ml-auto kb-btn"
               >
                 Close
               </button>

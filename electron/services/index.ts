@@ -9,6 +9,8 @@ import { GitService } from './GitService';
 import { WatcherService } from './WatcherService';
 import { LockService } from './LockService';
 import { ConfigService } from './ConfigService';
+import { WorkspaceService } from './WorkspaceService';
+import { ProjectGroupService } from './ProjectGroupService';
 import { AIService } from './AIService';
 import { ActivityService } from './ActivityService';
 import { AgentListenerService } from './AgentListenerService';
@@ -50,6 +52,8 @@ export interface Services {
   watcher: WatcherService;
   lock: LockService;
   config: ConfigService;
+  workspace: WorkspaceService;
+  projectGroup: ProjectGroupService;
   ai: AIService;
   activity: ActivityService;
   agentListener: AgentListenerService;
@@ -101,6 +105,12 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // Initialize config service (other services may depend on it)
   const config = new ConfigService();
   await config.initialize();
+
+  // Workspaces (Epic A — multi-workspace, multi-repo discovery)
+  const workspace = new WorkspaceService();
+
+  // Project Groups (Epic F — persistent cross-repo bundles)
+  const projectGroup = new ProjectGroupService();
 
   // Initialize activity service (used by other services for logging)
   const activity = new ActivityService();
@@ -175,6 +185,9 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
 
   // Connect terminalLog to agentInstance for restart logging
   agentInstance.setTerminalLogService(terminalLog);
+
+  // Connect ConfigService for per-repo worktree-mode lookups (C5 Single-Session Mode)
+  agentInstance.setConfigService(config);
 
   // Connect agentInstance to watcher for commit tracking (crash recovery)
   watcher.setAgentInstanceService(agentInstance);
@@ -272,7 +285,9 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   mcpServer.setLockService(lock);
   mcpServer.setAgentInstanceService(agentInstance);
   mcpServer.setDatabaseService(databaseService);
+  mcpServer.setMcpCallDb(databaseService);
   await mcpServer.initialize();
+  mcpServer.wireCommitEmitter();
   console.log('[Services] MCP server initialized on port', mcpServer.getPort());
 
   // Initialize Seed Data Execution service
@@ -281,8 +296,9 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   seedDataExecution.setMainWindow(mainWindow);
   console.log('[Services] Seed data execution service initialized');
 
-  // Pass MCP URL to AgentInstanceService for .mcp.json generation
+  // Pass MCP URLs to AgentInstanceService for .mcp.json generation
   agentInstance.setMcpServerUrl(mcpServer.getUrl());
+  agentInstance.setRpcServerUrl(mcpServer.getRpcUrl());
 
   // Wire session callbacks: register sessions with MCP session binder
   agentInstance.onSessionCreated = (sessionId, worktreePath) => {
@@ -328,6 +344,8 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     watcher,
     lock,
     config,
+    workspace,
+    projectGroup,
     ai,
     activity,
     agentListener,
