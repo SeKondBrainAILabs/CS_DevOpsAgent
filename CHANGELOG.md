@@ -5,6 +5,11 @@ All notable changes to s9n-devops-agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.11] - 2026-05-29
+
+### Fixed
+- **Auto-update check on unsigned macOS builds** — Replaced `electron-updater` / Squirrel.Mac with a direct HTTPS fetch of `latest-mac.yml` from GitHub Releases. Squirrel.Mac requires a Developer ID certificate to call `checkForUpdates()` at all; without one it throws silently and the update pill never appeared. The new implementation works without code signing: fetches the yml, parses the version, compares with semver, fires the same `UPDATE_AVAILABLE` IPC event. The install step opens the GitHub releases page in the browser so the user can download the DMG.
+
 ## [2.6.10] - 2026-05-29
 
 ### Changed
