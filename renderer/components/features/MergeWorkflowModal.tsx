@@ -305,7 +305,7 @@ export function MergeWorkflowModal({
         updateLastProgress('done', 'No session ID for backup');
       }
 
-      addProgress('Analyzing conflicts with AI (kimi-k2)...');
+      addProgress('Analyzing conflicts with AI...');
 
       const result = await window.api?.conflict?.generatePreviews?.(conflictPath, targetBranch);
 

@@ -14,7 +14,7 @@ import Groq from 'groq-sdk';
 // Available Groq models (kept for backward compatibility)
 export const GROQ_MODELS = {
   'llama-3.3-70b': 'llama-3.3-70b-versatile',
-  'kimi-k2': 'moonshotai/kimi-k2-instruct-0905',
+  'kimi-k2': 'moonshotai/kimi-k2-instruct',
   'gpt-oss-120b': 'openai/gpt-oss-120b',
   'gpt-oss-20b': 'openai/gpt-oss-20b',
   'qwen-qwq-32b': 'qwen-qwq-32b',
@@ -211,14 +211,30 @@ export class AIService extends BaseService {
       const messages = this.buildMessagesFromMode(mode, options);
 
       const client = this.getClient();
-      const response = await client.chat.completions.create({
-        model: modelId,
-        messages,
-        temperature: mode.settings.temperature ?? 0.5,
-        max_tokens: mode.settings.max_tokens ?? 4096,
-      });
-
-      return response.choices[0]?.message?.content || '';
+      try {
+        const response = await client.chat.completions.create({
+          model: modelId,
+          messages,
+          temperature: mode.settings.temperature ?? 0.5,
+          max_tokens: mode.settings.max_tokens ?? 4096,
+        });
+        return response.choices[0]?.message?.content || '';
+      } catch (primaryError) {
+        // If primary model fails with 404/model-not-found, fall back to llama-3.3-70b
+        const errMsg = primaryError instanceof Error ? primaryError.message : String(primaryError);
+        const isModelError = errMsg.includes('404') || errMsg.includes('model_not_found') || errMsg.includes('does not exist');
+        if (isModelError && modelId !== GROQ_MODELS['llama-3.3-70b']) {
+          console.warn(`[AIService] Model ${modelId} unavailable (${errMsg.slice(0, 80)}), falling back to llama-3.3-70b`);
+          const fallbackResponse = await client.chat.completions.create({
+            model: GROQ_MODELS['llama-3.3-70b'],
+            messages,
+            temperature: mode.settings.temperature ?? 0.5,
+            max_tokens: mode.settings.max_tokens ?? 4096,
+          });
+          return fallbackResponse.choices[0]?.message?.content || '';
+        }
+        throw primaryError;
+      }
     }, 'AI_MODE_CHAT_FAILED');
   }
 

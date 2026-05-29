@@ -503,7 +503,7 @@ export class MergeConflictService extends BaseService {
 
       // Route to appropriate model based on triage complexity
       const modelOverride: GroqModelKey | undefined =
-        triage?.complexity === 'simple' ? 'llama-3.1-8b' : undefined;  // undefined = use mode default (kimi-k2)
+        triage?.complexity === 'simple' ? 'llama-3.1-8b' : undefined;  // undefined = use mode default
 
       const result = await this.aiService.sendWithMode({
         modeId: 'merge_conflict_resolver',
@@ -710,7 +710,7 @@ export class MergeConflictService extends BaseService {
         const reason = !result.success
           ? (result.error?.message || result.error?.code || 'unknown API error')
           : 'empty response from model';
-        const modelUsed = modelOverride || 'mode default (kimi-k2)';
+        const modelUsed = modelOverride || 'mode default';
         const errorMsg = `AI resolution failed (${modelUsed}): ${reason}`;
         this.debugLog?.error('MergeConflict', errorMsg, {
           filePath,

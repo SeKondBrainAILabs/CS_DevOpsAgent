@@ -167,7 +167,10 @@ export class RebaseWatcherService extends BaseService {
       if (shouldAutoRebase) {
         console.log(`[RebaseWatcher] Scheduling auto-rebase for ${sessionId} (frequency: ${freq})`);
         state.lastAutoRebaseAt = new Date();
-        // Run async, don't block the status handler
+        // Set synchronously before the async call so concurrent status updates
+        // see isRebasing=true and don't schedule a second concurrent rebase.
+        state.isRebasing = true;
+        this.emitStatus(sessionId);
         this.performAutoRebase(state).catch((err) =>
           console.error(`[RebaseWatcher] Auto-rebase error for ${sessionId}:`, err)
         );
@@ -658,10 +661,19 @@ export class RebaseWatcherService extends BaseService {
       return { success: rebaseResult.success, message: rebaseResult.message };
     } catch (error) {
       state.isRebasing = false;
-      state.isPaused = true; // Pause on error
 
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const errorStack = error instanceof Error ? error.stack : undefined;
+
+      // Only pause watching for conflict or auth errors that require human intervention.
+      // Transient failures (network, git lock, process errors) should not permanently
+      // stop the watcher — the next poll cycle will retry automatically.
+      const isConflict = /conflict|CONFLICT|merge failed/i.test(errorMessage);
+      const isAuthError = /authentication|403|401|permission denied/i.test(errorMessage);
+      if (isConflict || isAuthError) {
+        state.isPaused = true;
+      }
+
       state.lastRebaseResult = {
         success: false,
         message: errorMessage,
@@ -677,11 +689,11 @@ export class RebaseWatcherService extends BaseService {
         errorStack,
         behindCount: state.behindCount,
         aheadCount: state.aheadCount,
-        watcherPaused: true,
+        watcherPaused: state.isPaused,
       });
 
       this.emitStatus(config.sessionId);
-      console.error(`[RebaseWatcher] Auto-rebase error for ${config.sessionId}:`, error);
+      console.error(`[RebaseWatcher] Auto-rebase error for ${config.sessionId} (paused: ${state.isPaused}):`, error);
 
       return { success: false, message: errorMessage };
     }
