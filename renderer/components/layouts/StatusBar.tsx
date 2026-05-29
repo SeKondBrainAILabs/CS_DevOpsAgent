@@ -7,6 +7,7 @@
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { useAgentStore } from '../../store/agentStore';
 import type { AgentInfo } from '../../../shared/agent-protocol';
+import type { AppUpdateInfo } from '../../../shared/types';
 
 interface RegisteredAgent extends AgentInfo {
   isAlive: boolean;
@@ -109,6 +110,57 @@ export function StatusBar({ agent }: StatusBarProps): React.ReactElement {
       setIsRestarting(false);
     }
   }, []);
+
+  // Auto-update state
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [updateAction, setUpdateAction] = useState<'idle' | 'downloading' | 'ready'>('idle');
+
+  useEffect(() => {
+    // Seed current status (catches updates detected before this component mounts)
+    window.api?.update?.getStatus?.().then((result) => {
+      if (result?.success && result.data?.updateAvailable) {
+        setUpdateInfo(result.data);
+        setUpdateAction(result.data.downloaded ? 'ready' : 'idle');
+      }
+    }).catch(() => {});
+
+    const unsubAvailable = window.api?.update?.onAvailable?.((info) => {
+      setUpdateInfo(info);
+      setUpdateAction('idle');
+    });
+    const unsubProgress = window.api?.update?.onProgress?.((info) => {
+      setUpdateInfo(info);
+      setUpdateAction('downloading');
+    });
+    const unsubDownloaded = window.api?.update?.onDownloaded?.((info) => {
+      setUpdateInfo(info);
+      setUpdateAction('ready');
+    });
+    const unsubError = window.api?.update?.onError?.((info) => {
+      setUpdateInfo(info);
+      setUpdateAction('idle');
+    });
+
+    return () => {
+      unsubAvailable?.();
+      unsubProgress?.();
+      unsubDownloaded?.();
+      unsubError?.();
+    };
+  }, []);
+
+  const handleUpdateClick = useCallback(async () => {
+    if (updateAction === 'ready') {
+      window.api?.update?.install?.();
+    } else if (updateAction === 'idle' && updateInfo?.updateAvailable) {
+      setUpdateAction('downloading');
+      try {
+        await window.api?.update?.download?.();
+      } catch {
+        setUpdateAction('idle');
+      }
+    }
+  }, [updateAction, updateInfo]);
 
   // MCP server status
   const [mcpStatus, setMcpStatus] = useState<McpStatus | null>(null);
@@ -267,6 +319,58 @@ export function StatusBar({ agent }: StatusBarProps): React.ReactElement {
                 : 'MCP down'}
             </span>
           </span>
+        </>
+      )}
+
+      {/* Auto-update notification */}
+      {updateInfo?.updateAvailable && (
+        <>
+          <span className="text-[rgba(0,0,0,0.15)]">|</span>
+          <button
+            onClick={handleUpdateClick}
+            disabled={updateAction === 'downloading'}
+            title={
+              updateInfo.error
+                ? `Update error: ${updateInfo.error}`
+                : updateAction === 'ready'
+                  ? `v${updateInfo.latestVersion} downloaded — click to restart and install`
+                  : updateAction === 'downloading'
+                    ? `Downloading v${updateInfo.latestVersion}… ${updateInfo.progress ? Math.round(updateInfo.progress.percent) + '%' : ''}`
+                    : `v${updateInfo.latestVersion} available — click to download`
+            }
+            style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              padding: '1px 8px', borderRadius: 999,
+              background: updateAction === 'ready' ? 'var(--c-blue)' : 'var(--c-paper)',
+              border: `1px solid ${updateAction === 'ready' ? 'var(--c-blue)' : 'var(--border-1)'}`,
+              color: updateAction === 'ready' ? '#fff' : 'var(--c-muted)',
+              fontSize: 11, fontFamily: 'var(--f-mono)', cursor: updateAction === 'downloading' ? 'default' : 'pointer',
+              opacity: updateAction === 'downloading' ? 0.7 : 1,
+            }}
+          >
+            {updateAction === 'ready' ? (
+              <>
+                <svg style={{ width: 12, height: 12 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Restart to update v{updateInfo.latestVersion}
+              </>
+            ) : updateAction === 'downloading' ? (
+              <>
+                <svg style={{ width: 12, height: 12, animation: 'spin 1s linear infinite' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                {updateInfo.progress ? `${Math.round(updateInfo.progress.percent)}%` : 'Downloading…'}
+              </>
+            ) : (
+              <>
+                <svg style={{ width: 12, height: 12 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
+                </svg>
+                v{updateInfo.latestVersion} available
+              </>
+            )}
+          </button>
         </>
       )}
 

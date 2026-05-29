@@ -5,6 +5,11 @@ All notable changes to s9n-devops-agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.5] - 2026-05-29
+
+### Added
+- **Auto-update notification UI** — StatusBar now shows a live update pill when a new version is available. Clicking downloads the update; once downloaded it turns blue ("Restart to update vX.X.X") and installs on click. The backend (`AutoUpdateService`) was already wired but had no renderer UI.
+
 ## [2.6.4] - 2026-05-29
 
 ### Fixed
