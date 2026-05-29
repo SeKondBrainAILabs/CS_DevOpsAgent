@@ -823,6 +823,17 @@ export class MergeConflictService extends BaseService {
       // Strip any 'origin/' prefix stored in session data (legacy bug)
       targetBranch = targetBranch.replace(/^origin\//, '');
       const startTime = Date.now();
+
+      // Abort any in-progress rebase before starting fresh — the conflict dialog
+      // may be opened while git is mid-rebase (detached HEAD), causing currentBranch
+      // to be empty and the new rebase to fail immediately. Always clean up first.
+      const inProgressCheck = await this.isRebaseInProgress(repoPath);
+      if (inProgressCheck.success && inProgressCheck.data) {
+        console.log(`[MergeConflict] Aborting in-progress rebase before generating previews`);
+        this.debugLog?.info('MergeConflict', 'Aborting in-progress rebase before preview', { repoPath });
+        try { await this.git(['rebase', '--abort'], repoPath); } catch { /* ignore */ }
+      }
+
       const currentBranch = await this.git(['branch', '--show-current'], repoPath);
       this.debugLog?.info('MergeConflict', `Generating resolution previews`, {
         repoPath, currentBranch, targetBranch, dryRun: options?.dryRun,
@@ -1247,6 +1258,15 @@ export class MergeConflictService extends BaseService {
       // Strip any 'origin/' prefix stored in session data (legacy bug)
       targetBranch = targetBranch.replace(/^origin\//, '');
       const startTime = Date.now();
+
+      // Abort any in-progress rebase so we start clean (detached HEAD guard)
+      const inProgressCheck = await this.isRebaseInProgress(repoPath);
+      if (inProgressCheck.success && inProgressCheck.data) {
+        console.log(`[MergeConflict] Aborting in-progress rebase before rebaseWithResolution`);
+        this.debugLog?.info('MergeConflict', 'Aborting in-progress rebase before resolution', { repoPath });
+        try { await this.git(['rebase', '--abort'], repoPath); } catch { /* ignore */ }
+      }
+
       const currentBranch = await this.git(['branch', '--show-current'], repoPath);
       console.log(`[MergeConflict] Starting rebase of ${currentBranch} onto ${targetBranch}`);
 

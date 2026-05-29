@@ -48,7 +48,7 @@ export function MergeWorkflowModal({
   onDeleteSession,
 }: MergeWorkflowModalProps): React.ReactElement | null {
   const [step, setStep] = useState<Step>('preview');
-  const [targetBranch, setTargetBranch] = useState(initialTargetBranch);
+  const [targetBranch, setTargetBranch] = useState(initialTargetBranch.replace(/^origin\//, ''));
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [preview, setPreview] = useState<MergePreview | null>(null);
   const [loading, setLoading] = useState(false);
@@ -136,8 +136,8 @@ export function MergeWorkflowModal({
       return;
     }
 
-    // Sync target branch from prop each time modal opens — useState only sets initial value once
-    setTargetBranch(initialTargetBranch);
+    // Sync target branch from prop each time modal opens — strip any legacy 'origin/' prefix
+    setTargetBranch(initialTargetBranch.replace(/^origin\//, ''));
 
     const init = async () => {
       // Check AI connectivity

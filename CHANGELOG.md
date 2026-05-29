@@ -5,6 +5,13 @@ All notable changes to s9n-devops-agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.18] - 2026-05-29
+
+### Fixed
+- **Conflict dialog: detached HEAD / empty currentBranch** — When the conflict resolution dialog opens after a failed auto-rebase, git is mid-rebase (detached HEAD), causing `git branch --show-current` to return empty. `generateResolutionPreviews` and `rebaseWithResolution` now abort any in-progress rebase before checking the current branch, ensuring git is on a named branch before the next rebase attempt starts.
+- **Cascade of backup tags** — Each retry from the conflict dialog was creating a new backup tag and launching a new rebase on top of an unaborted previous one. The pre-flight abort prevents this runaway accumulation.
+- **MergeWorkflowModal `targetBranch` state retains `origin/` prefix** — Component state was initialized and re-synced from session props without stripping the legacy prefix, so error logs always showed `origin/main` even when the service had already stripped it. Both `useState` initializer and `setTargetBranch` call now strip `origin/`.
+
 ## [2.6.17] - 2026-05-29
 
 ### Fixed
