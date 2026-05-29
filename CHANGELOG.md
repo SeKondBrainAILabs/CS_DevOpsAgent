@@ -5,6 +5,18 @@ All notable changes to s9n-devops-agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.4] - 2026-05-29
+
+### Fixed
+- **Merge: `origin/main` target branch** — merges now strip the `origin/` prefix from target branches, fixing "couldn't find remote ref origin/main" for sessions where `baseBranch` was stored with the prefix. Branch picker dropdown also cleaned up to never produce `origin/main` entries.
+- **Merge: missing remote branch detection** — `previewMerge` and `executeMerge` now detect when the target branch doesn't exist on the remote and return an actionable error message (including the actual remote default branch name) instead of a cryptic git fatal error.
+- **AI conflict resolution: kimi-k2 model unavailable** — updated kimi-k2 model ID to `moonshotai/kimi-k2-instruct` (removed stale `-0905` version suffix). `AIService.sendWithMode` now falls back to `llama-3.3-70b` on 404/model-not-found errors so conflict resolution no longer silently fails.
+- **Merge conflict resolver default model** — changed from `kimi-k2` to `llama-3.3-70b` so the AI pipeline works reliably even when kimi-k2 is unavailable.
+- **RebaseWatcher race condition** — `isRebasing` flag is now set synchronously before the fire-and-forget `performAutoRebase` call, preventing two concurrent rebases from starting.
+- **RebaseWatcher permanent pause on transient errors** — watcher now only pauses (`isPaused=true`) for conflict or auth errors. Network timeouts, git lock errors, and other transient failures now let the next poll cycle retry automatically.
+- **Restarting button stuck** — `handleRestartSession` now throws on failure so `SessionDetailView` resets the spinner. Added 30-second safety timeout as a backstop.
+- **Spurious `git merge --abort` after failed pull** — removed no-op merge abort that ran before any merge had started.
+
 ## [2.6.3] - 2026-05-26
 
 ### Added
