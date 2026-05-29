@@ -119,7 +119,7 @@ export class McpServerService extends BaseService {
   // Track last activity per transport for stale session cleanup
   private lastActivity = new Map<string, number>();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
-  private static readonly SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+  private static readonly SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
   // MCP call log — in-memory cache backed by persistent database
   private mcpCallLog: McpCallLogEntry[] = [];
@@ -360,9 +360,14 @@ export class McpServerService extends BaseService {
       return;
     }
 
-    // Unknown session or invalid request
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Bad Request: No valid session' }));
+    // Unknown or expired session — return a JSON-RPC error so the client can
+    // cleanly reinitialize rather than getting a deserialization error.
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32001, message: 'Session not found or expired. Please reinitialize.' },
+    }));
   }
 
   private async createSessionAndHandle(req: IncomingMessage, res: ServerResponse): Promise<void> {
