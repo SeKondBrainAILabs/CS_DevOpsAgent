@@ -312,6 +312,21 @@ export class MergeService extends BaseService {
       // Fetch latest from remote
       await this.git(['fetch', 'origin'], repoPath);
 
+      // Verify target branch exists on remote — gives a clear error instead of
+      // cryptic rev-list failures when the repo uses a different default branch name.
+      const { exitCode: lsExit, stdout: remoteRefs } = await this.git(
+        ['ls-remote', '--heads', 'origin', targetBranch],
+        repoPath
+      );
+      if (lsExit !== 0 || !remoteRefs.trim()) {
+        const { stdout: remoteHead } = await this.git(['ls-remote', '--symref', 'origin', 'HEAD'], repoPath);
+        const defaultBranchMatch = remoteHead.match(/ref: refs\/heads\/(\S+)\s+HEAD/);
+        const hint = defaultBranchMatch
+          ? ` The remote default branch is '${defaultBranchMatch[1]}'. Update the session's base branch setting.`
+          : '';
+        throw new Error(`Remote branch 'origin/${targetBranch}' does not exist.${hint}`);
+      }
+
       // Get current branch
       const { stdout: currentBranch } = await this.git(['branch', '--show-current'], repoPath);
 
@@ -563,11 +578,33 @@ export class MergeService extends BaseService {
       // Get current branch
       const { stdout: currentBranch } = await this.git(['branch', '--show-current'], repoPath);
 
+      // Verify target branch exists on remote before checking out.
+      // Repos may use 'master', 'development', or another name instead of 'main'.
+      const { exitCode: lsRemoteExit } = await this.git(
+        ['ls-remote', '--exit-code', '--heads', 'origin', targetBranch],
+        repoPath
+      );
+      if (lsRemoteExit !== 0) {
+        // Try to find the actual default branch from the remote
+        const { stdout: remoteHead } = await this.git(
+          ['ls-remote', '--symref', 'origin', 'HEAD'],
+          repoPath
+        );
+        const defaultBranchMatch = remoteHead.match(/ref: refs\/heads\/(\S+)\s+HEAD/);
+        const suggestion = defaultBranchMatch
+          ? ` The remote default branch appears to be '${defaultBranchMatch[1]}'. Update the session's base branch setting.`
+          : ` Check that '${targetBranch}' exists on the remote.`;
+        return {
+          success: false,
+          message: `Cannot merge: remote branch 'origin/${targetBranch}' does not exist.${suggestion}`,
+        };
+      }
+
       // Checkout target branch if needed
       if (currentBranch !== targetBranch) {
-        const { exitCode } = await this.git(['checkout', targetBranch], repoPath);
-        if (exitCode !== 0) {
-          throw new Error(`Failed to checkout ${targetBranch}`);
+        const checkoutResult = await this.git(['checkout', targetBranch], repoPath);
+        if (checkoutResult.exitCode !== 0) {
+          throw new Error(`Failed to checkout ${targetBranch}: ${checkoutResult.stderr}`);
         }
       }
 
@@ -575,7 +612,7 @@ export class MergeService extends BaseService {
       const pullResult = await this.git(['pull', 'origin', targetBranch], repoPath);
       if (pullResult.exitCode !== 0) {
         console.error(`[MergeService] Pull failed:`, pullResult.stderr);
-        await this.git(['merge', '--abort'], repoPath);
+        // Restore original branch — no merge has been started so no merge --abort needed
         if (currentBranch !== targetBranch) {
           await this.git(['checkout', currentBranch], repoPath);
         }
