@@ -5,6 +5,12 @@ All notable changes to s9n-devops-agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.14] - 2026-05-29
+
+### Fixed
+- **Restart timed out on large repos** — Safety timeout in `SessionDetailView` was 30 seconds. Restarts on large repos (commit + worktree + setup) legitimately take 60-90s and were always hitting the timeout. Increased to 120 seconds.
+- **`origin/` prefix in restart flow** — `createBranchIfNeeded` and session data config now strip the `origin/` prefix from `baseBranch` (e.g. `origin/Development` → `Development`) so branch creation doesn't fail when the stored base branch has the prefix.
+
 ## [2.6.13] - 2026-05-29
 
 ### Fixed
