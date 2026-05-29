@@ -820,6 +820,8 @@ export class MergeConflictService extends BaseService {
     options?: { dryRun?: boolean }
   ): Promise<IpcResult<ConflictPreviewResult>> {
     return this.wrap(async () => {
+      // Strip any 'origin/' prefix stored in session data (legacy bug)
+      targetBranch = targetBranch.replace(/^origin\//, '');
       const startTime = Date.now();
       const currentBranch = await this.git(['branch', '--show-current'], repoPath);
       this.debugLog?.info('MergeConflict', `Generating resolution previews`, {
@@ -1242,6 +1244,8 @@ export class MergeConflictService extends BaseService {
     maxRetries = 3
   ): Promise<IpcResult<RebaseWithResolutionResult>> {
     return this.wrap(async () => {
+      // Strip any 'origin/' prefix stored in session data (legacy bug)
+      targetBranch = targetBranch.replace(/^origin\//, '');
       const startTime = Date.now();
       const currentBranch = await this.git(['branch', '--show-current'], repoPath);
       console.log(`[MergeConflict] Starting rebase of ${currentBranch} onto ${targetBranch}`);
