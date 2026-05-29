@@ -190,10 +190,11 @@ export default function App(): React.ReactElement {
         }
         console.log(`Session restarted: ${sessionId} -> ${newSessionId}`);
       } else {
-        console.error('Failed to restart session:', result?.error);
+        throw new Error(result?.error || 'Restart failed — no session data returned');
       }
     } catch (error) {
       console.error('Failed to restart session:', error);
+      throw error;
     }
   };
 

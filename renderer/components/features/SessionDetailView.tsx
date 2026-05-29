@@ -178,13 +178,21 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
     setShowRestartConfirm(false);
     setRestarting(true);
     setRestartError(null);
+    // Safety: if still mounted after 30s (e.g. IPC hung), reset state
+    const safetyTimer = setTimeout(() => {
+      setRestarting(false);
+      setRestartError('Restart timed out — please try again');
+    }, 30_000);
     try {
       await onRestart?.(session.sessionId, session, commitChanges);
+      // On success the component should unmount as the session changes.
+      // If it doesn't (edge case), clear the timer and reset.
+      clearTimeout(safetyTimer);
     } catch (error) {
+      clearTimeout(safetyTimer);
       setRestartError(error instanceof Error ? error.message : 'Failed to restart session');
       setRestarting(false);
     }
-    // Note: on success, the component will unmount as the session changes, so no need to setRestarting(false)
   };
 
   const handleSync = async () => {
