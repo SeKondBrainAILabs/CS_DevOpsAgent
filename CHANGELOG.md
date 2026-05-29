@@ -5,6 +5,14 @@ All notable changes to s9n-devops-agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.16] - 2026-05-29
+
+### Added
+- **DebugLogService logging for auto-update, MCP calls, and git failures** — All update check results (checking, available, up-to-date, errors) now appear in the exported debug log under source `AutoUpdate`. MCP tool call failures log under `McpTool`. Expired MCP sessions and stale cleanup log under `McpServer`. This makes failures visible in the debug log export rather than silently disappearing into `console.log`.
+
+### Fixed
+- **Auto-update redirect chain** — GitHub serves 2 redirects before `latest-mac.yml` content. Previous code only followed one, reading an empty body on the second so no update was ever detected. Now follows the full chain (up to 5 hops).
+
 ## [2.6.15] - 2026-05-29
 
 ### Fixed

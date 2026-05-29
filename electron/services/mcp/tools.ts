@@ -68,6 +68,7 @@ export function registerTools(
           durationMs: Date.now() - start,
           error: err instanceof Error ? err.message : String(err),
         });
+        deps.debugLog?.error('McpTool', `Tool call failed: ${toolName}`, { sessionId, error: err instanceof Error ? err.message : String(err) });
         throw err;
       }
     };

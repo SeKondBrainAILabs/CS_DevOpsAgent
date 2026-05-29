@@ -23,6 +23,7 @@ import { McpSessionBinder } from './mcp/session-binder';
 import { MCP_DEFAULT_PORT_START, MCP_SERVER_HOST } from '../../shared/mcp-types';
 import { IPC } from '../../shared/ipc-channels';
 import type { McpServerStatus, McpInstallConfigStatus, McpInstallTarget } from '../../shared/mcp-types';
+import type { DebugLogService } from './DebugLogService';
 
 // Lazy imports for MCP SDK (ESM modules)
 let _McpServer: typeof import('@modelcontextprotocol/sdk/server/mcp.js').McpServer | null = null;
@@ -85,6 +86,7 @@ export interface McpServiceDeps {
     generateFeatureContract: (worktreePath: string, feature: any) => Promise<any>;
   };
   emitCommitCompleted?: (sessionId: string, hash: string, message: string, filesChanged: number) => void;
+  debugLog?: DebugLogService | null;
 }
 
 export interface McpCallLogEntry {
@@ -100,6 +102,7 @@ export class McpServerService extends BaseService {
   private httpServer: Server | null = null;
   private port: number | null = null;
   private startedAt: string | null = null;
+  private debugLog: DebugLogService | null = null;
 
   // Per-connection transports (stateful mode) — keyed by mcp-session-id
   private transports = new Map<
@@ -128,6 +131,10 @@ export class McpServerService extends BaseService {
   /** Inject DatabaseService reference for persistent MCP call logging */
   setMcpCallDb(db: { recordMcpCall: (entry: any) => void; getMcpCalls: (limit?: number, sessionId?: string) => any[] }): void {
     this._dbService = db;
+  }
+
+  setDebugLog(debugLog: DebugLogService): void {
+    this.debugLog = debugLog;
   }
 
   getMcpCallLog(limit = 200): McpCallLogEntry[] {
@@ -186,6 +193,10 @@ export class McpServerService extends BaseService {
 
   setContractGenerationService(svc: McpServiceDeps['contractGenerationService']): void {
     this.deps.contractGenerationService = svc;
+  }
+
+  setDebugLogDep(debugLog: DebugLogService): void {
+    this.deps.debugLog = debugLog;
   }
 
   getDeps(): McpServiceDeps {
@@ -362,6 +373,7 @@ export class McpServerService extends BaseService {
 
     // Unknown or expired session — return a JSON-RPC error so the client can
     // cleanly reinitialize rather than getting a deserialization error.
+    this.debugLog?.warn('McpServer', 'Expired/unknown session — client must reinitialize', { sessionId });
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       jsonrpc: '2.0',
@@ -450,7 +462,7 @@ export class McpServerService extends BaseService {
     try {
       await transport.handleRequest(req, res);
     } finally {
-      try { await (transport as any).close?.(); } catch { /* ignore */ }
+      try { await (transport as any).close?.(); } catch { this.debugLog?.warn('McpServer', 'Stateless RPC transport close error', {}); }
     }
   }
 
@@ -531,6 +543,7 @@ export class McpServerService extends BaseService {
 
     if (cleaned > 0) {
       console.log(`[McpServerService] Cleaned ${cleaned} stale session(s) (${this.transports.size + this.sseTransports.size} active)`);
+      this.debugLog?.info('McpServer', `Cleaned ${cleaned} stale session(s)`, { remaining: this.transports.size + this.sseTransports.size });
     }
   }
 

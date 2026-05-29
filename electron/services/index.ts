@@ -233,6 +233,7 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   const autoUpdate = new AutoUpdateService();
   autoUpdate.setMainWindow(mainWindow);
   autoUpdate.initialize();
+  autoUpdate.setDebugLog(debugLog);
 
   // Initialize Worker Bridge service
   // Spawns a utility process for file monitoring, rebase polling, heartbeat tracking
@@ -286,8 +287,10 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   mcpServer.setAgentInstanceService(agentInstance);
   mcpServer.setDatabaseService(databaseService);
   mcpServer.setMcpCallDb(databaseService);
+  mcpServer.setDebugLogDep(debugLog);
   await mcpServer.initialize();
   mcpServer.wireCommitEmitter();
+  mcpServer.setDebugLog(debugLog);
   console.log('[Services] MCP server initialized on port', mcpServer.getPort());
 
   // Initialize Seed Data Execution service
