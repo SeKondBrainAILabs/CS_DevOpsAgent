@@ -5,6 +5,11 @@ All notable changes to s9n-devops-agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.6] - 2026-05-29
+
+### Changed
+- Version bump to validate auto-update notification flow end-to-end.
+
 ## [2.6.5] - 2026-05-29
 
 ### Added
