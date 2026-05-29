@@ -309,6 +309,10 @@ export class MergeService extends BaseService {
     targetBranch: string
   ): Promise<IpcResult<MergePreview>> {
     return this.wrap(async () => {
+      // Strip 'origin/' prefix — branch names may be stored as 'origin/main'
+      // from the branch picker dropdown which lists remote tracking branches.
+      targetBranch = targetBranch.replace(/^origin\//, '');
+
       // Fetch latest from remote
       await this.git(['fetch', 'origin'], repoPath);
 
@@ -474,6 +478,10 @@ export class MergeService extends BaseService {
     } = {}
   ): Promise<IpcResult<MergeResult>> {
     return this.wrap(async () => {
+      // Strip 'origin/' prefix — branch names may be stored as 'origin/main'
+      // from the branch picker dropdown which lists remote tracking branches.
+      targetBranch = targetBranch.replace(/^origin\//, '');
+
       let didStash = false;
 
       // Ensure .S9N_KIT_DevOpsAgent/ is in .gitignore of the target repo

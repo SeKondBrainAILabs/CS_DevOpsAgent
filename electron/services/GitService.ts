@@ -357,13 +357,18 @@ export class GitService extends BaseService {
         const match = line.match(/^\*?\s+(\S+)\s+(\S+)/);
         if (match) {
           const [, name, lastCommit] = match;
-          // Skip remotes/origin/ prefix for remote branches
-          const cleanName = name.replace('remotes/origin/', '');
+          const isRemote = name.startsWith('remotes/');
+          // Strip 'remotes/origin/' or 'origin/' prefix so remote tracking
+          // branches never appear in the list as 'origin/main'.
+          const cleanName = name.replace(/^remotes\/origin\//, '').replace(/^origin\//, '');
+
+          // Skip HEAD pointer entries (e.g. remotes/origin/HEAD -> origin/main)
+          if (cleanName === 'HEAD') continue;
 
           branches.push({
             name: cleanName,
             current: isCurrent,
-            remote: name.startsWith('remotes/') ? 'origin' : undefined,
+            remote: isRemote ? 'origin' : undefined,
             lastCommit,
           });
         }
