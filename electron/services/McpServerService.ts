@@ -61,6 +61,9 @@ export interface McpServiceDeps {
     push: (sessionId: string, repoName?: string) => Promise<any>;
     getStatus: (sessionId: string) => Promise<any>;
     getCommitHistory: (repoPath: string, baseBranch?: string, limit?: number) => Promise<any>;
+    // Current branch of a worktree path; null when detached HEAD. Used by the
+    // MCP worktree-divergence guards (injectable so it's mockable in tests).
+    getCurrentBranch?: (worktreePath: string) => Promise<string | null>;
   };
   activityService?: {
     log: (sessionId: string, type: string, message: string, details?: Record<string, unknown>) => void;

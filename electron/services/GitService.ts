@@ -381,6 +381,19 @@ export class GitService extends BaseService {
   }
 
   /**
+   * Current branch of a worktree path. Returns null when HEAD is detached
+   * (or on error). Used by the MCP worktree-divergence guards.
+   */
+  async getCurrentBranch(worktreePath: string): Promise<string | null> {
+    try {
+      const out = await this.git(['symbolic-ref', '--short', '-q', 'HEAD'], worktreePath);
+      return out.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Check if path is inside a git repository
    */
   async isGitRepo(repoPath: string): Promise<boolean> {

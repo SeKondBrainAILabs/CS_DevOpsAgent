@@ -62,6 +62,8 @@ describe('MCP Tools', () => {
           { hash: 'abc123', shortHash: 'abc123', message: 'feat: add feature', author: 'test', date: '2026-01-01', filesChanged: 2 },
         ],
       }),
+      // Worktree-divergence guard: report the worktree is on the expected session branch.
+      getCurrentBranch: (jest.fn() as any).mockResolvedValue('feat/test'),
     };
 
     mockActivityService = { log: jest.fn() };
@@ -109,6 +111,13 @@ describe('MCP Tools', () => {
   function callTool(name: string, args: Record<string, any>) {
     const tool = registeredTools.get(name);
     if (!tool) throw new Error(`Tool ${name} not registered`);
+    // Mutating tools now require `cwd` (the agent's working directory). Default it
+    // to the session's registered worktree so existing tests model a well-behaved
+    // agent that's in the right place; divergence tests pass an explicit cwd.
+    if (args.cwd === undefined && args.session_id) {
+      const wt = binder.getWorktreePathForRepo(args.session_id, args.repo);
+      if (wt) args = { ...args, cwd: wt };
+    }
     return tool.handler(args);
   }
 
@@ -198,6 +207,81 @@ describe('MCP Tools', () => {
         expect.stringContaining('Committed'),
         expect.objectContaining({ source: 'mcp' })
       );
+    });
+  });
+
+  // ==========================================================================
+  // Worktree-divergence guards (Layers 1+2)
+  // ==========================================================================
+  describe('worktree-divergence guards', () => {
+    it('rejects kit_commit when cwd is not the session worktree (WRONG_WORKTREE)', async () => {
+      const result = await callTool('kit_commit', {
+        session_id: 'sess_test_123',
+        message: 'feat: from the wrong place',
+        cwd: '/tmp/some-other-clone',
+      });
+      const data = parseResult(result);
+      expect(result.isError).toBe(true);
+      expect(data.error).toBe('WRONG_WORKTREE');
+      expect(data.expected_worktree).toBe('/tmp/worktree-test');
+      expect(data.your_cwd).toBe('/tmp/some-other-clone');
+      // The commit must NOT have been performed.
+      expect(mockGitService.commit).not.toHaveBeenCalled();
+    });
+
+    it('rejects kit_commit when the worktree is on the wrong branch (WRONG_BRANCH)', async () => {
+      (mockGitService.getCurrentBranch as jest.Mock).mockResolvedValueOnce('some-other-branch');
+      const result = await callTool('kit_commit', {
+        session_id: 'sess_test_123',
+        message: 'feat: wrong branch',
+      });
+      const data = parseResult(result);
+      expect(result.isError).toBe(true);
+      expect(data.error).toBe('WRONG_BRANCH');
+      expect(data.expected_branch).toBe('feat/test');
+      expect(data.your_branch).toBe('some-other-branch');
+      expect(mockGitService.commit).not.toHaveBeenCalled();
+    });
+
+    it('rejects kit_commit when the worktree is in detached HEAD (DETACHED_HEAD)', async () => {
+      (mockGitService.getCurrentBranch as jest.Mock).mockResolvedValueOnce(null);
+      const result = await callTool('kit_commit', {
+        session_id: 'sess_test_123',
+        message: 'feat: detached',
+      });
+      const data = parseResult(result);
+      expect(result.isError).toBe(true);
+      expect(data.error).toBe('DETACHED_HEAD');
+      expect(mockGitService.commit).not.toHaveBeenCalled();
+    });
+
+    it('allows kit_commit when cwd matches the worktree and branch is correct', async () => {
+      const result = await callTool('kit_commit', {
+        session_id: 'sess_test_123',
+        message: 'feat: correct location',
+      });
+      const data = parseResult(result);
+      expect(result.isError).toBeFalsy();
+      expect(data.commitHash).toBe('abc123def456');
+      expect(mockGitService.commit).toHaveBeenCalled();
+    });
+
+    it('rejects kit_lock_file on directory mismatch but does not require a branch', async () => {
+      (mockGitService.getCurrentBranch as jest.Mock).mockResolvedValue('any-branch');
+      const wrong = await callTool('kit_lock_file', {
+        session_id: 'sess_test_123',
+        files: ['src/x.ts'],
+        cwd: '/tmp/elsewhere',
+      });
+      expect(wrong.isError).toBe(true);
+      expect(parseResult(wrong).error).toBe('WRONG_WORKTREE');
+
+      // Right directory, "wrong" branch — lock is still allowed (coordination, not commit).
+      const ok = await callTool('kit_lock_file', {
+        session_id: 'sess_test_123',
+        files: ['src/x.ts'],
+      });
+      expect(ok.isError).toBeFalsy();
     });
   });
 

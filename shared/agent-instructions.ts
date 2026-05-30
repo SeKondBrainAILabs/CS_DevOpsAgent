@@ -185,13 +185,17 @@ EOF
 ### Available MCP Tools
 | Tool | Parameters | Description |
 |------|-----------|-------------|
-| \`kit_commit\` | session_id, message, push (optional) | Stage + commit + record + push |
+| \`kit_commit\` | session_id, message, **cwd**, push (optional) | Stage + commit + record + push |
+| \`kit_commit_all\` | session_id, message, **cwd**, push (optional) | Commit across all repos (multi-repo) |
 | \`kit_get_session_info\` | session_id | Session config and metadata |
 | \`kit_log_activity\` | session_id, type, message | Log to KIT dashboard timeline |
-| \`kit_lock_file\` | session_id, files | Declare file edit intent |
+| \`kit_lock_file\` | session_id, files, **cwd** | Declare file edit intent |
 | \`kit_unlock_file\` | session_id, files | Release file locks |
 | \`kit_get_commit_history\` | session_id | Recent commits for session branch |
-| \`kit_request_review\` | session_id, summary | Signal work ready for review |
+| \`kit_request_review\` | session_id, summary, **cwd** | Signal work ready for review |
+
+⚠️ **\`cwd\` is REQUIRED on \`kit_commit\`, \`kit_commit_all\`, \`kit_lock_file\`, and \`kit_request_review\`.**
+Pass the output of \`pwd\` (your current shell directory). KIT verifies it matches this session's worktree (\`${vars.repoPath}\`) AND that the worktree is on branch \`${vars.branchName || 'YOUR_SESSION_BRANCH'}\`. If you have \`cd\`'d elsewhere or run \`git checkout\`/detached HEAD, the call is **rejected** with a correction message — your work would otherwise be committed to the wrong place or lost. Always \`cd\` back into the worktree and stay on your session branch before committing.
 
 ### ⚠️ FALLBACK: If MCP tools are NOT in your available tools list
 If the \`kit_commit\` MCP tool is not listed in your tools (MCP connection failed):
@@ -235,12 +239,13 @@ ${vars.multiRepoEntries.map(r => `| ${r.repoName} | ${r.role} | ${r.branchName} 
 ### Multi-Repo MCP Tools (these are MCP protocol tools, NOT bash commands)
 | Tool | Extra Parameters | Description |
 |------|-----------------|-------------|
-| \`kit_commit\` | repo (optional) | Commit in a specific repo |
-| \`kit_commit_all\` | — | Commit across ALL repos at once |
-| \`kit_lock_file\` | repo (optional) | Lock files in a specific repo |
+| \`kit_commit\` | **cwd**, repo (optional) | Commit in a specific repo |
+| \`kit_commit_all\` | **cwd** | Commit across ALL repos at once |
+| \`kit_lock_file\` | **cwd**, repo (optional) | Lock files in a specific repo |
 | \`kit_get_commit_history\` | repo (optional) | History for a specific repo |
 
 When no \`repo\` parameter is specified, operations target the **primary** repo.
+⚠️ \`cwd\` (output of \`pwd\`) is REQUIRED on \`kit_commit\`/\`kit_commit_all\`/\`kit_lock_file\`. KIT rejects the call if you are not in the correct worktree on the correct branch.
 
 ### ⚠️ Branch naming — read carefully
 - **Primary repo**: use the branch name shown in the table above — do NOT invent or rename it.
@@ -332,6 +337,7 @@ EOF
 ## 4. COMMITS${vars.mcpUrl ? `
 🔧 **PREFERRED: Use MCP tool \`kit_commit\`** (NOT a bash command — MCP protocol only)
 **session_id for all MCP calls: \`${vars.sessionId}\`**
+⚠️ **\`kit_commit\`, \`kit_commit_all\`, \`kit_lock_file\`, \`kit_request_review\` REQUIRE a \`cwd\` parameter** — pass the output of \`pwd\`. KIT verifies it equals this session's worktree (\`${vars.repoPath}\`) on branch \`${vars.branchName || 'YOUR_SESSION_BRANCH'}\` and REJECTS the call otherwise. Never commit from a different directory or after \`git checkout\` to another branch — \`cd\` back first.
 
 ### ⚠️ FALLBACK: If MCP tools are not available` : ''}
 \`\`\`bash
