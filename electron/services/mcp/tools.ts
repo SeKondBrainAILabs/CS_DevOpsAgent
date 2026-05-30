@@ -40,18 +40,28 @@ export function registerTools(
   // Cast to any to avoid TS compiler OOM from complex zod+MCP generic inference
   const srv: any = server;
 
-  /** Wrap a tool handler to log timing and success/failure */
+  // Tools that change state — their calls are logged to the session activity feed
+  const STATE_CHANGING_TOOLS = new Set([
+    'kit_commit', 'kit_commit_all', 'kit_lock_file', 'kit_unlock_file', 'kit_request_review',
+  ]);
+
+  /** Wrap a tool handler to log timing, success/failure, and surface errors to the activity feed */
   function withCallLog<T extends Record<string, any>>(
     toolName: string,
     handler: (args: T) => Promise<any>
   ): (args: T) => Promise<any> {
-    if (!callLogger) return handler;
     return async (args: T) => {
       const start = Date.now();
       const sessionId = (args as any).session_id || 'unknown';
+
+      // Log state-changing tool calls to the activity feed so they're visible in KIT
+      if (STATE_CHANGING_TOOLS.has(toolName) && sessionId !== 'unknown') {
+        deps.activityService?.log(sessionId, 'git', `MCP › ${toolName}`, { source: 'mcp', toolName });
+      }
+
       try {
         const result = await handler(args);
-        callLogger.addCallLogEntry({
+        callLogger?.addCallLogEntry({
           timestamp: new Date().toISOString(),
           toolName,
           sessionId,
@@ -60,15 +70,23 @@ export function registerTools(
         });
         return result;
       } catch (err) {
-        callLogger.addCallLogEntry({
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        callLogger?.addCallLogEntry({
           timestamp: new Date().toISOString(),
           toolName,
           sessionId,
           success: false,
           durationMs: Date.now() - start,
-          error: err instanceof Error ? err.message : String(err),
+          error: errorMsg,
         });
-        deps.debugLog?.error('McpTool', `Tool call failed: ${toolName}`, { sessionId, error: err instanceof Error ? err.message : String(err) });
+        deps.debugLog?.error('McpTool', `Tool call failed: ${toolName}`, { sessionId, error: errorMsg });
+        // Always surface exceptions to the activity feed regardless of tool type
+        if (sessionId !== 'unknown') {
+          deps.activityService?.log(sessionId, 'error', `MCP error › ${toolName}: ${errorMsg}`, {
+            source: 'mcp',
+            toolName,
+          });
+        }
         throw err;
       }
     };
@@ -173,9 +191,9 @@ export function registerTools(
           }
         }
 
-        // 3. Link activity
+        // 3. Link activity — update the "MCP › kit_commit" entry with commit details
         if (deps.activityService) {
-          deps.activityService.log(session_id, 'git', `Committed: ${message}`, {
+          deps.activityService.log(session_id, 'git', `Committed [${shortHash}]: ${message}`, {
             commitHash: hash,
             shortHash,
             filesChanged,
@@ -184,14 +202,24 @@ export function registerTools(
           });
         }
 
-        // 4. Optional push
+        // 4. Optional push — capture failure reason so agent knows exactly what went wrong
         let pushed = false;
+        let pushError: string | undefined;
         if (push) {
           try {
             const pushResult = await deps.gitService.push(session_id, repo);
             pushed = pushResult.success === true;
-          } catch {
-            // Push failure is non-fatal
+            if (!pushed) {
+              pushError = pushResult.error?.message || 'Push returned failure';
+            }
+          } catch (err) {
+            pushError = err instanceof Error ? err.message : 'Push threw an error';
+          }
+          if (!pushed && pushError) {
+            deps.activityService?.log(session_id, 'warning',
+              `Push failed after commit [${shortHash}]: ${pushError}`,
+              { commitHash: hash, pushError, repo, source: 'mcp' }
+            );
           }
         }
 
@@ -201,7 +229,7 @@ export function registerTools(
         // 6. Post-commit contract check (fire-and-forget)
         triggerContractCheck(session_id, worktree, hash).catch(() => {});
 
-        const result = {
+        const result: Record<string, unknown> = {
           commitHash: hash,
           shortHash,
           message,
@@ -209,10 +237,13 @@ export function registerTools(
           pushed,
           repo: repo || undefined,
         };
+        // Always tell the agent why push failed — it needs this to decide next steps
+        if (pushError) result.pushError = pushError;
 
         return { content: [{ type: 'text', text: JSON.stringify(result) }] };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Commit failed';
+        deps.activityService?.log(session_id, 'error', `Commit failed: ${errorMsg}`, { source: 'mcp' });
         return { content: [{ type: 'text', text: JSON.stringify({ error: errorMsg }) }] };
       }
     })
@@ -277,21 +308,35 @@ export function registerTools(
             });
           }
 
-          // Optional push
+          // Optional push — capture failure reason
           let pushed = false;
+          let pushError: string | undefined;
           if (push) {
             try {
               const pushResult = await deps.gitService.push(session_id, repoName);
               pushed = pushResult.success === true;
-            } catch { /* non-fatal */ }
+              if (!pushed) pushError = pushResult.error?.message || 'Push returned failure';
+            } catch (err) {
+              pushError = err instanceof Error ? err.message : 'Push threw an error';
+            }
+            if (!pushed && pushError) {
+              deps.activityService?.log(session_id, 'warning',
+                `Push failed (${repo.repoName}): ${pushError}`,
+                { commitHash: hash, pushError, repo: repo.repoName, source: 'mcp' }
+              );
+            }
           }
 
           // Post-commit contract check
           triggerContractCheck(session_id, repo.worktreePath, hash).catch(() => {});
 
-          results.push({ repoName: repo.repoName, commitHash: hash, filesChanged, pushed });
+          const repoResult: Record<string, unknown> = { repoName: repo.repoName, commitHash: hash, filesChanged, pushed };
+          if (pushError) repoResult.pushError = pushError;
+          results.push(repoResult as any);
         } catch (err) {
-          results.push({ repoName: repo.repoName, error: err instanceof Error ? err.message : 'Failed' });
+          const errMsg = err instanceof Error ? err.message : 'Failed';
+          deps.activityService?.log(session_id, 'error', `Commit failed (${repo.repoName}): ${errMsg}`, { source: 'mcp' });
+          results.push({ repoName: repo.repoName, error: errMsg });
         }
       }
 
@@ -405,6 +450,13 @@ export function registerTools(
           : [];
 
         if (conflicts.length > 0) {
+          const conflictSummary = conflicts.map((c: any) =>
+            `${c.file || c.filePath} (held by ${c.heldBy || c.agentType || 'unknown session'})`
+          ).join(', ');
+          deps.activityService?.log(session_id, 'warning',
+            `File lock conflict: ${conflictSummary}`,
+            { files, conflicts, source: 'mcp' }
+          );
           return {
             content: [{
               type: 'text',
@@ -472,9 +524,13 @@ export function registerTools(
           await deps.lockService.releaseFiles(session_id);
         }
 
+        const unlockedLabel = files ? files.join(', ') : 'all files';
+        deps.activityService?.log(session_id, 'git', `Unlocked: ${unlockedLabel}`, { files, source: 'mcp' });
         return { content: [{ type: 'text', text: JSON.stringify({ unlocked: true, files: files || 'all' }) }] };
       } catch (err) {
-        return { content: [{ type: 'text', text: JSON.stringify({ error: err instanceof Error ? err.message : 'Unlock failed' }) }] };
+        const errMsg = err instanceof Error ? err.message : 'Unlock failed';
+        deps.activityService?.log(session_id, 'error', `Unlock failed: ${errMsg}`, { source: 'mcp' });
+        return { content: [{ type: 'text', text: JSON.stringify({ error: errMsg }) }] };
       }
     })
   );
