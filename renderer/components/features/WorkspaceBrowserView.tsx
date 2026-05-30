@@ -26,6 +26,7 @@ import {
 } from '../../../shared/repo-sort';
 import type { RepoStatusBlock } from './RepoStatusCard';
 import { AddWorkspaceDialog } from './AddWorkspaceDialog';
+import { StaleBranchesDialog } from './StaleBranchesDialog';
 import { useUIStore } from '../../store/uiStore';
 
 function formatGiB(bytes: number): string {
@@ -418,6 +419,7 @@ interface RepoInsightRowProps {
   openRepoDetail: (path: string) => void;
   openCreateAgentWizardForRepo: (path: string) => void;
   openCreateAgentWizardWithTask: (path: string, task: string) => void;
+  onOpenBranchCleanup: (repoPath: string) => void;
 }
 
 interface ResolveCommand {
@@ -450,7 +452,7 @@ function parseResolveCommands(text: string): ResolveCommand[] {
 
 function RepoInsightRow({
   repo, index, status, healthSnapshot, isLast,
-  openRepoDetail, openCreateAgentWizardForRepo, openCreateAgentWizardWithTask,
+  openRepoDetail, openCreateAgentWizardForRepo, openCreateAgentWizardWithTask, onOpenBranchCleanup,
 }: RepoInsightRowProps): React.ReactElement {
   const [expanded, setExpanded] = useState(false);
   const [resolveOpen, setResolveOpen] = useState(false);
@@ -660,6 +662,7 @@ COMMAND: git <command here>`;
           <button type="button" onClick={() => window.api.shell?.openVSCode?.(repo.path)} className="kb-btn-sm" data-testid={`repo-row-ide-${index}`}>IDE</button>
           <button type="button" onClick={() => window.api.shell?.openTerminal?.(repo.path)} className="kb-btn-sm" data-testid={`repo-row-terminal-${index}`}>Terminal</button>
           <button type="button" onClick={() => openCreateAgentWizardForRepo(repo.path)} className="kb-btn-sm" data-testid={`repo-row-session-${index}`}>New session</button>
+          <button type="button" onClick={() => onOpenBranchCleanup(repo.path)} className="kb-btn-sm" data-testid={`repo-row-branches-${index}`} title="View and clean up stale branches">Branches</button>
           {hasIssues && (
             <button
               type="button"
@@ -873,6 +876,8 @@ export function WorkspaceBrowserView(): React.ReactElement {
   const [recentReposFallback, setRecentReposFallback] = useState<DiscoveredRepo[]>([]);
   // Tab state
   const [activeTab, setActiveTab] = useState<'repos' | 'workflow' | 'storage'>('repos');
+  // Stale branches cleanup dialog
+  const [staleBranchesRepoPath, setStaleBranchesRepoPath] = useState<string | null>(null);
   // Worktree safety info keyed by worktree path
   const [worktreeSafetyByPath, setWorktreeSafetyByPath] = useState<Map<string, WorktreeSafetyInfo>>(new Map());
   const [worktreeSafetyLoadingPaths, setWorktreeSafetyLoadingPaths] = useState<Set<string>>(new Set());
@@ -1864,6 +1869,7 @@ export function WorkspaceBrowserView(): React.ReactElement {
                       openRepoDetail={openRepoDetail}
                       openCreateAgentWizardForRepo={openCreateAgentWizardForRepo}
                       openCreateAgentWizardWithTask={openCreateAgentWizardWithTask}
+                      onOpenBranchCleanup={(path) => setStaleBranchesRepoPath(path)}
                     />
                   ))}
                 </div>
@@ -2188,6 +2194,14 @@ export function WorkspaceBrowserView(): React.ReactElement {
         onClose={() => setShowAdd(false)}
         onAdded={() => { void refreshWorkspaces(); }}
       />
+
+      {/* Stale branches cleanup dialog */}
+      {staleBranchesRepoPath && (
+        <StaleBranchesDialog
+          repoPath={staleBranchesRepoPath}
+          onClose={() => setStaleBranchesRepoPath(null)}
+        />
+      )}
     </div>
   );
 }
