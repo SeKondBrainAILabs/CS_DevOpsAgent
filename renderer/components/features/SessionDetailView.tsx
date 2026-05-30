@@ -109,7 +109,9 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
   const [syncResult, setSyncResult] = useState<{ success: boolean; message: string } | null>(null);
   const [showErrorPopup, setShowErrorPopup] = useState(false);
   const [editingBaseBranch, setEditingBaseBranch] = useState(false);
-  const [branches, setBranches] = useState<string[]>([]);
+  const [branches, setBranches] = useState<string[]>([]);       // primary branches only
+  const [allBranches, setAllBranches] = useState<string[]>([]);  // full list for advanced dialog
+  const [showAdvancedBranches, setShowAdvancedBranches] = useState(false);
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [aiHealth, setAiHealth] = useState<{ online: boolean; configured: boolean; error?: string } | null>(null);
   const showConflictDialog = useConflictStore((state) => state.showDialog);
@@ -292,9 +294,12 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
             /^(codex|cursor|copilot|aider|warp|cline)-session-/.test(b);
           const all = result.data.branches.filter(b => !isSessionBranch(b));
           const primaries = PRIMARY.filter(b => all.includes(b));
-          const others = all.filter(b => !PRIMARY.includes(b));
-          // Primaries first, then up to 5 most-recent others (alphabetical fallback)
-          setBranches([...primaries, ...others.slice(0, 5)]);
+          // Default picker: primary branches only (+ current if not already in list)
+          const currentBase = session.baseBranch || 'main';
+          const primaryList = primaries.includes(currentBase)
+            ? primaries : [currentBase, ...primaries];
+          setBranches(primaryList);
+          setAllBranches(all); // full list available for advanced dialog
         }
       }
     } catch (err) {
@@ -442,17 +447,45 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
             {/* Base Branch Selector + Sync Button */}
             <div className="flex items-center gap-1">
               {editingBaseBranch ? (
-                <select
-                  value={session.baseBranch || 'main'}
-                  onChange={(e) => handleBaseBranchChange(e.target.value)}
-                  onBlur={() => setEditingBaseBranch(false)}
-                  autoFocus
-                  className="px-2 py-1.5 rounded-full text-xs font-mono bg-surface-tertiary border border-[rgba(0,0,0,0.10)] text-text-primary focus:outline-none focus:ring-1 focus:ring-blue-500 max-w-[140px]"
-                >
-                  {branches.map((branch) => (
-                    <option key={branch} value={branch}>{branch}</option>
-                  ))}
-                </select>
+                <>
+                  <select
+                    value={session.baseBranch || 'main'}
+                    onChange={(e) => {
+                      if (e.target.value === '__advanced__') {
+                        setShowAdvancedBranches(true);
+                      } else {
+                        handleBaseBranchChange(e.target.value);
+                      }
+                    }}
+                    onBlur={() => setEditingBaseBranch(false)}
+                    autoFocus
+                    className="px-2 py-1.5 rounded-full text-xs font-mono bg-surface-tertiary border border-[rgba(0,0,0,0.10)] text-text-primary focus:outline-none focus:ring-1 focus:ring-blue-500 max-w-[140px]"
+                  >
+                    {branches.map((branch) => (
+                      <option key={branch} value={branch}>{branch}</option>
+                    ))}
+                    <option disabled>──────────</option>
+                    <option value="__advanced__">Advanced…</option>
+                  </select>
+                  {/* Advanced branch dialog */}
+                  {showAdvancedBranches && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20" onClick={() => setShowAdvancedBranches(false)}>
+                      <div className="bg-white rounded-2xl shadow-xl border border-[rgba(0,0,0,0.10)] p-4 w-72 max-h-96 overflow-y-auto" onClick={e => e.stopPropagation()}>
+                        <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">All branches</p>
+                        {allBranches.map(branch => (
+                          <button
+                            key={branch}
+                            onClick={() => { setShowAdvancedBranches(false); handleBaseBranchChange(branch); }}
+                            className="w-full text-left px-3 py-2 text-sm font-mono rounded-lg hover:bg-surface-secondary transition-colors text-text-primary"
+                          >
+                            {branch}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+
               ) : (
                 <button
                   onClick={handleEditBaseBranch}

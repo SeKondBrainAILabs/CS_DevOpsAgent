@@ -49,7 +49,9 @@ export function MergeWorkflowModal({
 }: MergeWorkflowModalProps): React.ReactElement | null {
   const [step, setStep] = useState<Step>('preview');
   const [targetBranch, setTargetBranch] = useState(initialTargetBranch.replace(/^origin\//, ''));
-  const [branches, setBranches] = useState<BranchInfo[]>([]);
+  const [branches, setBranches] = useState<string[]>([]);       // primary branches only
+  const [allBranches, setAllBranches] = useState<string[]>([]);  // full list for advanced dialog
+  const [showAdvancedBranches, setShowAdvancedBranches] = useState(false);
   const [preview, setPreview] = useState<MergePreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,6 +134,8 @@ export function MergeWorkflowModal({
       setError(null);
       setMergeResult(null);
       setBranches([]);
+      setAllBranches([]);
+      setShowAdvancedBranches(false);
       setProgressLog([]);
       setActualBranch(sourceBranch);
       return;
@@ -168,7 +172,7 @@ export function MergeWorkflowModal({
 
       setActualBranch(resolvedBranch);
 
-      // Step 2: Load branches list — primaries first, filter out session/remote branches
+      // Step 2: Load branches list — primaries only by default, full list for Advanced dialog
       if (window.api?.git?.branches && repoPath) {
         const result = await window.api.git.branches(repoPath);
         if (result.success && result.data) {
@@ -176,12 +180,15 @@ export function MergeWorkflowModal({
           const isSessionBranch = (name: string) =>
             name.startsWith('origin/') || name.startsWith('remotes/') ||
             /^(codex|cursor|copilot|aider|warp|cline)-session-/.test(name);
-          const filtered = result.data.filter(b =>
-            b.name !== resolvedBranch && b.name !== sourceBranch && !isSessionBranch(b.name)
-          );
-          const primaries = filtered.filter(b => PRIMARY.includes(b.name));
-          const others = filtered.filter(b => !PRIMARY.includes(b.name)).slice(0, 5);
-          setBranches([...primaries, ...others]);
+          const filtered = result.data
+            .filter(b => b.name !== resolvedBranch && b.name !== sourceBranch && !isSessionBranch(b.name))
+            .map(b => b.name);
+          const primaries = filtered.filter(b => PRIMARY.includes(b));
+          const currentTarget = initialTargetBranch.replace(/^origin\//, '');
+          // Default picker: primary branches only (+ current target if not already in list)
+          const primaryList = primaries.includes(currentTarget) ? primaries : [currentTarget, ...primaries];
+          setBranches(primaryList);
+          setAllBranches(filtered);
         }
       }
 
@@ -509,20 +516,46 @@ export function MergeWorkflowModal({
                 <code className="text-kanvas-blue">{actualBranch}</code>
                 <span>into</span>
                 {step === 'preview' && branches.length > 0 ? (
-                  <select
-                    value={targetBranch}
-                    onChange={(e) => setTargetBranch(e.target.value)}
-                    className="px-2 py-1 rounded-[14px] bg-surface-secondary border border-[rgba(0,0,0,0.10)] text-kanvas-blue text-sm font-mono focus:outline-none focus:ring-2 focus:ring-kanvas-blue/50"
-                  >
-                    {!branches.find(b => b.name === targetBranch) && (
-                      <option value={targetBranch}>{targetBranch}</option>
+                  <>
+                    <select
+                      value={targetBranch}
+                      onChange={(e) => {
+                        if (e.target.value === '__advanced__') {
+                          setShowAdvancedBranches(true);
+                        } else {
+                          setTargetBranch(e.target.value);
+                        }
+                      }}
+                      className="px-2 py-1 rounded-[14px] bg-surface-secondary border border-[rgba(0,0,0,0.10)] text-kanvas-blue text-sm font-mono focus:outline-none focus:ring-2 focus:ring-kanvas-blue/50"
+                    >
+                      {!branches.includes(targetBranch) && (
+                        <option value={targetBranch}>{targetBranch}</option>
+                      )}
+                      {branches.map((branch) => (
+                        <option key={branch} value={branch}>
+                          {branch}
+                        </option>
+                      ))}
+                      <option value="__advanced__">Advanced…</option>
+                    </select>
+                    {/* Advanced branch dialog */}
+                    {showAdvancedBranches && (
+                      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/20" onClick={() => setShowAdvancedBranches(false)}>
+                        <div className="bg-white rounded-[18px] border border-[rgba(0,0,0,0.10)] shadow-[0_8px_24px_rgba(0,0,0,0.12)] p-4 w-72 max-h-80 overflow-y-auto" onClick={e => e.stopPropagation()}>
+                          <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">All branches</p>
+                          {allBranches.map(branch => (
+                            <button
+                              key={branch}
+                              className="w-full text-left px-3 py-2 rounded-[10px] hover:bg-surface-secondary text-sm text-text-primary font-mono transition-colors"
+                              onClick={() => { setShowAdvancedBranches(false); setTargetBranch(branch); }}
+                            >
+                              {branch}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     )}
-                    {branches.map((branch) => (
-                      <option key={branch.name} value={branch.name}>
-                        {branch.name}
-                      </option>
-                    ))}
-                  </select>
+                  </>
                 ) : (
                   <code className="text-kanvas-blue">{targetBranch}</code>
                 )}
