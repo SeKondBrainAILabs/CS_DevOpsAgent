@@ -27,6 +27,17 @@ const getDbPath = (): string => {
 export class DatabaseService extends BaseService {
   private db: Database.Database | null = null;
 
+  // Cached prepared statements — compiled once after initialize(), never per-call.
+  // Re-preparing on every hot-path call (e.g. insertActivityLog on each file event)
+  // adds unnecessary SQLite compilation overhead and blocks the main thread.
+  private stmts: {
+    insertActivityLog?: Database.Statement;
+    insertTerminalLog?: Database.Statement;
+    recordCommit?: Database.Statement;
+    recordSessionEvent?: Database.Statement;
+    linkActivities?: Database.Statement;
+  } = {};
+
   /**
    * Initialize the database connection and create tables
    */
@@ -225,17 +236,19 @@ export class DatabaseService extends BaseService {
   // ==========================================================================
 
   /**
-   * Insert an activity log entry
+   * Insert an activity log entry (uses a cached prepared statement — not re-compiled per call)
    */
   insertActivityLog(entry: ActivityLogEntry): void {
     if (!this.db) return;
 
-    const stmt = this.db.prepare(`
-      INSERT INTO activity_logs (id, session_id, timestamp, type, message, details, commit_hash, file_path)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    if (!this.stmts.insertActivityLog) {
+      this.stmts.insertActivityLog = this.db.prepare(`
+        INSERT INTO activity_logs (id, session_id, timestamp, type, message, details, commit_hash, file_path)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+    }
 
-    stmt.run(
+    this.stmts.insertActivityLog.run(
       entry.id,
       entry.sessionId,
       entry.timestamp,
@@ -547,12 +560,14 @@ export class DatabaseService extends BaseService {
   ): void {
     if (!this.db) return;
 
-    const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO commits (hash, session_id, message, timestamp, files_changed, additions, deletions, author, repo_name)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    if (!this.stmts.recordCommit) {
+      this.stmts.recordCommit = this.db.prepare(`
+        INSERT OR REPLACE INTO commits (hash, session_id, message, timestamp, files_changed, additions, deletions, author, repo_name)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+    }
 
-    stmt.run(
+    this.stmts.recordCommit.run(
       hash,
       sessionId,
       message,
@@ -701,12 +716,14 @@ export class DatabaseService extends BaseService {
     if (!this.db) return;
 
     const id = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const stmt = this.db.prepare(`
-      INSERT INTO session_history (id, session_id, event_type, timestamp, details, commit_hash)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
+    if (!this.stmts.recordSessionEvent) {
+      this.stmts.recordSessionEvent = this.db.prepare(`
+        INSERT INTO session_history (id, session_id, event_type, timestamp, details, commit_hash)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+    }
 
-    stmt.run(
+    this.stmts.recordSessionEvent.run(
       id,
       sessionId,
       eventType,

@@ -98,6 +98,11 @@ export class AgentInstanceService extends BaseService {
   private rpcServerUrl: string | null = null;
   private configService: ConfigService | null = null;
 
+  // Deferred session-state flush — avoids synchronous writeFileSync on every commit.
+  // electron-store uses fs.writeFileSync internally which blocks the main thread.
+  private sessionStatesCache: Record<string, SessionState> | null = null;
+  private sessionStatesFlushTimer: NodeJS.Timeout | null = null;
+
   /**
    * Callback invoked after a single-repo session is created.
    * Used by index.ts to register the session with MCP session binder.
@@ -2320,29 +2325,45 @@ ${DEVOPS_KIT_DIR}/
     contractChangesCount = 0,
     breakingChangesCount = 0
   ): void {
-    const states = this.store.get('sessionStates', {});
-    states[sessionId] = {
+    // Mutate the in-memory cache immediately
+    if (!this.sessionStatesCache) {
+      this.sessionStatesCache = this.store.get('sessionStates', {});
+    }
+    this.sessionStatesCache[sessionId] = {
       sessionId,
       lastProcessedCommit: commitHash,
       lastProcessedAt: new Date().toISOString(),
-      contractChangesCount: (states[sessionId]?.contractChangesCount || 0) + contractChangesCount,
-      breakingChangesCount: (states[sessionId]?.breakingChangesCount || 0) + breakingChangesCount,
+      contractChangesCount: (this.sessionStatesCache[sessionId]?.contractChangesCount || 0) + contractChangesCount,
+      breakingChangesCount: (this.sessionStatesCache[sessionId]?.breakingChangesCount || 0) + breakingChangesCount,
     };
-    this.store.set('sessionStates', states);
     console.log(`[AgentInstanceService] Updated session ${sessionId} last commit: ${commitHash.substring(0, 7)}`);
+
+    // Flush to disk at most once every 5 seconds — electron-store uses fs.writeFileSync
+    // which blocks the main thread; calling it on every commit causes ANR on busy agents.
+    if (!this.sessionStatesFlushTimer) {
+      this.sessionStatesFlushTimer = setTimeout(() => {
+        this.sessionStatesFlushTimer = null;
+        if (this.sessionStatesCache) {
+          this.store.set('sessionStates', this.sessionStatesCache);
+        }
+      }, 5_000);
+    }
   }
 
   /**
-   * Get all session states (for crash recovery check)
+   * Get all session states (for crash recovery check) — uses in-memory cache when available
    */
   getAllSessionStates(): Record<string, SessionState> {
-    return this.store.get('sessionStates', {});
+    return this.sessionStatesCache ?? this.store.get('sessionStates', {});
   }
 
   /**
    * Clear session state (when session is deleted)
    */
   clearSessionState(sessionId: string): void {
+    if (this.sessionStatesCache) {
+      delete this.sessionStatesCache[sessionId];
+    }
     const states = this.store.get('sessionStates', {});
     delete states[sessionId];
     this.store.set('sessionStates', states);

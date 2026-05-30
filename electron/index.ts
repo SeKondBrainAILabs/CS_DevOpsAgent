@@ -12,6 +12,8 @@ import { IPC } from '../shared/ipc-channels';
 
 let mainWindow: BrowserWindow | null = null;
 let services: Services | null = null;
+// Stored so it can be cleared on window close / recreate — prevents stacking intervals
+let updateCheckInterval: NodeJS.Timeout | null = null;
 
 /**
  * Check for orphaned sessions and notify the renderer
@@ -142,8 +144,12 @@ async function createWindow(): Promise<void> {
       }
     }, 3000);
 
-    // Periodic update check every 30 minutes so long-running sessions catch new releases
-    setInterval(() => {
+    // Periodic update check every 30 minutes — clear any existing interval first
+    // to prevent stacking when the window reloads (macOS dock re-open, etc.)
+    if (updateCheckInterval) {
+      clearInterval(updateCheckInterval);
+    }
+    updateCheckInterval = setInterval(() => {
       if (services?.autoUpdate) {
         services.autoUpdate.checkForUpdates().catch((err) => {
           console.warn('[Main] Periodic update check failed:', err);
@@ -194,8 +200,13 @@ async function createWindow(): Promise<void> {
     return { action: 'deny' };
   });
 
-  // Handle window close
+  // Handle window close — clear the periodic update interval so it doesn't
+  // keep firing after the window is gone or stack up on recreate
   mainWindow.on('closed', () => {
+    if (updateCheckInterval) {
+      clearInterval(updateCheckInterval);
+      updateCheckInterval = null;
+    }
     mainWindow = null;
   });
 }

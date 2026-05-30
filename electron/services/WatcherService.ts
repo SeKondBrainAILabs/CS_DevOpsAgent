@@ -332,11 +332,19 @@ export class WatcherService extends BaseService {
       }
       this.watchers.delete(sessionId);
 
-      // Clear debounce timer
+      // Clear commit debounce timer
       const timer = this.debounceTimers.get(sessionId);
       if (timer) {
         clearTimeout(timer);
         this.debounceTimers.delete(sessionId);
+      }
+
+      // Clear analysis debounce timer — must also clear here (not just dispose())
+      // so that a pending analysis doesn't fire after the session is torn down
+      const analysisTimer = this.analysisDebounceTimers.get(sessionId);
+      if (analysisTimer) {
+        clearTimeout(analysisTimer);
+        this.analysisDebounceTimers.delete(sessionId);
       }
 
       // Release all locks for this session
