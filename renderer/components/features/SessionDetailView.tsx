@@ -284,11 +284,14 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
     }
     setLoadingBranches(true);
     try {
-      // Use git.branches(sessionId) — it knows the correct repo path from the session
-      // registry and handles worktree paths properly. validateRepo had two problems:
-      // (1) it ran in the worktree path which could be detached HEAD, corrupting the list;
-      // (2) it only returned local branches visible to that specific path.
-      const result = await window.api?.git?.branches?.(session.sessionId);
+      // List branches from the ROOT repo PATH — never via git.branches(sessionId).
+      // git.branches resolves the worktree from a registry that is only populated
+      // while the session's watcher is running, so it returns nothing for idle or
+      // restored sessions (the bug that left this dropdown showing only "Advanced…").
+      // listBranchesForRepo runs `git for-each-ref refs/heads` against the path, so
+      // it always works and only ever returns local branches (no remotes, no detached).
+      const repoPath = session.repoPath || session.worktreePath;
+      const result = repoPath ? await window.api?.git?.listBranchesForRepo?.(repoPath) : undefined;
       if (result?.success && result.data) {
         const PRIMARY = ['main', 'master', 'development', 'develop', 'dev'];
         const isSessionBranch = (name: string) =>
@@ -298,8 +301,8 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
           name.startsWith('session/');
         const all = result.data
           .map(b => b.name)
-          .filter(b => !isSessionBranch(b))
-          // Deduplicate — remote-tracking names are stripped so may duplicate local names
+          .filter(b => b && !isSessionBranch(b))
+          // Deduplicate defensively
           .filter((b, i, arr) => arr.indexOf(b) === i);
         const primaries = PRIMARY.filter(b => all.includes(b));
         // Default picker: primary branches only (+ current target if not already in list)

@@ -1,6 +1,6 @@
 {
   "name": "sekondbrain-kanvas",
-  "version": "2.6.39",
+  "version": "2.6.40",
   "description": "Kanvas for Kit - AI Agent Dashboard",
   "main": "dist/electron/index.js",
   "type": "module",

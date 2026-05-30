@@ -172,9 +172,12 @@ export function MergeWorkflowModal({
 
       setActualBranch(resolvedBranch);
 
-      // Step 2: Load branches list — primaries only by default, full list for Advanced dialog
-      if (window.api?.git?.branches && repoPath) {
-        const result = await window.api.git.branches(repoPath);
+      // Step 2: Load branches list — primaries only by default, full list for Advanced dialog.
+      // Use listBranchesForRepo (PATH-based): git.branches takes a sessionId and resolves
+      // the worktree from a registry only populated while the watcher runs, so it returned
+      // nothing for idle/restored sessions (and here repoPath was wrongly passed as sessionId).
+      if (window.api?.git?.listBranchesForRepo && repoPath) {
+        const result = await window.api.git.listBranchesForRepo(repoPath);
         if (result.success && result.data) {
           const PRIMARY = ['main', 'master', 'development', 'develop', 'dev'];
           const isSessionBranch = (name: string) =>

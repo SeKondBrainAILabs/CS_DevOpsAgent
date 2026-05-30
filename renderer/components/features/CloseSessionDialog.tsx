@@ -28,17 +28,21 @@ export function CloseSessionDialog({
   const [isClosing, setIsClosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load branches
+  // Load branches from the ROOT repo PATH (not git.branches(sessionId), which
+  // resolves the worktree from a registry only populated while the watcher runs
+  // — so it returns nothing for idle/restored sessions). listBranchesForRepo is
+  // path-based and only ever returns local branches.
   useEffect(() => {
-    if (sessionId) {
-      window.api.git.branches(sessionId).then((result) => {
+    const repoPath = session?.repoPath || session?.worktreePath;
+    if (repoPath) {
+      window.api.git.listBranchesForRepo(repoPath).then((result) => {
         if (result.success && result.data) {
           const PRIMARY = ['main', 'master', 'development', 'develop', 'dev'];
           const isSessionBranch = (name: string) =>
             name.startsWith('origin/') || name.startsWith('remotes/') ||
             /^(codex|cursor|copilot|aider|warp|cline|session)-session-/.test(name) ||
             name.startsWith('session/');
-          const filtered = result.data.filter(b => !isSessionBranch(b.name)).map(b => b.name);
+          const filtered = result.data.filter(b => b.name && !isSessionBranch(b.name)).map(b => b.name);
           const primaries = filtered.filter(b => PRIMARY.includes(b));
           const currentTarget = mergeTarget.replace(/^origin\//, '');
           // Default picker: primary branches only (+ current target if not already in list)
@@ -48,7 +52,7 @@ export function CloseSessionDialog({
         }
       });
     }
-  }, [sessionId]);
+  }, [sessionId, session?.repoPath]);
 
   if (!session) {
     return <div>Session not found</div>;
