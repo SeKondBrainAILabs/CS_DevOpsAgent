@@ -802,6 +802,22 @@ const api = {
       ipcRenderer.on(IPC.ORPHANED_SESSIONS_FOUND, handler);
       return () => ipcRenderer.removeListener(IPC.ORPHANED_SESSIONS_FOUND, handler);
     },
+
+    onStaleSessionsFound: (
+      callback: (sessions: import('../shared/types').StaleSessionInfo[]) => void
+    ): (() => void) => {
+      const handler = (_event: IpcRendererEvent, sessions: import('../shared/types').StaleSessionInfo[]) => callback(sessions);
+      ipcRenderer.on(IPC.STALE_SESSIONS_FOUND, handler);
+      return () => ipcRenderer.removeListener(IPC.STALE_SESSIONS_FOUND, handler);
+    },
+
+    onStaleSessionsAutoRemoved: (
+      callback: (sessions: import('../shared/types').StaleSessionInfo[]) => void
+    ): (() => void) => {
+      const handler = (_event: IpcRendererEvent, sessions: import('../shared/types').StaleSessionInfo[]) => callback(sessions);
+      ipcRenderer.on(IPC.STALE_SESSIONS_AUTOREMOVED, handler);
+      return () => ipcRenderer.removeListener(IPC.STALE_SESSIONS_AUTOREMOVED, handler);
+    },
   },
 
   // ==========================================================================

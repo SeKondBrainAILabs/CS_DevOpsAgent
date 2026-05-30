@@ -1756,13 +1756,13 @@ export function WorkspaceBrowserView(): React.ReactElement {
 
         {/* Tab bar */}
         <div className="flex items-center gap-1.5 p-1 bg-[rgba(0,0,0,0.04)] rounded-full" style={{ margin: '0 1rem 0.75rem' }}>
-          <button type="button" className={activeTab === 'repos' ? 'bg-black text-white rounded-full px-3 py-1.5 text-xs font-medium cursor-pointer' : 'text-[rgba(0,0,0,0.45)] rounded-full px-3 py-1.5 text-xs font-medium hover:bg-[rgba(0,0,0,0.04)] cursor-pointer'} onClick={() => setActiveTab('repos')}>
+          <button type="button" data-testid="workspace-tab-repos" className={activeTab === 'repos' ? 'bg-black text-white rounded-full px-3 py-1.5 text-xs font-medium cursor-pointer' : 'text-[rgba(0,0,0,0.45)] rounded-full px-3 py-1.5 text-xs font-medium hover:bg-[rgba(0,0,0,0.04)] cursor-pointer'} onClick={() => setActiveTab('repos')}>
             Repos
           </button>
-          <button type="button" className={activeTab === 'workflow' ? 'bg-black text-white rounded-full px-3 py-1.5 text-xs font-medium cursor-pointer' : 'text-[rgba(0,0,0,0.45)] rounded-full px-3 py-1.5 text-xs font-medium hover:bg-[rgba(0,0,0,0.04)] cursor-pointer'} onClick={() => setActiveTab('workflow')}>
+          <button type="button" data-testid="workspace-tab-workflow" className={activeTab === 'workflow' ? 'bg-black text-white rounded-full px-3 py-1.5 text-xs font-medium cursor-pointer' : 'text-[rgba(0,0,0,0.45)] rounded-full px-3 py-1.5 text-xs font-medium hover:bg-[rgba(0,0,0,0.04)] cursor-pointer'} onClick={() => setActiveTab('workflow')}>
             Workflow
           </button>
-          <button type="button" className={activeTab === 'storage' ? 'bg-black text-white rounded-full px-3 py-1.5 text-xs font-medium cursor-pointer' : 'text-[rgba(0,0,0,0.45)] rounded-full px-3 py-1.5 text-xs font-medium hover:bg-[rgba(0,0,0,0.04)] cursor-pointer'} onClick={() => setActiveTab('storage')}>
+          <button type="button" data-testid="workspace-tab-storage" className={activeTab === 'storage' ? 'bg-black text-white rounded-full px-3 py-1.5 text-xs font-medium cursor-pointer' : 'text-[rgba(0,0,0,0.45)] rounded-full px-3 py-1.5 text-xs font-medium hover:bg-[rgba(0,0,0,0.04)] cursor-pointer'} onClick={() => setActiveTab('storage')}>
             Storage
           </button>
         </div>

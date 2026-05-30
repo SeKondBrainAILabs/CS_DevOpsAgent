@@ -39,6 +39,116 @@ async function checkForOrphanedSessions(svc: Services | null): Promise<void> {
   }
 }
 
+/**
+ * Startup stale-session scan.
+ *
+ * A session is "stale" when its worktree has been idle >= STALE days and is
+ * fully committed. Sessions with uncommitted/unstaged changes are intentionally
+ * skipped — they stay visible in the workspace view rather than being touched.
+ *
+ * Behavior (per product decision):
+ *   - safe   (no unmerged commits)  → auto-removed silently (worktree + local branch)
+ *   - risky  (has unmerged commits) → surfaced to the renderer for confirmation
+ */
+const STALE_SESSION_DAYS = 14;
+
+async function checkForStaleSessions(svc: Services | null): Promise<void> {
+  if (!svc || !mainWindow) return;
+
+  try {
+    const { existsSync } = await import('fs');
+    const { stat } = await import('fs/promises');
+
+    const listed = svc.agentInstance.listInstances();
+    if (!listed.success || !listed.data) return;
+
+    const safe: import('../shared/types').StaleSessionInfo[] = [];
+    const risky: import('../shared/types').StaleSessionInfo[] = [];
+
+    for (const instance of listed.data) {
+      // Never touch a session that's actively running or still spinning up.
+      if (instance.status === 'active' || instance.status === 'initializing') continue;
+
+      const worktreePath = instance.worktreePath;
+      const repoPath = instance.config?.repoPath;
+      // Only sessions with a real, separate worktree are candidates.
+      if (!worktreePath || !repoPath || worktreePath === repoPath) continue;
+      if (!existsSync(worktreePath)) continue; // missing worktrees handled by cleanup view
+
+      // Idle days from the worktree directory mtime (same signal as the
+      // abandoned-worktree classifier, keeps thresholds consistent).
+      let daysIdle = 0;
+      try {
+        const stats = await stat(worktreePath);
+        daysIdle = Math.floor((Date.now() - stats.mtime.getTime()) / (24 * 60 * 60 * 1000));
+      } catch {
+        continue;
+      }
+      if (daysIdle < STALE_SESSION_DAYS) continue;
+
+      // Fully-committed check + merge status.
+      const safetyResult = await svc.git.getWorktreeSafetyInfo(worktreePath);
+      if (!safetyResult.success || !safetyResult.data) continue;
+      const safety = safetyResult.data;
+
+      // Uncommitted/unstaged work → NOT stale. Leave it for the workspace view.
+      if (safety.hasUncommittedChanges) continue;
+
+      const info: import('../shared/types').StaleSessionInfo = {
+        sessionId: instance.sessionId || instance.id,
+        repoPath,
+        repoName: repoPath.split('/').filter(Boolean).pop() || repoPath,
+        branchName: instance.config?.branchName || '(unknown)',
+        worktreePath,
+        daysIdle,
+        unmergedCommitCount: safety.unmergedCommitCount,
+        mergedIntoBranches: safety.mergedIntoBranches,
+        safeToDelete: safety.unmergedCommitCount === 0,
+      };
+
+      if (info.safeToDelete) safe.push(info);
+      else risky.push(info);
+    }
+
+    // Auto-remove the provably-safe stale sessions (worktree + local branch).
+    const autoRemoved: import('../shared/types').StaleSessionInfo[] = [];
+    for (const session of safe) {
+      try {
+        const result = await svc.agentInstance.deleteInstanceWithCleanup(session.sessionId, {
+          deleteWorktree: true,
+          deleteLocalBranch: true,   // safe: HEAD is already merged into main/development
+          deleteRemoteBranch: false, // never touch the remote automatically
+        });
+        if (result.success) {
+          autoRemoved.push(session);
+          console.log(`[StaleScan] Auto-removed safe stale session ${session.sessionId} (${session.branchName}, idle ${session.daysIdle}d)`);
+        }
+      } catch (err) {
+        console.warn(`[StaleScan] Failed to auto-remove ${session.sessionId}:`, err);
+      }
+    }
+
+    if (autoRemoved.length > 0) {
+      svc.terminalLog.logSystem(
+        `[StaleScan] Auto-removed ${autoRemoved.length} stale session(s) with fully-merged work`
+      );
+      mainWindow.webContents.send(IPC.STALE_SESSIONS_AUTOREMOVED, autoRemoved);
+    }
+
+    if (risky.length > 0) {
+      console.log(`[StaleScan] ${risky.length} stale session(s) have unmerged commits — prompting user`);
+      svc.terminalLog.warn(
+        `${risky.length} stale session(s) have unmerged commits and need review before removal`,
+        undefined,
+        'StaleScan'
+      );
+      mainWindow.webContents.send(IPC.STALE_SESSIONS_FOUND, risky);
+    }
+  } catch (error) {
+    console.error('[StaleScan] Error scanning for stale sessions:', error);
+  }
+}
+
 async function createWindow(): Promise<void> {
   // Icon path differs between dev and production
   // In production, macOS uses the bundled .icns automatically
@@ -134,6 +244,13 @@ async function createWindow(): Promise<void> {
     setTimeout(async () => {
       await checkForOrphanedSessions(services);
     }, 1500);
+
+    // Scan for stale sessions (idle 14+ days, fully committed): auto-remove the
+    // safe ones, prompt for any with unmerged commits. Runs after the orphaned
+    // scan so the two don't contend for git on the same repos.
+    setTimeout(async () => {
+      await checkForStaleSessions(services);
+    }, 3000);
 
     // Check for app updates after startup (only runs in production)
     setTimeout(() => {

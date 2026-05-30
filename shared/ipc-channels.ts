@@ -184,6 +184,10 @@ export const IPC = {
   // Events
   INSTANCE_RECOVERED: 'instance:recovered',
   ORPHANED_SESSIONS_FOUND: 'recovery:orphaned-found',
+  // Stale-session startup scan: risky sessions to prompt about
+  STALE_SESSIONS_FOUND: 'recovery:stale-found',
+  // Stale-session startup scan: summary of sessions auto-removed (safe ones)
+  STALE_SESSIONS_AUTOREMOVED: 'recovery:stale-autoremoved',
 
   // ==========================================================================
   // REPO CLEANUP CHANNELS

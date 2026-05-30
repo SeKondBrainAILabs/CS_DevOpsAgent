@@ -537,6 +537,26 @@ export interface WorktreeSafetyInfo {
   mergedIntoBranches: string[];  // which of ['main','development'] contain the HEAD
 }
 
+/**
+ * A session flagged as stale by the startup scan. A session is stale when its
+ * worktree has been idle >= STALE_WORKTREE_DAYS and is fully committed (no
+ * uncommitted/unstaged changes — those keep it active and visible in the
+ * workspace view instead). `safeToDelete` is true when there are also no
+ * unmerged commits, meaning removal cannot lose work; those are auto-removed.
+ * Sessions with unmerged commits are surfaced to the user for confirmation.
+ */
+export interface StaleSessionInfo {
+  sessionId: string;
+  repoPath: string;
+  repoName: string;
+  branchName: string;
+  worktreePath: string;
+  daysIdle: number;
+  unmergedCommitCount: number;   // committed-but-unmerged work that removal would orphan
+  mergedIntoBranches: string[];  // which of ['main','development'] already contain HEAD
+  safeToDelete: boolean;         // !hasUncommittedChanges && unmergedCommitCount === 0
+}
+
 // =============================================================================
 // IPC RESULT TYPES
 // =============================================================================

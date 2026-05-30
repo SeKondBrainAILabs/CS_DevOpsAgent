@@ -155,11 +155,13 @@ describe('MCP Tools', () => {
         message: 'feat: test commit',
       });
 
+      // Signature: recordCommit(hash, sessionId, message, timestamp, { filesChanged, repoName })
       expect(mockDatabaseService.recordCommit).toHaveBeenCalledWith(
-        'sess_test_123',
         'abc123def456',
+        'sess_test_123',
         'feat: test commit',
-        3
+        expect.any(String),
+        expect.objectContaining({ filesChanged: 3 })
       );
     });
 
@@ -484,7 +486,9 @@ describe('MCP Tools', () => {
       const data = parseResult(result);
       expect(data.commitHash).toBeDefined();
       expect(data.repo).toBe('shared-lib');
-      expect(mockGitService.commit).toHaveBeenCalledWith('sess_multi_001', 'feat: update shared lib', 'shared-lib');
+      // Secondary-repo commits are prefixed with "[Upgrade From <primary>]" so the
+      // history shows which root change drove the secondary update.
+      expect(mockGitService.commit).toHaveBeenCalledWith('sess_multi_001', '[Upgrade From primary] feat: update shared lib', 'shared-lib');
     });
 
     it('should default to primary repo when no repo param', async () => {

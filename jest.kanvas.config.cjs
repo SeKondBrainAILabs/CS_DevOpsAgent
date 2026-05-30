@@ -14,6 +14,12 @@ module.exports = {
     '/node_modules/',
     '/dist/',
     '/tests/kanvas/fixtures/',
+    // These two integration suites are authored for Vitest (they `import from
+    // 'vitest'`), not Jest. Running them under Jest fails at module resolution.
+    // They belong to a separate Vitest run; ignore them here so the Jest signal
+    // stays clean.
+    '/tests/kanvas/integration/ContractGenerationE2E.test.ts$',
+    '/tests/kanvas/integration/FeatureContractsComprehensive.test.ts$',
   ],
   modulePathIgnorePatterns: [
     '<rootDir>/local_deploy/',
@@ -33,7 +39,6 @@ module.exports = {
       // even though the production build (Vite/esbuild) compiles cleanly.
       // Type safety is enforced by `npm run build`; the test runner only needs to
       // execute code. isolatedModules makes ts-jest transpile each file alone.
-      isolatedModules: true,
       tsconfig: {
         jsx: 'react-jsx',
         esModuleInterop: true,
@@ -44,6 +49,7 @@ module.exports = {
         skipLibCheck: true,
         allowSyntheticDefaultImports: true,
         allowJs: true,
+        isolatedModules: true,
         types: ['jest', '@testing-library/jest-dom', 'node'],
       },
     }],
