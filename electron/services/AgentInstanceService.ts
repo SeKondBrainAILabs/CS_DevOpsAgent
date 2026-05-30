@@ -256,10 +256,29 @@ export class AgentInstanceService extends BaseService {
       const branchResult = await execaCmd('git', ['branch', '--show-current'], { cwd: repoPath });
       const currentBranch = branchResult.stdout.trim() || 'HEAD';
 
-      // Get local branches only — remote tracking refs (origin/main) must never be
-      // stored as baseBranch since they cause double-prefix bugs throughout git ops.
-      const branchesResult = await execaCmd('git', ['branch', '--format=%(refname:short)'], { cwd: repoPath });
-      const branches = branchesResult.stdout.split('\n').filter(Boolean);
+      // Branch candidates for the base-branch picker. We include BOTH local heads
+      // and remote branches (with the remote prefix stripped) so that primaries like
+      // main/development are always offerable — even when the local checkout is in a
+      // detached HEAD state or simply lacks a local main (only origin/main exists).
+      // `git branch -b <new> origin/main` works fine, so these are valid bases.
+      const localResult = await execaCmd('git', ['branch', '--format=%(refname:short)'], { cwd: repoPath });
+      const localBranches = localResult.stdout.split('\n').map(s => s.trim()).filter(Boolean);
+
+      let remoteBranches: string[] = [];
+      try {
+        const remoteBranchResult = await execaCmd('git', ['branch', '-r', '--format=%(refname:short)'], { cwd: repoPath });
+        remoteBranches = remoteBranchResult.stdout.split('\n').map(s => s.trim()).filter(Boolean)
+          .filter(b => !b.includes('HEAD'))        // skip the 'origin/HEAD -> origin/main' pointer
+          .map(b => b.replace(/^[^/]+\//, ''));     // strip the remote name (origin/) prefix
+      } catch {
+        // No remote configured — local branches only.
+      }
+
+      // Merge, drop detached-HEAD pseudo-entries (e.g. "(HEAD detached at <tag>)"),
+      // and de-duplicate. The picker stores a plain branch name as the base.
+      const branches = Array.from(new Set(
+        [...localBranches, ...remoteBranches].filter(b => b && !b.startsWith('(') && !b.includes('HEAD detached'))
+      ));
 
       // Get remote URL
       let remoteUrl: string | undefined;

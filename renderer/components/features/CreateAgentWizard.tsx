@@ -159,9 +159,9 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
         if (cancelled) return;
         if (validationResult?.success && validationResult.data) {
           setRepoValidation(validationResult.data);
-          if (validationResult.data.currentBranch) {
-            setSettings((s) => ({ ...s, baseBranch: validationResult.data!.currentBranch || 'main' }));
-          }
+          // Default the base branch to the repo's current branch — but never to a
+          // detached-HEAD/"HEAD" sentinel. Fall back to a primary that actually exists.
+          setSettings((s) => ({ ...s, baseBranch: pickDefaultBaseBranch(validationResult.data!) }));
         }
 
         // Advance past the 'setup' placeholder to the correct first step
@@ -203,9 +203,7 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
     setRepoPath(path);
     setRepoValidation(validation);
     setError(null);
-    if (validation.currentBranch) {
-      setSettings(s => ({ ...s, baseBranch: validation.currentBranch || 'main' }));
-    }
+    setSettings(s => ({ ...s, baseBranch: pickDefaultBaseBranch(validation) }));
 
     // Load previous session defaults for this repo + detect submodules in parallel
     const [hasPrev] = await Promise.all([
@@ -1050,10 +1048,30 @@ function OptionButton({
 const PRIMARY_BRANCHES = ['main', 'master', 'development', 'develop', 'dev'];
 
 /** Branches that should never appear as a merge-target choice */
+/**
+ * Choose a sensible default base branch from a repo validation result.
+ * Never returns a detached-HEAD/"HEAD" sentinel: prefers the current branch when
+ * it's a real branch, otherwise the first primary that exists, otherwise 'main'.
+ */
+function pickDefaultBaseBranch(validation: { currentBranch?: string; branches?: string[] }): string {
+  const current = validation.currentBranch;
+  if (current && !isSessionOrRemoteBranch(current)) return current;
+  const branches = validation.branches ?? [];
+  const primary = PRIMARY_BRANCHES.find(b => branches.includes(b));
+  if (primary) return primary;
+  const firstReal = branches.find(b => !isSessionOrRemoteBranch(b));
+  return firstReal ?? 'main';
+}
+
 function isSessionOrRemoteBranch(b: string): boolean {
   return (
     b.startsWith('origin/') ||
     b.startsWith('remotes/') ||
+    // Detached-HEAD pseudo-entries ("(HEAD detached at <tag>)") and the bare
+    // "HEAD" sentinel are never valid base branches to commit onto.
+    b.startsWith('(') ||
+    b.includes('HEAD detached') ||
+    b === 'HEAD' ||
     /^codex-session-/.test(b) ||
     /^cursor-session-/.test(b) ||
     /^copilot-session-/.test(b) ||
@@ -1092,6 +1110,15 @@ function BaseBranchPicker({
     }
     return filtered;
   }, [cleanBranches, currentBranch]);
+
+  // Self-heal a stale/invalid selected value (e.g. a detached-HEAD string persisted
+  // by an older session config, or "HEAD") so the user always sees a real branch.
+  React.useEffect(() => {
+    if (!value || isSessionOrRemoteBranch(value)) {
+      const fallback = primaryList[0] ?? cleanBranches[0];
+      if (fallback && fallback !== value) onChange(fallback);
+    }
+  }, [value, primaryList, cleanBranches, onChange]);
 
   // If the branch list is small enough, just show all branches
   const useSimpleSelect = cleanBranches.length <= primaryList.length + 1;
