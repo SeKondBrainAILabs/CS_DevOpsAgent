@@ -247,8 +247,9 @@ export class AgentInstanceService extends BaseService {
       const branchResult = await execaCmd('git', ['branch', '--show-current'], { cwd: repoPath });
       const currentBranch = branchResult.stdout.trim() || 'HEAD';
 
-      // Get all branches
-      const branchesResult = await execaCmd('git', ['branch', '-a', '--format=%(refname:short)'], { cwd: repoPath });
+      // Get local branches only — remote tracking refs (origin/main) must never be
+      // stored as baseBranch since they cause double-prefix bugs throughout git ops.
+      const branchesResult = await execaCmd('git', ['branch', '--format=%(refname:short)'], { cwd: repoPath });
       const branches = branchesResult.stdout.split('\n').filter(Boolean);
 
       // Get remote URL
@@ -466,6 +467,10 @@ ${DEVOPS_KIT_DIR}/
    */
   async createInstance(config: AgentInstanceConfig): Promise<IpcResult<AgentInstance>> {
     try {
+      // Normalize baseBranch — strip any remote-tracking prefix so git ops never
+      // double up (e.g. 'origin/main' → 'main').
+      config = { ...config, baseBranch: (config.baseBranch || 'main').replace(/^origin\//, '') };
+
       // Validate repository first
       const validation = await this.validateRepository(config.repoPath);
       if (!validation.success || !validation.data?.isValid) {
@@ -2011,8 +2016,9 @@ ${DEVOPS_KIT_DIR}/
         };
       }
 
-      // Update the config
-      targetInstance.config.baseBranch = newBaseBranch;
+      // Update the config — normalize to strip origin/ prefix
+      const cleanedBaseBranch = newBaseBranch.replace(/^origin\//, '');
+      targetInstance.config.baseBranch = cleanedBaseBranch;
       this.instances.set(targetInstance.id, targetInstance);
       this.saveInstances();
 

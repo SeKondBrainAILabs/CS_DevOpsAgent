@@ -108,13 +108,18 @@ export function RebaseMergeErrorDialog(): React.ReactElement | null {
           setResult(false, result.data.abortReason || 'Conflict resolution aborted');
           return;
         }
+        // Rebase ran and succeeded cleanly — this is a success, not a failure
+        if (result.data.rebaseSucceededCleanly) {
+          setResult(true, 'Rebase succeeded — your branch is now up to date with no conflicts.');
+          return;
+        }
         const previewsWithApproval = (result.data.previews ?? []).map((p) => ({
           ...p,
           // Default to approved only for previews the AI actually resolved.
           approved: p.status !== 'skipped' && p.status !== 'rejected' && !!p.proposedContent,
         }));
         if (previewsWithApproval.length === 0) {
-          setResult(false, 'No conflicts found to resolve (rebase may have already succeeded).');
+          setResult(false, 'No conflict files found. Check git status manually.');
           return;
         }
         setPreviews(previewsWithApproval);

@@ -1514,7 +1514,7 @@ async function startWatchersForExistingSessions(services: Services): Promise<voi
           services.rebaseWatcher.startWatching({
             sessionId: instance.sessionId,
             repoPath: watchPath,
-            baseBranch: instance.config.baseBranch,
+            baseBranch: (instance.config.baseBranch || 'main').replace(/^origin\//, ''),
             currentBranch: instance.config.branchName,
             rebaseFrequency: rebaseFrequency as 'on-demand' | 'daily' | 'weekly',
             pollIntervalMs: 60000,

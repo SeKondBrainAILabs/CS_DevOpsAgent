@@ -2119,6 +2119,7 @@ const api = {
       metrics: unknown;
       aborted?: boolean;
       abortReason?: string;
+      rebaseSucceededCleanly?: boolean;
     }>> =>
       ipcRenderer.invoke(IPC.CONFLICT_GENERATE_PREVIEWS, repoPath, targetBranch),
 

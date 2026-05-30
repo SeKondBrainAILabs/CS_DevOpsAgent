@@ -183,6 +183,10 @@ export class RebaseWatcherService extends BaseService {
    */
   async startWatching(config: RebaseWatchConfig): Promise<IpcResult<void>> {
     return this.wrap(async () => {
+      // Normalize baseBranch — strip any origin/ prefix so checkRemoteStatus
+      // doesn't produce 'origin/origin/main' when constructing git rev-parse.
+      config = { ...config, baseBranch: (config.baseBranch || 'main').replace(/^origin\//, '') };
+
       const sessionId = config.sessionId;
 
       // Stop existing watcher if any

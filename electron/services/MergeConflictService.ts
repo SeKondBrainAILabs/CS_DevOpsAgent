@@ -122,6 +122,8 @@ export interface ConflictPreviewResult {
   metrics: RebaseMetrics;
   aborted?: boolean;
   abortReason?: string;
+  /** True when the rebase ran and succeeded with zero conflicts — not an error, branch is up to date */
+  rebaseSucceededCleanly?: boolean;
 }
 
 /** Result of applying approved resolutions */
@@ -866,8 +868,9 @@ export class MergeConflictService extends BaseService {
       // Start rebase (may fail with conflicts)
       try {
         await this.git(['rebase', `origin/${targetBranch}`], repoPath);
-        // If no error, rebase succeeded without conflicts
+        // Rebase succeeded with zero conflicts — signal success, not an error
         metrics.totalLatencyMs = Date.now() - startTime;
+        this.debugLog?.info('MergeConflict', 'Rebase succeeded cleanly — no conflicts', { repoPath, currentBranch, targetBranch });
         return {
           repoPath,
           currentBranch,
@@ -878,6 +881,7 @@ export class MergeConflictService extends BaseService {
           failedToResolve: 0,
           skippedFiles: 0,
           metrics,
+          rebaseSucceededCleanly: true,
         };
       } catch {
         // Expected - rebase has conflicts, continue to generate previews

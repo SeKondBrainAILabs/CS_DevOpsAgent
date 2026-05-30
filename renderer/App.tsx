@@ -96,7 +96,7 @@ export default function App(): React.ReactElement {
       showConflictDialog({
         sessionId: data.sessionId,
         repoPath: data.repoPath,
-        baseBranch: data.baseBranch,
+        baseBranch: (data.baseBranch || 'main').replace(/^origin\//, ''),
         currentBranch: data.currentBranch,
         conflictedFiles: data.conflictedFiles,
         errorMessage: data.errorMessage,
@@ -172,7 +172,7 @@ export default function App(): React.ReactElement {
       const sessionData = session ? {
         repoPath: session.repoPath,
         branchName: session.branchName,
-        baseBranch: session.baseBranch,
+        baseBranch: (session.baseBranch || 'main').replace(/^origin\//, ''),
         worktreePath: session.worktreePath,
         agentType: session.agentType,
         task: session.task,
