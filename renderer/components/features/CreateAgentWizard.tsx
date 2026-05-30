@@ -741,15 +741,12 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
                       className="input flex-1"
                       placeholder="feature/agent-work"
                     />
-                    <select
+                    <BaseBranchPicker
+                      branches={repoValidation?.branches || ['main']}
+                      currentBranch={repoValidation?.currentBranch || 'main'}
                       value={settings.baseBranch}
-                      onChange={(e) => setSettings(s => ({ ...s, baseBranch: e.target.value }))}
-                      className="select w-40"
-                    >
-                      {(repoValidation?.branches || ['main']).map(branch => (
-                        <option key={branch} value={branch}>from {branch}</option>
-                      ))}
-                    </select>
+                      onChange={(v) => setSettings(s => ({ ...s, baseBranch: v }))}
+                    />
                   </div>
                 </SettingCard>
 
@@ -1044,6 +1041,102 @@ function OptionButton({
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * Smart branch picker — shows a curated short list with an "Other…" escape hatch.
+ */
+const PRIMARY_BRANCHES = ['main', 'master', 'development', 'develop', 'dev'];
+
+function BaseBranchPicker({
+  branches,
+  currentBranch,
+  value,
+  onChange,
+}: {
+  branches: string[];
+  currentBranch: string;
+  value: string;
+  onChange: (v: string) => void;
+}): React.ReactElement {
+  const [showAll, setShowAll] = React.useState(false);
+  const [prevValue, setPrevValue] = React.useState(value);
+
+  // Build primary list: PRIMARY_BRANCHES that exist in branches, preserving order
+  const primaryList = React.useMemo(() => {
+    const filtered = PRIMARY_BRANCHES.filter(b => branches.includes(b));
+    // Prepend currentBranch if not already in the list
+    if (currentBranch && !filtered.includes(currentBranch)) {
+      return [currentBranch, ...filtered];
+    }
+    return filtered;
+  }, [branches, currentBranch]);
+
+  // If the branch list is small enough, just show all branches
+  const useSimpleSelect = branches.length <= primaryList.length + 1;
+
+  if (useSimpleSelect) {
+    return (
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="select w-40"
+      >
+        {branches.map(branch => (
+          <option key={branch} value={branch}>from {branch}</option>
+        ))}
+      </select>
+    );
+  }
+
+  if (showAll) {
+    // Phase 2: full list with a "← Back" option at the top
+    return (
+      <select
+        value={value}
+        onChange={(e) => {
+          if (e.target.value === '__back__') {
+            setShowAll(false);
+            onChange(prevValue);
+          } else {
+            onChange(e.target.value);
+            setShowAll(false);
+          }
+        }}
+        className="select w-40"
+      >
+        <option value="__back__">← Common branches</option>
+        {branches.map(branch => (
+          <option key={branch} value={branch}>from {branch}</option>
+        ))}
+      </select>
+    );
+  }
+
+  // Phase 1: compact list — primaryList + selected custom branch + "Other…"
+  const valueInPrimary = primaryList.includes(value);
+  return (
+    <select
+      value={value}
+      onChange={(e) => {
+        if (e.target.value === '__other__') {
+          setPrevValue(value);
+          setShowAll(true);
+        } else {
+          onChange(e.target.value);
+        }
+      }}
+      className="select w-40"
+    >
+      {!valueInPrimary && (
+        <option key={value} value={value}>{value} (custom)</option>
+      )}
+      {primaryList.map(branch => (
+        <option key={branch} value={branch}>from {branch}</option>
+      ))}
+      <option value="__other__">Other branch…</option>
+    </select>
   );
 }
 
