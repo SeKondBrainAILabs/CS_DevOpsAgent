@@ -247,6 +247,9 @@ const api = {
     fetch: (repoPath: string, remote?: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.GIT_FETCH, repoPath, remote),
 
+    stashPop: (repoPath: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.GIT_STASH_POP, repoPath),
+
     performRebase: (repoPath: string, baseBranch: string): Promise<IpcResult<{
       success: boolean;
       message: string;

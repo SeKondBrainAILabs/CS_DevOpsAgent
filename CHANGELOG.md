@@ -5,6 +5,13 @@ All notable changes to s9n-devops-agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.21] - 2026-05-30
+
+### Fixed
+- **Conflict Resolution dialog shows `origin/main` as base branch** — `errorDetails.baseBranch` comes from session data with the legacy `origin/` prefix. Now stripped in the footer, advanced details, and when passed to `generatePreviews`.
+- **Stash-pop conflict shows empty "Conflicted Files" + useless "Auto-Fix with AI" button** — When the rebase itself succeeds but re-applying stashed uncommitted changes fails (stash pop conflict), the conflicted files list was empty (because no rebase conflicts existed) and "Auto-Fix with AI" would find nothing to fix. The dialog now detects this case (`errorMessage` contains "stash pop had conflicts") and shows a "Re-apply Stashed Changes" button that retries `git stash pop` directly, with a fallback to manual fix instructions.
+- **`git stash pop` now available via IPC** — Added `GIT_STASH_POP` channel, IPC handler, and `window.api.git.stashPop()` preload binding so the dialog can retry stash pop without requiring a terminal.
+
 ## [2.6.20] - 2026-05-29
 
 ### Fixed

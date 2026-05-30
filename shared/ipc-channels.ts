@@ -200,6 +200,7 @@ export const IPC = {
   // GIT REBASE CHANNELS
   // ==========================================================================
   GIT_FETCH: 'git:fetch',
+  GIT_STASH_POP: 'git:stash-pop',
   GIT_CHECK_REMOTE: 'git:check-remote',
   GIT_REBASE: 'git:rebase',
   GIT_PERFORM_REBASE: 'git:perform-rebase',
