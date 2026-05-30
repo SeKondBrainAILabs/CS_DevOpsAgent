@@ -412,6 +412,11 @@ export class GitService extends BaseService {
    */
   async fetchRemote(repoPath: string, remote = 'origin'): Promise<IpcResult<void>> {
     return this.wrap(async () => {
+      // Guard against ENOENT when the path (e.g. a deleted worktree) no longer exists
+      if (!existsSync(repoPath)) {
+        console.warn(`[GitService] fetchRemote skipped — path no longer exists: ${repoPath}`);
+        return;
+      }
       await this.git(['fetch', remote, '--prune'], repoPath);
     }, 'GIT_FETCH_FAILED');
   }

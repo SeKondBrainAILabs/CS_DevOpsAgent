@@ -2037,7 +2037,7 @@ ${DEVOPS_KIT_DIR}/
         try {
           const content = await readFile(sessionFilePath, 'utf-8');
           const sessionData = JSON.parse(content);
-          sessionData.baseBranch = newBaseBranch;
+          sessionData.baseBranch = cleanedBaseBranch;
           sessionData.updated = new Date().toISOString();
           await writeFile(sessionFilePath, JSON.stringify(sessionData, null, 2));
         } catch {
@@ -2057,8 +2057,9 @@ ${DEVOPS_KIT_DIR}/
         agentType: targetInstance.config.agentType,
         task: targetInstance.config.taskDescription || targetInstance.config.branchName || `${targetInstance.config.agentType} session`,
         branchName: targetInstance.config.branchName,
-        baseBranch: newBaseBranch,
-        worktreePath: targetInstance.worktreePath || repoPath,
+        baseBranch: cleanedBaseBranch,
+        worktreePath: targetInstance.worktreePath && targetInstance.worktreePath !== repoPath
+          ? targetInstance.worktreePath : undefined,
         repoPath,
         status: targetInstance.status === 'running' ? 'active' as const : 'idle' as const,
         created: targetInstance.createdAt,

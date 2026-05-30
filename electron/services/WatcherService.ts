@@ -652,7 +652,9 @@ export class WatcherService extends BaseService {
             const instResult = this.agentInstanceService.getInstance(sessionId);
             const inst = instResult?.data;
             const baseBranch = inst?.config?.baseBranch || 'main';
-            const repoPath = inst?.worktreePath || inst?.config?.repoPath || instance.worktreePath;
+            // Always use the ROOT repo path for fetch — fetching from a worktree path
+            // that no longer exists on disk causes ENOENT. The root repo is always present.
+            const repoPath = inst?.config?.repoPath || instance.worktreePath;
             if (repoPath) {
               await this.gitService.fetchRemote(repoPath);
               const checkResult = await this.gitService.checkRemoteChanges(repoPath, baseBranch);

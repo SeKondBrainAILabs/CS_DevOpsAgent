@@ -1049,6 +1049,20 @@ function OptionButton({
  */
 const PRIMARY_BRANCHES = ['main', 'master', 'development', 'develop', 'dev'];
 
+/** Branches that should never appear as a merge-target choice */
+function isSessionOrRemoteBranch(b: string): boolean {
+  return (
+    b.startsWith('origin/') ||
+    b.startsWith('remotes/') ||
+    /^codex-session-/.test(b) ||
+    /^cursor-session-/.test(b) ||
+    /^copilot-session-/.test(b) ||
+    /^aider-session-/.test(b) ||
+    /^warp-session-/.test(b) ||
+    /^cline-session-/.test(b)
+  );
+}
+
 function BaseBranchPicker({
   branches,
   currentBranch,
@@ -1063,18 +1077,24 @@ function BaseBranchPicker({
   const [showAll, setShowAll] = React.useState(false);
   const [prevValue, setPrevValue] = React.useState(value);
 
+  // Filter out remote-tracking refs and session branches — these are never valid merge targets
+  const cleanBranches = React.useMemo(
+    () => branches.filter(b => !isSessionOrRemoteBranch(b)),
+    [branches]
+  );
+
   // Build primary list: PRIMARY_BRANCHES that exist in branches, preserving order
   const primaryList = React.useMemo(() => {
-    const filtered = PRIMARY_BRANCHES.filter(b => branches.includes(b));
-    // Prepend currentBranch if not already in the list
-    if (currentBranch && !filtered.includes(currentBranch)) {
+    const filtered = PRIMARY_BRANCHES.filter(b => cleanBranches.includes(b));
+    // Prepend currentBranch if not already in the list (and it's not a session branch)
+    if (currentBranch && !filtered.includes(currentBranch) && !isSessionOrRemoteBranch(currentBranch)) {
       return [currentBranch, ...filtered];
     }
     return filtered;
-  }, [branches, currentBranch]);
+  }, [cleanBranches, currentBranch]);
 
   // If the branch list is small enough, just show all branches
-  const useSimpleSelect = branches.length <= primaryList.length + 1;
+  const useSimpleSelect = cleanBranches.length <= primaryList.length + 1;
 
   if (useSimpleSelect) {
     return (
@@ -1083,7 +1103,7 @@ function BaseBranchPicker({
         onChange={(e) => onChange(e.target.value)}
         className="select w-40"
       >
-        {branches.map(branch => (
+        {cleanBranches.map(branch => (
           <option key={branch} value={branch}>from {branch}</option>
         ))}
       </select>
@@ -1107,7 +1127,7 @@ function BaseBranchPicker({
         className="select w-40"
       >
         <option value="__back__">← Common branches</option>
-        {branches.map(branch => (
+        {cleanBranches.map(branch => (
           <option key={branch} value={branch}>from {branch}</option>
         ))}
       </select>

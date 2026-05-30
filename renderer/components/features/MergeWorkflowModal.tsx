@@ -73,7 +73,8 @@ export function MergeWorkflowModal({
   const branchMismatch = actualBranch !== sourceBranch;
 
   // Merge options
-  const [deleteWorktree, setDeleteWorktree] = useState(true);
+  // Default OFF — worktree contains the agent's work; auto-deletion is too aggressive
+  const [deleteWorktree, setDeleteWorktree] = useState(false);
   const [deleteLocalBranch, setDeleteLocalBranch] = useState(false);
   const [deleteRemoteBranch, setDeleteRemoteBranch] = useState(false);
   const [deleteSession, setDeleteSession] = useState(true);

@@ -34,8 +34,8 @@ export function DeleteSessionDialog({
   const [error, setError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Cleanup options
-  const [deleteWorktree, setDeleteWorktree] = useState(true);
+  // Cleanup options — default worktree removal to OFF to prevent accidental data loss
+  const [deleteWorktree, setDeleteWorktree] = useState(false);
   const [deleteLocalBranch, setDeleteLocalBranch] = useState(true);
   const [deleteRemoteBranch, setDeleteRemoteBranch] = useState(false);
 
