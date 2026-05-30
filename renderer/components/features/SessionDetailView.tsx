@@ -286,7 +286,15 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
       if (repoPath) {
         const result = await window.api?.instance?.validateRepo?.(repoPath);
         if (result?.success && result.data?.branches) {
-          setBranches(result.data.branches);
+          const PRIMARY = ['main', 'master', 'development', 'develop', 'dev'];
+          const isSessionBranch = (b: string) =>
+            b.startsWith('origin/') || b.startsWith('remotes/') ||
+            /^(codex|cursor|copilot|aider|warp|cline)-session-/.test(b);
+          const all = result.data.branches.filter(b => !isSessionBranch(b));
+          const primaries = PRIMARY.filter(b => all.includes(b));
+          const others = all.filter(b => !PRIMARY.includes(b));
+          // Primaries first, then up to 5 most-recent others (alphabetical fallback)
+          setBranches([...primaries, ...others.slice(0, 5)]);
         }
       }
     } catch (err) {

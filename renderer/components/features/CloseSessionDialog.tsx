@@ -31,7 +31,15 @@ export function CloseSessionDialog({
     if (sessionId) {
       window.api.git.branches(sessionId).then((result) => {
         if (result.success && result.data) {
-          setBranches(result.data.filter((b) => !b.name.startsWith('session/')));
+          const PRIMARY = ['main', 'master', 'development', 'develop', 'dev'];
+          const isSessionBranch = (name: string) =>
+            name.startsWith('origin/') || name.startsWith('remotes/') ||
+            /^(codex|cursor|copilot|aider|warp|cline|session)-session-/.test(name) ||
+            name.startsWith('session/');
+          const filtered = result.data.filter(b => !isSessionBranch(b.name));
+          const primaries = filtered.filter(b => PRIMARY.includes(b.name));
+          const others = filtered.filter(b => !PRIMARY.includes(b.name)).slice(0, 5);
+          setBranches([...primaries, ...others]);
         }
       });
     }

@@ -168,13 +168,20 @@ export function MergeWorkflowModal({
 
       setActualBranch(resolvedBranch);
 
-      // Step 2: Load branches list (filtering out the actual branch being merged)
+      // Step 2: Load branches list — primaries first, filter out session/remote branches
       if (window.api?.git?.branches && repoPath) {
         const result = await window.api.git.branches(repoPath);
         if (result.success && result.data) {
-          setBranches(result.data.filter((b) =>
-            b.name !== resolvedBranch && b.name !== sourceBranch && !b.name.startsWith('session/')
-          ));
+          const PRIMARY = ['main', 'master', 'development', 'develop', 'dev'];
+          const isSessionBranch = (name: string) =>
+            name.startsWith('origin/') || name.startsWith('remotes/') ||
+            /^(codex|cursor|copilot|aider|warp|cline)-session-/.test(name);
+          const filtered = result.data.filter(b =>
+            b.name !== resolvedBranch && b.name !== sourceBranch && !isSessionBranch(b.name)
+          );
+          const primaries = filtered.filter(b => PRIMARY.includes(b.name));
+          const others = filtered.filter(b => !PRIMARY.includes(b.name)).slice(0, 5);
+          setBranches([...primaries, ...others]);
         }
       }
 
