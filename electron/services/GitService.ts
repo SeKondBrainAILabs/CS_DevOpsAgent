@@ -718,6 +718,7 @@ export class GitService extends BaseService {
     success: boolean;
     message: string;
     hadChanges: boolean;
+    stashPopFailed?: boolean;
     conflictsResolved?: number;
     conflictsFailed?: number;
     resolutions?: import('./MergeConflictService').ResolutionResult[];
@@ -786,9 +787,13 @@ export class GitService extends BaseService {
             await this.git(['reset', 'HEAD', '--', '.'], repoPath);
             await this.git(['checkout', '--', '.'], repoPath);
           } catch { /* best-effort cleanup — stash entry is preserved for manual recovery */ }
+          // Return success:true — the rebase succeeded; only the stash pop had trouble.
+          // The stashPopFailed flag lets callers surface a targeted warning without
+          // opening the merge-conflict dialog (which would show an empty conflict list).
           return {
-            success: false,
-            message: 'Rebase successful but stash pop had conflicts. Stashed changes were preserved — run "git stash pop" manually to recover them.',
+            success: true,
+            stashPopFailed: true,
+            message: 'Rebase successful. Your uncommitted changes were stashed and need to be recovered — run "git stash pop" in the worktree directory to restore them.',
             hadChanges,
             conflictsResolved: rebaseResult.data.conflictsResolved,
             conflictsFailed: rebaseResult.data.conflictsFailed,

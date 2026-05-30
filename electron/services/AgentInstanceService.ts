@@ -177,9 +177,13 @@ export class AgentInstanceService extends BaseService {
       },
     });
 
-    // Load existing instances
+    // Load existing instances — normalize baseBranch at read time to strip any
+    // legacy 'origin/' prefix (stored before v2.6.22 fix).
     const savedInstances = this.store.get('instances', []);
     for (const instance of savedInstances) {
+      if (instance.config?.baseBranch) {
+        instance.config.baseBranch = instance.config.baseBranch.replace(/^origin\//, '');
+      }
       this.instances.set(instance.id, instance);
     }
 
@@ -870,7 +874,7 @@ ${DEVOPS_KIT_DIR}/
         instanceId: instance.id,
         agentType: instance.config.agentType,
         branchName: instance.config.branchName,
-        baseBranch: instance.config.baseBranch,
+        baseBranch: (instance.config.baseBranch || 'main').replace(/^origin\//, ''),
         taskDescription: instance.config.taskDescription,
         createdAt: instance.createdAt,
         worktreePath,
@@ -2228,7 +2232,7 @@ ${DEVOPS_KIT_DIR}/
         rebaseFrequency: instance.config.rebaseFrequency || 'never',
         mcpUrl: this.mcpServerUrl || undefined,
         rpcUrl: this.rpcServerUrl || undefined,
-        baseBranch: instance.config.baseBranch,
+        baseBranch: (instance.config.baseBranch || 'main').replace(/^origin\//, ''),
         multiRepoEntries: instance.multiRepoEntries,
         commitScope: instance.config.multiRepo?.commitScope,
       };
@@ -2272,8 +2276,13 @@ ${DEVOPS_KIT_DIR}/
         agentType: instance.config.agentType,
         task: instance.config.taskDescription || instance.config.branchName || `${instance.config.agentType} session`,
         branchName: instance.config.branchName,
-        baseBranch: instance.config.baseBranch, // The branch this session was created from (merge target)
-        worktreePath: instance.worktreePath || instance.config.repoPath,
+        baseBranch: (instance.config.baseBranch || 'main').replace(/^origin\//, ''), // The branch this session was created from (merge target)
+        // Only expose worktreePath when a real git worktree exists (distinct from repoPath).
+        // Falling back to repoPath makes worktreePath === repoPath, which confuses the
+        // conflict-resolution modal into running git ops on the root instead of the worktree.
+        worktreePath: instance.worktreePath && instance.worktreePath !== instance.config.repoPath
+          ? instance.worktreePath
+          : undefined,
         repoPath: instance.config.repoPath,
         status: instance.status === 'running' ? 'active' as const : 'idle' as const,
         created: instance.createdAt,

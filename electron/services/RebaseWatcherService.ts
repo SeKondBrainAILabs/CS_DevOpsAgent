@@ -631,6 +631,17 @@ export class RebaseWatcherService extends BaseService {
         this.debugLog?.info('RebaseWatcher', `Auto-rebase successful${aiInfo}`, { sessionId: config.sessionId });
         console.log(`[RebaseWatcher] Auto-rebase successful for ${config.sessionId}${aiInfo}`);
         this.activityService?.log(config.sessionId, 'git', actMsg);
+
+        // Stash pop had trouble — rebase succeeded but uncommitted changes need manual recovery.
+        // Log a targeted warning rather than opening the conflict dialog (which would be empty).
+        if (result.data?.stashPopFailed) {
+          const stashMsg = `⚠️ Rebase succeeded but your uncommitted changes could not be restored automatically. Run "git stash pop" in the worktree to recover them.`;
+          this.activityService?.log(config.sessionId, 'warning', stashMsg);
+          this.debugLog?.warn('RebaseWatcher', 'Stash pop failed after successful rebase — stash preserved', {
+            sessionId: config.sessionId,
+            repoPath: config.repoPath,
+          });
+        }
       } else {
         // Pause watching on conflict to prevent repeated failures
         state.isPaused = true;

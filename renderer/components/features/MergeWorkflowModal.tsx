@@ -332,6 +332,19 @@ export function MergeWorkflowModal({
         }
 
         if (resolvable.length === 0) {
+          // If there were genuinely no conflict markers found, proceed directly to
+          // merge options — the worktree is already clean. "0 resolvable" only
+          // means "AI failed" when there were actual conflicts to begin with.
+          const totalConflicts = result.data.metrics?.totalConflicts ?? previews.length;
+          if (totalConflicts === 0) {
+            addProgress('No conflicts detected — proceeding to merge options.', 'done');
+            const previewResult = await window.api?.merge?.preview?.(repoPath, actualBranch, targetBranch);
+            if (previewResult?.success && previewResult.data) {
+              setPreview(previewResult.data);
+            }
+            setTimeout(() => setStep('options'), 1000);
+            return;
+          }
           setErrorWithLog('AI could not auto-resolve any files. Use manual fix.');
           setStep('error');
           return;
