@@ -1511,9 +1511,13 @@ async function startWatchersForExistingSessions(services: Services): Promise<voi
         // Start rebase watcher for all non-never frequencies
         const rebaseFrequency = instance.config?.rebaseFrequency || 'never';
         if (rebaseFrequency !== 'never' && instance.config?.baseBranch) {
+          const rootRepoPath = instance.config?.repoPath;
+          const wtPath = instance.worktreePath && instance.worktreePath !== rootRepoPath
+            ? instance.worktreePath : undefined;
           services.rebaseWatcher.startWatching({
             sessionId: instance.sessionId,
-            repoPath: watchPath,
+            repoPath: rootRepoPath || watchPath,  // always root — for fetch/remote status
+            worktreePath: wtPath,                 // worktree — for actual rebase execution
             baseBranch: (instance.config.baseBranch || 'main').replace(/^origin\//, ''),
             currentBranch: instance.config.branchName,
             rebaseFrequency: rebaseFrequency as 'on-demand' | 'daily' | 'weekly',

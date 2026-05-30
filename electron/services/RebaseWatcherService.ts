@@ -16,7 +16,11 @@ import type { IpcResult, RebaseFrequency } from '../../shared/types';
 // Watch configuration for a session
 export interface RebaseWatchConfig {
   sessionId: string;
+  /** Root git repo (always exists). Used for fetch and remote status checks. */
   repoPath: string;
+  /** Worktree directory where the session branch is checked out.
+   *  May differ from repoPath. If it no longer exists the watcher self-stops. */
+  worktreePath?: string;
   baseBranch: string;
   currentBranch: string;
   rebaseFrequency: RebaseFrequency;
@@ -572,6 +576,25 @@ export class RebaseWatcherService extends BaseService {
       return { success: false, message: 'Rebase already in progress' };
     }
 
+    // Determine effective paths:
+    // - fetchPath: root repo for network operations (always exists)
+    // - rebasePath: worktree for the actual rebase (session branch lives here)
+    const rebasePath = config.worktreePath || config.repoPath;
+
+    // If the worktree directory has been deleted, rebase cannot run.
+    // Stop the watcher for this session and surface a clear activity warning.
+    const { existsSync } = await import('fs');
+    if (rebasePath !== config.repoPath && !existsSync(rebasePath)) {
+      console.warn(`[RebaseWatcher] Worktree no longer exists for ${config.sessionId}: ${rebasePath} — stopping watcher`);
+      this.activityService?.log(
+        config.sessionId,
+        'warning',
+        `⚠️ Rebase watcher stopped: worktree directory was removed (${rebasePath.split('/').slice(-2).join('/')}). Re-open the session to resume tracking.`
+      );
+      await this.stopWatching(config.sessionId).catch(() => {});
+      return { success: false, message: 'Worktree no longer exists — watcher stopped' };
+    }
+
     state.isRebasing = true;
     this.emitStatus(config.sessionId);
 
@@ -596,11 +619,13 @@ export class RebaseWatcherService extends BaseService {
         conflictsFailed?: number;
       }>;
 
+      // Rebase must run in the worktree (session branch lives there).
+      // rebasePath === worktreePath when a worktree exists, otherwise falls back to root.
       if (this.mergeConflictService) {
-        console.log(`[RebaseWatcher] Using AI-powered rebase for ${config.sessionId}`);
-        result = await this.gitService.performRebaseWithAI(config.repoPath, config.baseBranch, this.mergeConflictService);
+        console.log(`[RebaseWatcher] Using AI-powered rebase for ${config.sessionId} in ${rebasePath}`);
+        result = await this.gitService.performRebaseWithAI(rebasePath, config.baseBranch, this.mergeConflictService);
       } else {
-        result = await this.gitService.performRebase(config.repoPath, config.baseBranch);
+        result = await this.gitService.performRebase(rebasePath, config.baseBranch);
       }
 
       const rebaseResult = {
