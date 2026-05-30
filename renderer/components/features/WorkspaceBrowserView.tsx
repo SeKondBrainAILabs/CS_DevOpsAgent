@@ -526,11 +526,18 @@ COMMAND: git <command here>`;
         { role: 'system', content: systemMessage },
         { role: 'user', content: userMessage },
       ]);
-      if (result?.ok) {
+      if (result?.success) {
         setResolveText(result.data ?? '');
         setResolveState('done');
       } else {
-        setResolveText(result?.error ?? 'AI not available');
+        // result?.error is an IpcError object — extract the message string
+        const errMsg = result?.error?.message ?? 'AI not available';
+        // Surface a helpful hint when the API key isn't configured
+        setResolveText(
+          errMsg.includes('not configured') || errMsg.includes('API key')
+            ? 'Groq API key not configured. Add it in Settings → AI to enable this feature.'
+            : errMsg
+        );
         setResolveState('error');
       }
     } catch (e) {
