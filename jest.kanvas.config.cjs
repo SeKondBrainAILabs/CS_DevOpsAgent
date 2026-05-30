@@ -24,6 +24,16 @@ module.exports = {
   transform: {
     '^.+\\.[jt]sx?$': ['ts-jest', {
       useESM: true,
+      // Transpile-only — do NOT type-check during the test run.
+      // Rationale: stale session worktrees under local_deploy/ each ship a full
+      // duplicate copy of shared/types.ts and the `declare global { Window.api }`
+      // augmentation with an OLDER API shape. ts-jest's whole-program type checker
+      // merges those duplicate globals, producing hundreds of bogus
+      // "Property X does not exist on window.api" errors that fail entire suites
+      // even though the production build (Vite/esbuild) compiles cleanly.
+      // Type safety is enforced by `npm run build`; the test runner only needs to
+      // execute code. isolatedModules makes ts-jest transpile each file alone.
+      isolatedModules: true,
       tsconfig: {
         jsx: 'react-jsx',
         esModuleInterop: true,

@@ -791,8 +791,32 @@ ${DEVOPS_KIT_DIR}/
         await mkdir(localDeployDir, { recursive: true });
       }
 
-      // Create worktree
-      await execaCmd('git', ['worktree', 'add', worktreeDir, config.branchName], { cwd: config.repoPath });
+      // Create worktree — CRITICAL: branch safety.
+      // `git worktree add <dir> <ref>` resolves <ref> as ANY ref (branch, tag, or
+      // commit). If the session branch doesn't exist yet, git would silently check
+      // out a same-named tag/commit and land in DETACHED HEAD — auto-commits then
+      // attach to no branch and can be lost. To prevent this we explicitly branch:
+      //   - branch exists  → `git worktree add <dir> <branchName>` (checks it out)
+      //   - branch missing → `git worktree add -b <branchName> <dir> <baseBranch>`
+      //     (atomically creates the session branch from the base and checks it out)
+      const baseBranch = (config.baseBranch || 'main').replace(/^origin\//, '');
+      const branchListed = await execaCmd('git', ['branch', '--list', config.branchName], { cwd: config.repoPath });
+      const branchExists = Boolean(branchListed.stdout.trim());
+
+      if (branchExists) {
+        await execaCmd('git', ['worktree', 'add', worktreeDir, config.branchName], { cwd: config.repoPath });
+      } else {
+        await execaCmd('git', ['worktree', 'add', '-b', config.branchName, worktreeDir, baseBranch], { cwd: config.repoPath });
+      }
+
+      // Safety net: verify the worktree landed on the expected branch, not detached.
+      const headCheck = await execaCmd('git', ['branch', '--show-current'], { cwd: worktreeDir });
+      const head = headCheck.stdout.trim();
+      if (head !== config.branchName) {
+        console.warn(`[AgentInstanceService] Worktree HEAD is "${head || 'DETACHED'}", expected "${config.branchName}" — re-attaching to session branch`);
+        // Force the worktree onto a correctly-named session branch from base.
+        await execaCmd('git', ['checkout', '-B', config.branchName, baseBranch], { cwd: worktreeDir });
+      }
       console.log(`[AgentInstanceService] Created worktree at ${worktreeDir} for branch ${config.branchName}`);
 
       // Initialize .S9N_KIT_DevOpsAgent in the worktree
@@ -1174,25 +1198,21 @@ ${DEVOPS_KIT_DIR}/
           const worktreeDir = join(externalRepoPath, 'local_deploy', branchName);
 
           if (!existsSync(worktreeDir)) {
-            // Create branch if needed
-            try {
-              const branchResult = await execaCmd('git', ['branch', '--list', branchName], { cwd: externalRepoPath });
-              if (!branchResult.stdout.trim()) {
-                const base = secondary.baseBranch || 'main';
-                await execaCmd('git', ['checkout', '-b', branchName, base], { cwd: externalRepoPath });
-                await execaCmd('git', ['checkout', '-'], { cwd: externalRepoPath });
-              }
-            } catch {
-              // Branch creation may fail, continue
-            }
-
-            // Create worktree
+            // Create worktree — branch-safe (see createWorktreeIfNeeded for rationale).
+            // Use `-b` when the branch is missing so we never detach onto a same-named tag.
+            const base = (secondary.baseBranch || 'main').replace(/^origin\//, '');
             const localDeployDir = join(externalRepoPath, 'local_deploy');
             if (!existsSync(localDeployDir)) {
               await mkdir(localDeployDir, { recursive: true });
             }
             try {
-              await execaCmd('git', ['worktree', 'add', worktreeDir, branchName], { cwd: externalRepoPath });
+              const branchResult = await execaCmd('git', ['branch', '--list', branchName], { cwd: externalRepoPath });
+              const branchExists = Boolean(branchResult.stdout.trim());
+              if (branchExists) {
+                await execaCmd('git', ['worktree', 'add', worktreeDir, branchName], { cwd: externalRepoPath });
+              } else {
+                await execaCmd('git', ['worktree', 'add', '-b', branchName, worktreeDir, base], { cwd: externalRepoPath });
+              }
               console.log(`[AgentInstanceService] Created external repo worktree at ${worktreeDir}`);
             } catch (e) {
               console.warn(`[AgentInstanceService] Could not create external worktree: ${e}`);
