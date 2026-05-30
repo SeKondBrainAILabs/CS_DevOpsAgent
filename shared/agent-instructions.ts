@@ -274,6 +274,10 @@ YOU MUST WORK ONLY IN THIS DIRECTORY - NOT THE MAIN REPO
 
 BRANCH: ${vars.branchName}
 TASK: ${task}
+
+# 🛑 DO NOT START IMPLEMENTATION YET
+Complete the SETUP steps below, then STOP and wait for the user to explicitly say to begin.
+Do NOT infer that pasting this prompt is permission to start working.
 ${(vars.rpcUrl || vars.mcpUrl) ? `
 ## 🔌 MCP SERVER CONNECTION
 This session has a KIT MCP server.
@@ -349,7 +353,7 @@ ${vars.multiRepoEntries && vars.multiRepoEntries.length > 1 ? `
 ${vars.multiRepoEntries.map(r => `| ${r.repoName} | ${r.role} | ${r.branchName} | ${r.worktreePath} |`).join('\n')}
 ` : ''}
 ---
-Run with: \`codex --approval-mode full-auto\``;
+⛔ STOP: Run setup commands above, read houserules.md, then await explicit user instructions before starting any implementation work.`;
 }
 
 function getClaudeInstructions(vars: InstructionVars): string {
@@ -672,23 +676,36 @@ export KANVAS_SESSION_ID="${vars.sessionId}"
 \`\`\`
 `;
 
+  // Build the prompt block that the user pastes into Codex
+  const codexPromptBlock = generateCodexPrompt(vars);
+
   return `## Codex Agent Setup for ${vars.repoName}
 
-### Repository
+### 1. Navigate to the working directory
 \`\`\`bash
 cd "${vars.repoPath}"
 git checkout ${vars.branchName}
 \`\`\`
 
-### Task
-${vars.taskDescription}
+### 2. Start Codex
+\`\`\`bash
+codex
+\`\`\`
+
+> **Don't use \`--approval-mode full-auto\`** when pasting this prompt — Codex will start working without waiting. Start Codex normally, paste the prompt, and then explicitly tell it to begin once it has confirmed setup.
 ${mcpSection}
-### System Context
-${vars.systemPrompt}
+### 3. Paste this prompt into Codex
+
+Copy and paste the ENTIRE block below when the Codex session opens:
+
+\`\`\`
+${codexPromptBlock}
+\`\`\`
 
 ---
 
-Run Codex in full-auto mode with: \`codex --approval-mode full-auto\`
+**After Codex confirms setup** (directory, houserules read), explicitly tell it to start work, e.g. *"Go ahead and start on the task."*
+
 Activity will appear in the KIT dashboard once the MCP server is connected.
 `;
 }
