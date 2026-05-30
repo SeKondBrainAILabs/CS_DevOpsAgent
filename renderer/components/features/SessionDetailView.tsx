@@ -284,23 +284,30 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
     }
     setLoadingBranches(true);
     try {
-      const repoPath = session.repoPath || session.worktreePath;
-      if (repoPath) {
-        const result = await window.api?.instance?.validateRepo?.(repoPath);
-        if (result?.success && result.data?.branches) {
-          const PRIMARY = ['main', 'master', 'development', 'develop', 'dev'];
-          const isSessionBranch = (b: string) =>
-            b.startsWith('origin/') || b.startsWith('remotes/') ||
-            /^(codex|cursor|copilot|aider|warp|cline)-session-/.test(b);
-          const all = result.data.branches.filter(b => !isSessionBranch(b));
-          const primaries = PRIMARY.filter(b => all.includes(b));
-          // Default picker: primary branches only (+ current if not already in list)
-          const currentBase = session.baseBranch || 'main';
-          const primaryList = primaries.includes(currentBase)
-            ? primaries : [currentBase, ...primaries];
-          setBranches(primaryList);
-          setAllBranches(all); // full list available for advanced dialog
-        }
+      // Use git.branches(sessionId) — it knows the correct repo path from the session
+      // registry and handles worktree paths properly. validateRepo had two problems:
+      // (1) it ran in the worktree path which could be detached HEAD, corrupting the list;
+      // (2) it only returned local branches visible to that specific path.
+      const result = await window.api?.git?.branches?.(session.sessionId);
+      if (result?.success && result.data) {
+        const PRIMARY = ['main', 'master', 'development', 'develop', 'dev'];
+        const isSessionBranch = (name: string) =>
+          name.startsWith('origin/') || name.startsWith('remotes/') ||
+          name.startsWith('(') || // detached HEAD pseudo-entries like "(HEAD"
+          /^(codex|cursor|copilot|aider|warp|cline|session)-session-/.test(name) ||
+          name.startsWith('session/');
+        const all = result.data
+          .map(b => b.name)
+          .filter(b => !isSessionBranch(b))
+          // Deduplicate — remote-tracking names are stripped so may duplicate local names
+          .filter((b, i, arr) => arr.indexOf(b) === i);
+        const primaries = PRIMARY.filter(b => all.includes(b));
+        // Default picker: primary branches only (+ current target if not already in list)
+        const currentBase = (session.baseBranch || 'main').replace(/^origin\//, '');
+        const primaryList = primaries.includes(currentBase)
+          ? primaries : [currentBase, ...primaries];
+        setBranches(primaryList);
+        setAllBranches(all); // full list available for advanced dialog
       }
     } catch (err) {
       console.error('[SessionDetail] Failed to load branches:', err);

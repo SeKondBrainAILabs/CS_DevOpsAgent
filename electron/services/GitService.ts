@@ -363,7 +363,9 @@ export class GitService extends BaseService {
           const cleanName = name.replace(/^remotes\/origin\//, '').replace(/^origin\//, '');
 
           // Skip HEAD pointer entries (e.g. remotes/origin/HEAD -> origin/main)
-          if (cleanName === 'HEAD') continue;
+          // Also skip detached HEAD pseudo-entries like "(HEAD" which appear when
+          // a worktree is checked out at a tag or detached commit.
+          if (cleanName === 'HEAD' || cleanName.startsWith('(')) continue;
 
           branches.push({
             name: cleanName,
