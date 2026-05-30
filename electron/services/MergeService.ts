@@ -690,23 +690,118 @@ export class MergeService extends BaseService {
       }
 
       if (mergeResult.exitCode !== 0) {
-        // Get conflicting files
+        // Capture conflict file list before aborting the merge
         const { stdout: conflictOutput } = await this.git(['diff', '--name-only', '--diff-filter=U'], repoPath);
         const conflictingFiles = conflictOutput.split('\n').filter(Boolean);
 
-        // Abort the merge
+        // Abort the failed merge — working tree must be clean before we try rebase
         await this.git(['merge', '--abort'], repoPath);
+        console.log(`[MergeService] Merge had conflicts (${conflictingFiles.length} file(s)) — trying rebase strategy`);
 
-        // Switch back to original branch so repo isn't left on targetBranch
-        if (currentBranch !== targetBranch) {
-          await this.git(['checkout', currentBranch], repoPath);
+        // ── Rebase fallback ──────────────────────────────────────────────────
+        // Switch to the source branch (agent's session branch) and rebase it
+        // onto the target (main/development). If the rebase succeeds cleanly,
+        // the branches are now linearly related and the subsequent merge will
+        // be a clean fast-forward with no conflict.
+        let rebasedSuccessfully = false;
+        let rebaseConflictFiles: string[] = [];
+        const worktreePath = options.worktreePath;
+
+        try {
+          const rebaseWorkdir = worktreePath || repoPath;
+
+          // Checkout the source branch in the worktree (or main repo)
+          const checkoutSrc = await this.git(['checkout', sourceBranch], rebaseWorkdir);
+          if (checkoutSrc.exitCode !== 0) {
+            throw new Error(`Could not checkout source branch for rebase: ${checkoutSrc.stderr}`);
+          }
+
+          // Fetch latest target branch so we rebase onto the freshest state
+          await this.git(['fetch', 'origin', targetBranch], rebaseWorkdir).catch(() => {});
+
+          // Rebase source branch onto origin/targetBranch
+          const rebaseResult = await this.git(['rebase', `origin/${targetBranch}`], rebaseWorkdir);
+
+          if (rebaseResult.exitCode === 0) {
+            rebasedSuccessfully = true;
+            console.log(`[MergeService] Rebase fallback succeeded — source branch is now linear with ${targetBranch}`);
+
+            // Push the rebased source branch so targetBranch can be merged via fast-forward
+            await this.git(['push', 'origin', sourceBranch, '--force-with-lease'], rebaseWorkdir).catch(() => {
+              // Non-fatal — we can still proceed with the local ff-merge
+            });
+          } else {
+            // Rebase also conflicted — abort it and collect conflict files
+            const { stdout: rebaseConflicts } = await this.git(
+              ['diff', '--name-only', '--diff-filter=U'],
+              rebaseWorkdir
+            ).catch(() => ({ stdout: '' }));
+            rebaseConflictFiles = rebaseConflicts.split('\n').filter(Boolean);
+            await this.git(['rebase', '--abort'], rebaseWorkdir).catch(() => {});
+            console.log(`[MergeService] Rebase fallback also conflicted (${rebaseConflictFiles.length} file(s))`);
+          }
+        } catch (rebaseErr) {
+          const msg = rebaseErr instanceof Error ? rebaseErr.message : String(rebaseErr);
+          console.warn(`[MergeService] Rebase fallback threw:`, msg);
+          // Make sure we leave the source branch in a clean state
+          await this.git(['rebase', '--abort'], worktreePath || repoPath).catch(() => {});
         }
 
-        return {
-          success: false,
-          message: 'Merge failed due to conflicts',
-          conflictingFiles,
-        };
+        if (rebasedSuccessfully) {
+          // Now do the merge on the target branch — should be conflict-free
+          const checkoutTarget = await this.git(['checkout', targetBranch], repoPath);
+          if (checkoutTarget.exitCode !== 0) {
+            return {
+              success: false,
+              message: `Rebase succeeded but could not re-checkout ${targetBranch}: ${checkoutTarget.stderr}`,
+              conflictingFiles,
+            };
+          }
+
+          // Pull to pick up any remote changes that happened in the interim
+          await this.git(['pull', 'origin', targetBranch], repoPath).catch(() => {});
+
+          mergeResult = await this.git(
+            ['merge', sourceBranch, '--ff-only', '-m', `Merge branch '${sourceBranch}' into ${targetBranch} (via rebase)`],
+            repoPath
+          );
+
+          if (mergeResult.exitCode !== 0) {
+            // ff-only failed — fall back to regular merge (should be rare after a clean rebase)
+            mergeResult = await this.git(
+              ['merge', sourceBranch, '-m', `Merge branch '${sourceBranch}' into ${targetBranch} (via rebase)`],
+              repoPath
+            );
+          }
+
+          if (mergeResult.exitCode !== 0) {
+            // Still failing — give up and restore original branch
+            await this.git(['merge', '--abort'], repoPath).catch(() => {});
+            if (currentBranch !== targetBranch) {
+              await this.git(['checkout', currentBranch], repoPath).catch(() => {});
+            }
+            return {
+              success: false,
+              message: 'Merge failed even after rebase — manual resolution required',
+              conflictingFiles,
+            };
+          }
+        } else {
+          // Both merge and rebase failed — give up
+          // Switch back to original branch so repo isn't left on targetBranch
+          if (currentBranch !== targetBranch) {
+            await this.git(['checkout', currentBranch], repoPath).catch(() => {});
+          }
+
+          const allConflictFiles = [
+            ...new Set([...conflictingFiles, ...rebaseConflictFiles]),
+          ];
+          return {
+            success: false,
+            message: 'Merge failed due to conflicts (rebase fallback also conflicted)',
+            conflictingFiles: allConflictFiles,
+          };
+        }
       }
 
       // Get merge commit hash

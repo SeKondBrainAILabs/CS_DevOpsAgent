@@ -10,6 +10,7 @@ import type { GitService } from './GitService';
 import type { MergeConflictService } from './MergeConflictService';
 import type { WorkerBridgeService } from './WorkerBridgeService';
 import type { DebugLogService } from './DebugLogService';
+import type { ActivityService } from './ActivityService';
 import type { IpcResult, RebaseFrequency } from '../../shared/types';
 
 // Watch configuration for a session
@@ -83,6 +84,7 @@ const DEFAULT_POLL_INTERVAL_MS = 60 * 1000;
 export class RebaseWatcherService extends BaseService {
   private gitService: GitService;
   private mergeConflictService: MergeConflictService | null = null;
+  private activityService: ActivityService | null = null;
   private watchedSessions: Map<string, WatchState> = new Map();
   private workerBridge: WorkerBridgeService | null = null;
   private debugLog: DebugLogService | null = null;
@@ -98,6 +100,14 @@ export class RebaseWatcherService extends BaseService {
   setMergeConflictService(service: MergeConflictService): void {
     this.mergeConflictService = service;
     console.log('[RebaseWatcher] MergeConflictService configured — AI conflict resolution enabled');
+  }
+
+  /**
+   * Set activity service for logging rebase events to the session timeline
+   */
+  setActivityService(service: ActivityService): void {
+    this.activityService = service;
+    console.log('[RebaseWatcher] ActivityService configured — rebase events will appear in activity log');
   }
 
   /**
@@ -615,10 +625,12 @@ export class RebaseWatcherService extends BaseService {
       if (rebaseResult.success) {
         state.behindCount = 0;
         const aiInfo = result.data?.conflictsResolved
-          ? ` (AI resolved ${result.data.conflictsResolved} conflicts)`
+          ? ` (AI resolved ${result.data.conflictsResolved} conflict${result.data.conflictsResolved !== 1 ? 's' : ''})`
           : '';
+        const actMsg = `Rebased onto ${config.baseBranch}${aiInfo}`;
         this.debugLog?.info('RebaseWatcher', `Auto-rebase successful${aiInfo}`, { sessionId: config.sessionId });
         console.log(`[RebaseWatcher] Auto-rebase successful for ${config.sessionId}${aiInfo}`);
+        this.activityService?.log(config.sessionId, 'git', actMsg);
       } else {
         // Pause watching on conflict to prevent repeated failures
         state.isPaused = true;
@@ -634,6 +646,14 @@ export class RebaseWatcherService extends BaseService {
           }
         }
 
+        const conflictSummary = conflictedFiles.length > 0
+          ? conflictedFiles.join(', ')
+          : 'unknown files';
+        const failMsg = `Rebase onto ${config.baseBranch} failed — conflicts in: ${conflictSummary}`;
+        this.activityService?.log(config.sessionId, 'warning', failMsg, {
+          conflictedFiles,
+          rawError: rawError?.slice(0, 500),
+        });
         this.debugLog?.error('RebaseWatcher', `Auto-rebase FAILED — merge conflicts detected`, {
           sessionId: config.sessionId,
           repoPath: config.repoPath,

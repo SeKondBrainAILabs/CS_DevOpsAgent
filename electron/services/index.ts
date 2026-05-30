@@ -214,6 +214,9 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // Wire mergeConflict into rebaseWatcher so AI resolution is actually used
   rebaseWatcher.setMergeConflictService(mergeConflict);
 
+  // Wire activityService into rebaseWatcher so rebase events appear in session timeline
+  rebaseWatcher.setActivityService(activity);
+
   // Initialize Heartbeat service
   // For monitoring agent connection status
   const heartbeat = new HeartbeatService();
