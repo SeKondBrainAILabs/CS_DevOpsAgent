@@ -63,33 +63,13 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Whether this repo already has sessions — drives "using previous settings" UX
+  const [hasPreviousSession, setHasPreviousSession] = useState(false);
+
   // Form state
   const [repoPath, setRepoPath] = useState<string | null>(initialRepoPath ?? null);
   const [repoValidation, setRepoValidation] = useState<RepoValidation | null>(null);
 
-  // When opened with a prefill, kick off validation immediately so subsequent
-  // steps have what they need.
-  React.useEffect(() => {
-    if (!initialRepoPath) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const result = await window.api?.instance?.validateRepo?.(initialRepoPath);
-        if (cancelled) return;
-        if (result?.success && result.data) {
-          setRepoValidation(result.data);
-          if (result.data.currentBranch) {
-            setSettings((s) => ({ ...s, baseBranch: result.data!.currentBranch || 'main' }));
-          }
-        }
-      } catch {
-        // ignore — wizard still usable, user can re-pick
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [initialRepoPath]);
   const [agentType, setAgentType] = useState<AgentType | null>(null);
   const [settings, setSettings] = useState<AgentSettings>({
     taskDescription: initialTask ?? '',
@@ -117,6 +97,108 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
   const [selectedSecondaryRepos, setSelectedSecondaryRepos] = useState<Array<{ repoPath: string; repoName: string; isSubmodule: boolean }>>([]);
   const [commitScope, setCommitScope] = useState<'all' | 'per-repo'>('all');
 
+  /**
+   * Load defaults from the most recent session for this repo.
+   * Returns true if a previous session was found and defaults applied.
+   */
+  const loadPreviousSessionDefaults = React.useCallback(async (path: string): Promise<boolean> => {
+    try {
+      const result = await window.api?.instance?.list?.();
+      if (!result?.success || !result.data) return false;
+
+      // Find the most recently-created session for this repo
+      const repoSessions = result.data
+        .filter(inst => inst.config?.repoPath === path)
+        .sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
+
+      if (repoSessions.length === 0) return false;
+
+      const last = repoSessions[0];
+      const cfg = last.config;
+
+      setHasPreviousSession(true);
+      if (cfg.agentType) setAgentType(cfg.agentType as AgentType);
+      if (cfg.multiRepo) {
+        setMultiRepoEnabled(true);
+        setCommitScope(cfg.multiRepo.commitScope || 'all');
+        // Restore secondary repos list
+        if (cfg.multiRepo.secondaryRepos?.length) {
+          setSelectedSecondaryRepos(cfg.multiRepo.secondaryRepos.map(r => ({
+            repoPath: r.repoPath,
+            repoName: r.repoName,
+            isSubmodule: r.isSubmodule,
+          })));
+        }
+      }
+      setSettings(s => ({
+        ...s,
+        rebaseFrequency: cfg.rebaseFrequency || s.rebaseFrequency,
+        autoCommit: cfg.autoCommit !== undefined ? cfg.autoCommit : s.autoCommit,
+        systemPrompt: cfg.systemPrompt || s.systemPrompt,
+        contextPreservation: cfg.contextPreservation || s.contextPreservation,
+        // Keep baseBranch from repo validation (current branch) unless we have a specific one
+        baseBranch: s.baseBranch !== 'main' ? s.baseBranch : (cfg.baseBranch || s.baseBranch),
+      }));
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  // When opened with a prefill, kick off validation + load previous defaults.
+  // Then advance past the 'setup' placeholder to the right step.
+  React.useEffect(() => {
+    if (!initialRepoPath) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [validationResult, hasPrev] = await Promise.all([
+          window.api?.instance?.validateRepo?.(initialRepoPath),
+          loadPreviousSessionDefaults(initialRepoPath),
+        ]);
+        if (cancelled) return;
+        if (validationResult?.success && validationResult.data) {
+          setRepoValidation(validationResult.data);
+          if (validationResult.data.currentBranch) {
+            setSettings((s) => ({ ...s, baseBranch: validationResult.data!.currentBranch || 'main' }));
+          }
+        }
+
+        // Advance past the 'setup' placeholder to the correct first step
+        if (hasPrev) {
+          // Previous session found — skip first-run setup, go to agent type
+          setNeedsSetup(false);
+          setCurrentStep('agent');
+        } else {
+          // No previous session — check if first-run setup is needed
+          try {
+            const setupResult = await window.api?.contractRegistry?.needsFirstRunSetup(initialRepoPath);
+            if (!cancelled) {
+              if (setupResult?.success && setupResult.data) {
+                setNeedsSetup(true);
+                setCurrentStep('setup');
+              } else {
+                setNeedsSetup(false);
+                setCurrentStep('agent');
+              }
+            }
+          } catch {
+            if (!cancelled) {
+              setNeedsSetup(false);
+              setCurrentStep('agent');
+            }
+          }
+        }
+      } catch {
+        // ignore — wizard still usable, user can re-pick
+        if (!cancelled) setCurrentStep('repo');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [initialRepoPath, loadPreviousSessionDefaults]);
+
   const handleRepoSelect = async (path: string, validation: RepoValidation) => {
     setRepoPath(path);
     setRepoValidation(validation);
@@ -125,19 +207,32 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
       setSettings(s => ({ ...s, baseBranch: validation.currentBranch || 'main' }));
     }
 
-    // Detect submodules for multi-repo support
-    try {
-      const subResult = await window.api?.git?.detectSubmodules(path);
-      if (subResult?.success && subResult.data?.length > 0) {
-        setDetectedSubmodules(subResult.data);
-      } else {
-        setDetectedSubmodules([]);
-      }
-    } catch {
-      setDetectedSubmodules([]);
+    // Load previous session defaults for this repo + detect submodules in parallel
+    const [hasPrev] = await Promise.all([
+      loadPreviousSessionDefaults(path),
+      (async () => {
+        try {
+          const subResult = await window.api?.git?.detectSubmodules(path);
+          if (subResult?.success && subResult.data?.length > 0) {
+            setDetectedSubmodules(subResult.data);
+          } else {
+            setDetectedSubmodules([]);
+          }
+        } catch {
+          setDetectedSubmodules([]);
+        }
+      })(),
+    ]);
+
+    // If a previous session exists for this repo, skip the one-time setup step —
+    // it was already done. Jump straight to agent type selection.
+    if (hasPrev) {
+      setNeedsSetup(false);
+      setTimeout(() => setCurrentStep('agent'), 300);
+      return;
     }
 
-    // Check if first-run setup is needed
+    // Check if first-run setup is needed (new repo, never set up before)
     try {
       const result = await window.api?.contractRegistry?.needsFirstRunSetup(path);
       if (result?.success && result.data) {
@@ -477,6 +572,10 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
                 {agentType?.charAt(0).toUpperCase()}{agentType?.slice(1)} agent for {repoValidation?.repoName}
               </CompletedStep>
 
+              {hasPreviousSession && (
+                <PreviousSettingsBanner />
+              )}
+
               <ConversationBubble>
                 <p className="text-lg font-medium">Working across multiple repositories?</p>
                 <p className="text-sm text-text-secondary mt-1">
@@ -604,6 +703,10 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
                 {agentType?.charAt(0).toUpperCase()}{agentType?.slice(1)} agent for {repoValidation?.repoName}
               </CompletedStep>
 
+              {hasPreviousSession && (
+                <PreviousSettingsBanner />
+              )}
+
               <ConversationBubble>
                 <p className="text-lg font-medium">How should the agent manage branches?</p>
                 <p className="text-sm text-text-secondary mt-1">
@@ -703,6 +806,10 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
               <CompletedStep>
                 Branch: {settings.branchName} (rebase: {settings.rebaseFrequency})
               </CompletedStep>
+
+              {hasPreviousSession && (
+                <PreviousSettingsBanner />
+              )}
 
               <ConversationBubble>
                 <p className="text-lg font-medium">Set up the agent's instructions</p>
@@ -844,6 +951,20 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * Banner shown when settings are pre-populated from a previous session
+ */
+function PreviousSettingsBanner(): React.ReactElement {
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 rounded-[10px] bg-[rgba(0,0,0,0.04)] border border-[rgba(0,0,0,0.08)] text-sm text-text-secondary">
+      <svg className="w-4 h-4 flex-shrink-0 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+      </svg>
+      <span>Settings from your last session on this repo are pre-filled — adjust anything below or just continue.</span>
+    </div>
   );
 }
 
