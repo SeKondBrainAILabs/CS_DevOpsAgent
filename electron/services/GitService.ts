@@ -381,15 +381,23 @@ export class GitService extends BaseService {
   }
 
   /**
-   * Current branch of a worktree path. Returns null when HEAD is detached
-   * (or on error). Used by the MCP worktree-divergence guards.
+   * Current branch of a worktree path, as a TRI-STATE for the divergence guards:
+   *   - a branch name  → HEAD is on that branch
+   *   - 'HEAD'         → genuinely detached HEAD (definitive)
+   *   - null           → could NOT determine (path missing, git lock, error)
+   *
+   * Uses `rev-parse --abbrev-ref HEAD`, which prints the branch name on a branch
+   * and the literal "HEAD" when detached. Crucially this lets callers tell a real
+   * detached HEAD apart from a failed check — we must never report "detached"
+   * (and block/scare the agent) just because the command errored. `symbolic-ref`
+   * conflated the two (exit 1 for both), which caused false "detached" warnings.
    */
-  async getCurrentBranch(worktreePath: string): Promise<string | null> {
+  async getCurrentBranchName(worktreePath: string): Promise<string | null> {
     try {
-      const out = await this.git(['symbolic-ref', '--short', '-q', 'HEAD'], worktreePath);
+      const out = await this.git(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath);
       return out.trim() || null;
     } catch {
-      return null;
+      return null; // unknown — caller treats this as "can't tell", NOT as detached
     }
   }
 

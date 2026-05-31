@@ -63,7 +63,7 @@ describe('MCP Tools', () => {
         ],
       }),
       // Worktree-divergence guard: report the worktree is on the expected session branch.
-      getCurrentBranch: (jest.fn() as any).mockResolvedValue('feat/test'),
+      getCurrentBranchName: (jest.fn() as any).mockResolvedValue('feat/test'),
     };
 
     mockActivityService = { log: jest.fn() };
@@ -230,7 +230,7 @@ describe('MCP Tools', () => {
     });
 
     it('rejects kit_commit when the worktree is on the wrong branch (WRONG_BRANCH)', async () => {
-      (mockGitService.getCurrentBranch as jest.Mock).mockResolvedValueOnce('some-other-branch');
+      (mockGitService.getCurrentBranchName as jest.Mock).mockResolvedValueOnce('some-other-branch');
       const result = await callTool('kit_commit', {
         session_id: 'sess_test_123',
         message: 'feat: wrong branch',
@@ -244,7 +244,8 @@ describe('MCP Tools', () => {
     });
 
     it('rejects kit_commit when the worktree is in detached HEAD (DETACHED_HEAD)', async () => {
-      (mockGitService.getCurrentBranch as jest.Mock).mockResolvedValueOnce(null);
+      // rev-parse --abbrev-ref HEAD prints the literal "HEAD" when detached.
+      (mockGitService.getCurrentBranchName as jest.Mock).mockResolvedValueOnce('HEAD');
       const result = await callTool('kit_commit', {
         session_id: 'sess_test_123',
         message: 'feat: detached',
@@ -253,6 +254,20 @@ describe('MCP Tools', () => {
       expect(result.isError).toBe(true);
       expect(data.error).toBe('DETACHED_HEAD');
       expect(mockGitService.commit).not.toHaveBeenCalled();
+    });
+
+    it('allows kit_commit when the branch check is inconclusive (fail open)', async () => {
+      // null = the branch could not be determined (git error / lock / path) — we must
+      // NOT report a false detached HEAD. The cwd already matched, so allow the commit.
+      (mockGitService.getCurrentBranchName as jest.Mock).mockResolvedValueOnce(null);
+      const result = await callTool('kit_commit', {
+        session_id: 'sess_test_123',
+        message: 'feat: inconclusive branch check',
+      });
+      const data = parseResult(result);
+      expect(result.isError).toBeFalsy();
+      expect(data.commitHash).toBe('abc123def456');
+      expect(mockGitService.commit).toHaveBeenCalled();
     });
 
     it('allows kit_commit when cwd matches the worktree and branch is correct', async () => {
@@ -267,7 +282,7 @@ describe('MCP Tools', () => {
     });
 
     it('rejects kit_lock_file on directory mismatch but does not require a branch', async () => {
-      (mockGitService.getCurrentBranch as jest.Mock).mockResolvedValue('any-branch');
+      (mockGitService.getCurrentBranchName as jest.Mock).mockResolvedValue('any-branch');
       const wrong = await callTool('kit_lock_file', {
         session_id: 'sess_test_123',
         files: ['src/x.ts'],

@@ -87,15 +87,20 @@ export function registerTools(
     } catch { return undefined; }
   }
 
-  /** Current branch of a worktree; null when detached HEAD or on error. */
+  /**
+   * Current branch of a worktree, TRI-STATE (see GitService.getCurrentBranch):
+   *   branch name → on that branch; 'HEAD' → detached; null → could not determine.
+   * We must distinguish "detached" from "unknown" so a failed check never produces
+   * a false detached warning/block.
+   */
   async function currentBranchOf(worktreePath: string): Promise<string | null> {
     // Prefer the injected git service (mockable in tests); fall back to direct git.
-    const dep = deps.gitService?.getCurrentBranch;
+    const dep = deps.gitService?.getCurrentBranchName;
     if (typeof dep === 'function') {
       try { return await dep(worktreePath); } catch { return null; }
     }
     try {
-      const { stdout } = await gitInWorktree(['symbolic-ref', '--short', '-q', 'HEAD'], worktreePath);
+      const { stdout } = await gitInWorktree(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath);
       return stdout.trim() || null;
     } catch { return null; }
   }
@@ -131,9 +136,14 @@ export function registerTools(
     if (!requireBranch) return null;
 
     // Layer 2 — the worktree must be on the session branch, not detached/switched.
+    // Tri-state: null = couldn't determine → FAIL OPEN (never block/scare on an
+    // inconclusive check); 'HEAD' = genuinely detached; else = the branch name.
     const actualBranch = await currentBranchOf(expectedWorktree);
     const expectedBranch = expectedBranchFor(sessionId);
     if (actualBranch === null) {
+      return null; // can't tell — allow; the cwd check already confirmed the directory
+    }
+    if (actualBranch === 'HEAD') {
       return {
         error: 'DETACHED_HEAD',
         expected_branch: expectedBranch ?? null,
@@ -174,9 +184,11 @@ export function registerTools(
       if (worktree && existsSync(worktree)) {
         const actual = await currentBranchOf(worktree);
         const expected = expectedBranchFor(sessionId);
-        if (actual === null) {
+        // Tri-state: null = couldn't determine → stay SILENT (no false alarms).
+        // Only warn on a definitive detached HEAD or a definite branch mismatch.
+        if (actual === 'HEAD') {
           directive = `⚠️ KIT: this session's worktree is in a DETACHED HEAD state. Run: git checkout ${expected ?? '<session-branch>'} before committing, or your work may be lost.`;
-        } else if (expected && actual !== expected) {
+        } else if (actual !== null && expected && actual !== expected) {
           directive = `⚠️ KIT: this session's worktree is on "${actual}" but should be on "${expected}". Run: git checkout ${expected} before committing.`;
         }
       }

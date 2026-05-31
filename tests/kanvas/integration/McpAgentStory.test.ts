@@ -120,7 +120,7 @@ describe('MCP Agent Story - Integration', () => {
         }),
         push: (jest.fn() as any).mockResolvedValue({ success: true }),
         // Worktree-divergence guard: report the worktree is on the session branch.
-        getCurrentBranch: (jest.fn() as any).mockResolvedValue('feat/mcp-test'),
+        getCurrentBranchName: (jest.fn() as any).mockResolvedValue('feat/mcp-test'),
         getCommitHistory: (jest.fn() as any).mockImplementation(async () => ({
           success: true,
           data: commitCalls.map((c, i) => ({
