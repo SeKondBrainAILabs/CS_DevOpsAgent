@@ -210,6 +210,9 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   merge.setRebaseWatcher(rebaseWatcher);
   merge.setAgentInstanceService(agentInstance);
   merge.setLockService(lock);
+  merge.setDebugLog(debugLog);
+  // Audit all worktree removals to the persistent debug log (with caller stack)
+  git.setDebugLog(debugLog);
 
   // Wire mergeConflict into rebaseWatcher so AI resolution is actually used
   rebaseWatcher.setMergeConflictService(mergeConflict);

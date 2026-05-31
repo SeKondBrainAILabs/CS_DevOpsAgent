@@ -1488,6 +1488,9 @@ ${DEVOPS_KIT_DIR}/
     // 1. Remove worktree first (must happen before branch delete)
     if (options.deleteWorktree && worktreePath) {
       try {
+        const stack = (new Error().stack || '').split('\n').slice(2, 7).map(s => s.trim()).join(' <- ');
+        console.warn(`[AgentInstanceService] WORKTREE REMOVE (deleteInstanceWithCleanup ${sessionId}): ${worktreePath}\n  caller: ${stack}`);
+        this.terminalLogService?.warn?.(`Worktree removed (deleteInstanceWithCleanup): ${worktreePath} — caller: ${stack}`, sessionId, 'WorktreeRemove');
         await execaCmd('git', ['worktree', 'remove', worktreePath, '--force'], { cwd: repoPath });
         console.log(`[AgentInstanceService] Removed worktree at ${worktreePath}`);
       } catch (err) {

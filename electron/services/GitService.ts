@@ -54,6 +54,25 @@ async function getExeca() {
 }
 
 export class GitService extends BaseService {
+  /** Optional debug logger — wired in services/index.ts. */
+  private debugLog: { warn: (source: string, message: string, details?: unknown) => void } | null = null;
+  setDebugLog(debugLog: { warn: (source: string, message: string, details?: unknown) => void }): void {
+    this.debugLog = debugLog;
+  }
+
+  /**
+   * Audit every worktree removal. Worktree deletion is destructive (it can lose
+   * an agent's uncommitted work), so we record WHO triggered it — the caller
+   * stack — to the persistent debug log. This makes accidental removals (from
+   * merge/cleanup/restart/stale-scan paths) traceable after the fact.
+   */
+  private auditWorktreeRemoval(worktreePath: string, repoPath: string, reason: string): void {
+    const stack = (new Error().stack || '').split('\n').slice(2, 7).map(s => s.trim()).join(' <- ');
+    const payload = { worktreePath, repoPath, reason, caller: stack };
+    console.warn(`[GitService] WORKTREE REMOVE (${reason}): ${worktreePath}\n  caller: ${stack}`);
+    this.debugLog?.warn('GitService', `Worktree removed (${reason})`, payload);
+  }
+
   /**
    * Execute a git command (uses dynamic import for ESM-only execa)
    */
@@ -183,6 +202,7 @@ export class GitService extends BaseService {
         if (paths && existsSync(paths.worktreePath)) {
           try {
             // Only remove actual worktrees (not submodule directories)
+            this.auditWorktreeRemoval(paths.worktreePath, paths.repoPath, 'removeAllWorktrees(sessionId)');
             await this.git(['worktree', 'remove', paths.worktreePath, '--force'], paths.repoPath);
           } catch {
             // May be a submodule path, not a worktree
@@ -223,6 +243,7 @@ export class GitService extends BaseService {
 
       // Remove worktree
       if (existsSync(worktreePath)) {
+        this.auditWorktreeRemoval(worktreePath, repoPath, `removeWorktree(${sessionId})`);
         await this.git(['worktree', 'remove', worktreePath, '--force'], repoPath);
       }
 
@@ -905,7 +926,20 @@ export class GitService extends BaseService {
         throw new Error('Refusing to remove primary worktree');
       }
 
+      // SAFETY: this path is for cleaning up ABANDONED worktrees. Never delete a
+      // worktree that is currently registered to a live session — doing so would
+      // pull the directory out from under a running agent and lose its work.
+      for (const [sid, value] of worktreePaths.entries()) {
+        if (path.resolve(value.worktreePath) === resolvedWorktreePath) {
+          const msg = `Refusing to remove worktree still registered to live session ${sid}: ${worktreePath}`;
+          console.warn(`[GitService] ${msg}`);
+          this.debugLog?.warn('GitService', 'Blocked removal of live-session worktree', { sessionId: sid, worktreePath, repoPath });
+          throw new Error(msg);
+        }
+      }
+
       if (existsSync(worktreePath)) {
+        this.auditWorktreeRemoval(worktreePath, repoPath, 'removeWorktreeByPath (cleanup)');
         await this.git(['worktree', 'remove', worktreePath, '--force'], repoPath);
       }
 

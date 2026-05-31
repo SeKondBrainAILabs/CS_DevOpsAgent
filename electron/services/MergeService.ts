@@ -35,6 +35,11 @@ export class MergeService extends BaseService {
   private rebaseWatcher: any = null;
   private agentInstanceService: any = null;
   private lockService: any = null;
+  private debugLog: { warn: (source: string, message: string, details?: unknown) => void } | null = null;
+
+  setDebugLog(debugLog: { warn: (source: string, message: string, details?: unknown) => void }): void {
+    this.debugLog = debugLog;
+  }
 
   setMergeConflictService(service: any): void {
     this.mergeConflictService = service;
@@ -863,6 +868,9 @@ export class MergeService extends BaseService {
 
       // Cleanup: Delete worktree if requested
       if (options.deleteWorktree && options.worktreePath) {
+        const stack = (new Error().stack || '').split('\n').slice(2, 7).map(s => s.trim()).join(' <- ');
+        console.warn(`[MergeService] WORKTREE REMOVE (post-merge cleanup): ${options.worktreePath}\n  caller: ${stack}`);
+        this.debugLog?.warn?.('MergeService', 'Worktree removed (post-merge deleteWorktree)', { worktreePath: options.worktreePath, repoPath, caller: stack });
         await this.git(['worktree', 'remove', options.worktreePath, '--force'], repoPath);
         await this.git(['worktree', 'prune'], repoPath);
       }
