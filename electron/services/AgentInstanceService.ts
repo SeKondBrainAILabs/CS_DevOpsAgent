@@ -1715,6 +1715,19 @@ ${DEVOPS_KIT_DIR}/
    * @param sessionId - The session ID to restart
    * @param sessionData - Optional session data to use if no instance exists
    */
+  /**
+   * Remove any in-memory instances on the given repo+branch. Used by restart so
+   * a re-created session can't leave a stale duplicate on the same branch (which
+   * would surface as two rows like "1-31eb" / "2-31eb").
+   */
+  private purgeInstancesOnBranch(repoPath: string, branchName: string): void {
+    for (const [id, inst] of this.instances) {
+      if (inst.config?.repoPath === repoPath && inst.config?.branchName === branchName) {
+        this.instances.delete(id);
+      }
+    }
+  }
+
   async restartInstance(
     sessionId: string,
     sessionData?: {
@@ -1759,6 +1772,9 @@ ${DEVOPS_KIT_DIR}/
           systemPrompt: '',
           contextPreservation: '',
         };
+
+        // Purge any lingering instance on this branch so restart can't duplicate it.
+        this.purgeInstancesOnBranch(config.repoPath, config.branchName);
 
         // Create the new instance directly (skip finding old instance)
         this.terminalLogService?.info(`Initializing Kanvas directory...`, sessionId, 'Restart');
@@ -1849,8 +1865,10 @@ ${DEVOPS_KIT_DIR}/
       this.terminalLogService?.info(`Cleaning up old session files...`, sessionId, 'Restart');
       await this.cleanupSessionFiles(config.repoPath, sessionId);
 
-      // Delete old instance
+      // Delete old instance — and any other lingering instance on the same branch
+      // (e.g. a stale one left after the worktree was removed) to avoid duplicates.
       this.instances.delete(oldInstanceId);
+      this.purgeInstancesOnBranch(config.repoPath, config.branchName);
 
       // Re-initialize the .S9N_KIT_DevOpsAgent directory (ensures structure is correct)
       this.terminalLogService?.info(`Re-initializing Kanvas directory...`, sessionId, 'Restart');
