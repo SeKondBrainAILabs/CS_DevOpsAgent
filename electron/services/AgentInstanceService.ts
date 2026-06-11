@@ -10,6 +10,7 @@ import { spawn } from 'child_process';
 import { mkdir, writeFile, readFile, readdir, stat, access } from 'fs/promises';
 import { existsSync, constants } from 'fs';
 import { join, basename } from 'path';
+import { homedir } from 'os';
 import { BrowserWindow } from 'electron';
 import Store from 'electron-store';
 import { BaseService } from './BaseService';
@@ -1052,6 +1053,66 @@ ${DEVOPS_KIT_DIR}/
   }
 
   /**
+   * Pre-seed the project-scoped MCP approval in ~/.claude.json.
+   *
+   * Claude Code requires explicit approval for project-scoped servers declared in
+   * a worktree's .mcp.json (the "Do you trust the MCP servers in this project?"
+   * prompt). Until that approval is recorded under projects[<path>].
+   * enabledMcpjsonServers, Claude SILENTLY SKIPS the server on session start — so
+   * kit_commit / kit_lock_file etc. never appear, even though the KIT MCP server
+   * is healthy. Since KIT launches the session non-interactively, the prompt is
+   * never answered. We pre-seed the approval here so the kit_* tools load on the
+   * very first launch in a fresh worktree.
+   *
+   * Read-modify-write preserves all existing Claude config (history, other
+   * projects, settings); we only add/extend this worktree's entry.
+   */
+  private async seedClaudeMcpApproval(worktreePath: string): Promise<void> {
+    try {
+      const claudeConfigPath = join(homedir(), '.claude.json');
+
+      let config: Record<string, any> = {};
+      if (existsSync(claudeConfigPath)) {
+        try {
+          config = JSON.parse(await readFile(claudeConfigPath, 'utf-8')) || {};
+        } catch (parseErr) {
+          // Corrupt/unexpected file — do NOT overwrite the user's Claude config.
+          console.warn(`[AgentInstanceService] ~/.claude.json unparseable, skipping MCP pre-approval: ${parseErr}`);
+          return;
+        }
+      }
+
+      if (typeof config.projects !== 'object' || config.projects === null) config.projects = {};
+      const project = (typeof config.projects[worktreePath] === 'object' && config.projects[worktreePath] !== null)
+        ? config.projects[worktreePath] : {};
+
+      // Approve the servers we declared in .mcp.json. Merge with any existing list.
+      const ourServers = ['kit', ...(this.rpcServerUrl ? ['kit-rpc'] : [])];
+      const existing: string[] = Array.isArray(project.enabledMcpjsonServers) ? project.enabledMcpjsonServers : [];
+      project.enabledMcpjsonServers = Array.from(new Set([...existing, ...ourServers]));
+      // If a prior decline recorded our servers as disabled, un-disable them
+      // (disabled overrides enabled in Claude Code).
+      if (Array.isArray(project.disabledMcpjsonServers)) {
+        project.disabledMcpjsonServers = project.disabledMcpjsonServers.filter((s: string) => !ourServers.includes(s));
+      }
+      // Mark the project trust dialog as accepted so Claude doesn't re-prompt.
+      if (project.hasTrustDialogAccepted !== true) project.hasTrustDialogAccepted = true;
+
+      config.projects[worktreePath] = project;
+
+      // Atomic write: temp file + rename, so a crash can't truncate ~/.claude.json.
+      const tmpPath = `${claudeConfigPath}.kit-tmp-${Date.now()}`;
+      await writeFile(tmpPath, JSON.stringify(config, null, 2));
+      const { rename } = await import('fs/promises');
+      await rename(tmpPath, claudeConfigPath);
+      console.log(`[AgentInstanceService] Pre-approved kit MCP server in ~/.claude.json for ${worktreePath}`);
+    } catch (error) {
+      // Non-fatal: the session still launches; the agent just falls back to git/file locks.
+      console.warn(`[AgentInstanceService] Could not pre-seed ~/.claude.json MCP approval: ${error}`);
+    }
+  }
+
+  /**
    * Copy houserules.md and FOLDER_STRUCTURE.md from main repo to worktree root
    * Single source of truth: these files live at repo root, not inside .S9N_KIT_DevOpsAgent/
    */
@@ -1285,6 +1346,11 @@ ${DEVOPS_KIT_DIR}/
     if (mcpAgents.includes(instance.config.agentType)) {
       await this.createMcpConfigFile(worktreePath);
       await this.createClaudeProjectSettings(worktreePath);
+      // Claude Code skips project-scoped .mcp.json servers until they're approved
+      // in ~/.claude.json. Pre-seed that approval so kit_* tools load on first launch.
+      if (instance.config.agentType === 'claude') {
+        await this.seedClaudeMcpApproval(worktreePath);
+      }
     }
 
     return { success: true };
