@@ -247,6 +247,10 @@ const api = {
     fetch: (repoPath: string, remote?: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.GIT_FETCH, repoPath, remote),
 
+    /** Stage + commit all changes in a worktree (pre-merge/rebase save). */
+    commitWorktree: (worktreePath: string, message: string): Promise<IpcResult<{ committed: boolean; hash?: string }>> =>
+      ipcRenderer.invoke(IPC.GIT_COMMIT_WORKTREE, worktreePath, message),
+
     stashPop: (repoPath: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.GIT_STASH_POP, repoPath),
 

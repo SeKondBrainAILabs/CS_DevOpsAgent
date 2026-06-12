@@ -413,6 +413,22 @@ export class GitService extends BaseService {
    * (and block/scare the agent) just because the command errored. `symbolic-ref`
    * conflated the two (exit 1 for both), which caused false "detached" warnings.
    */
+  /**
+   * Stage and commit ALL changes in a worktree path (used to save uncommitted work
+   * before a merge/rebase when the user opts to commit first). No-op-safe: returns
+   * committed:false when there's nothing to commit.
+   */
+  async commitWorktree(worktreePath: string, message: string): Promise<IpcResult<{ committed: boolean; hash?: string }>> {
+    return this.wrap(async () => {
+      const status = await this.git(['status', '--porcelain'], worktreePath);
+      if (!status.trim()) return { committed: false };
+      await this.git(['add', '-A'], worktreePath);
+      await this.git(['commit', '-m', message], worktreePath);
+      const hash = (await this.git(['rev-parse', 'HEAD'], worktreePath)).trim();
+      return { committed: true, hash };
+    }, 'GIT_COMMIT_WORKTREE_FAILED');
+  }
+
   async getCurrentBranchName(worktreePath: string): Promise<string | null> {
     try {
       const out = await this.git(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath);

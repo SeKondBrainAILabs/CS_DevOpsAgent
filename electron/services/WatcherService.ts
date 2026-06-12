@@ -50,6 +50,9 @@ export class WatcherService extends BaseService {
   private agentInstanceService: AgentInstanceService | null = null;
   private lockService: LockService | null = null;
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
+  // Periodic safety-net auto-commit timers (key = compound watcher key).
+  private periodicCommitTimers: Map<string, NodeJS.Timeout> = new Map();
+  private static readonly PERIODIC_COMMIT_MS = 5 * 60 * 1000; // commit WIP every 5 min when dirty
 
   // Phase 4: Analysis services for incremental analysis
   private astParser: ASTParserService | null = null;
@@ -259,6 +262,7 @@ export class WatcherService extends BaseService {
         };
 
         this.watchers.set(sessionId, instance);
+        this.startPeriodicCommit(instance);
         this.workerBridge.startFileMonitor(sessionId, worktreePath, commitMsgFile, claudeCommitMsgFile);
         console.log(`[WatcherService] Delegated file monitoring to worker for ${sessionId}`);
         this.activityService.log(sessionId, 'success', `File watcher started (worker process) for ${worktreePath}`);
@@ -314,6 +318,7 @@ export class WatcherService extends BaseService {
       });
 
       this.watchers.set(sessionId, instance);
+      this.startPeriodicCommit(instance);
       console.log(`[WatcherService] Started watching ${worktreePath} for session ${sessionId}`);
       this.activityService.log(sessionId, 'success', `File watcher started for ${worktreePath}`);
       this.terminalLogService?.logSystem(`Watcher started: ${worktreePath}`, sessionId);
@@ -337,6 +342,13 @@ export class WatcherService extends BaseService {
       if (timer) {
         clearTimeout(timer);
         this.debounceTimers.delete(sessionId);
+      }
+
+      // Clear periodic auto-commit timer
+      const periodic = this.periodicCommitTimers.get(sessionId);
+      if (periodic) {
+        clearInterval(periodic);
+        this.periodicCommitTimers.delete(sessionId);
       }
 
       // Clear analysis debounce timer — must also clear here (not just dispose())
@@ -471,6 +483,64 @@ export class WatcherService extends BaseService {
 
     // Phase 4: Trigger incremental analysis for source files
     this.triggerIncrementalAnalysis(instance, filePath, type);
+  }
+
+  /**
+   * Safety-net periodic auto-commit. Agents don't always commit (and the prompt
+   * can't force them), so every PERIODIC_COMMIT_MS we commit any uncommitted work
+   * with a WIP message so nothing is lost. Skips when there's nothing to commit or
+   * when an agent-triggered commit is already in flight.
+   */
+  private startPeriodicCommit(instance: WatcherInstance): void {
+    const key = instance.sessionId;
+    const existing = this.periodicCommitTimers.get(key);
+    if (existing) clearInterval(existing);
+    const timer = setInterval(() => {
+      this.triggerPeriodicCommit(instance).catch((err) =>
+        console.warn(`[WatcherService] periodic commit failed for ${key}:`, err));
+    }, WatcherService.PERIODIC_COMMIT_MS);
+    this.periodicCommitTimers.set(key, timer);
+  }
+
+  private async triggerPeriodicCommit(instance: WatcherInstance): Promise<void> {
+    const sessionId = instance.sessionId.includes(':')
+      ? instance.sessionId.split(':')[0]
+      : instance.sessionId;
+
+    // Worktree must still exist.
+    if (!existsSync(instance.worktreePath)) return;
+    // Don't race an agent-triggered commit that's debouncing.
+    if (this.debounceTimers.has(sessionId)) return;
+
+    // Only commit when there's actually uncommitted work.
+    const status = await this.gitService.getStatus(sessionId).catch(() => null);
+    const changed = status?.data?.changes?.length || 0;
+    if (!status?.success || changed === 0) return;
+
+    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const baseMsg = `WIP: periodic auto-save (${stamp})`;
+    const commitMessage = instance.primaryRepoName
+      ? `[Upgrade From ${instance.primaryRepoName}] ${baseMsg}`
+      : baseMsg;
+
+    const result = await this.gitService.commit(sessionId, commitMessage, instance.repoName);
+    if (!result.success || !result.data) return;
+
+    const timestamp = new Date().toISOString();
+    this.activityService.log(sessionId, 'commit', `Periodic auto-save [${result.data.shortHash}] — ${changed} file(s)`);
+    this.emitToRenderer(IPC.COMMIT_COMPLETED, {
+      sessionId,
+      commitHash: result.data.hash,
+      message: baseMsg,
+      filesChanged: changed,
+      timestamp,
+      repoName: instance.repoName,
+    });
+    try {
+      databaseService.recordCommit(result.data.hash, sessionId, baseMsg, timestamp, { filesChanged: changed });
+      databaseService.recordSessionEvent(sessionId, 'commit', { message: baseMsg, filesChanged: changed }, result.data.hash);
+    } catch { /* non-fatal */ }
+    try { this.activityService.linkToCommit(sessionId, result.data.hash); } catch { /* non-fatal */ }
   }
 
   private async triggerCommit(instance: WatcherInstance, commitMsgFilePath?: string): Promise<void> {
@@ -873,5 +943,11 @@ export class WatcherService extends BaseService {
       clearTimeout(timer);
     }
     this.analysisDebounceTimers.clear();
+
+    // Clear any lingering periodic auto-commit timers
+    for (const timer of this.periodicCommitTimers.values()) {
+      clearInterval(timer);
+    }
+    this.periodicCommitTimers.clear();
   }
 }

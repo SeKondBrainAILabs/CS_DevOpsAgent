@@ -173,6 +173,12 @@ EOF
 \`\`\`
 
 ## 6. COMMITS${vars.mcpUrl ? `
+### ⚠️ COMMIT FREQUENTLY — this is required, not optional
+- **Commit after every meaningful change** (a function written, a file completed, a bug fixed, a test passing). Don't batch a whole task into one commit at the end.
+- A good cadence is a commit every few minutes of work, or whenever you finish a logical unit. Small, frequent commits make your work recoverable and reviewable.
+- KIT runs a periodic auto-save (~every 5 min) as a safety net, but those are generic "WIP" commits — YOUR commits with real messages are what matter. Don't rely on the safety net.
+- Before pausing, switching files, or ending the session: commit.
+
 🔧 **PREFERRED: Use MCP tool \`kit_commit\`** to commit changes.
 - These are **MCP protocol tools** available via your MCP server connection.
 - ⛔ They are NOT bash commands — do NOT run \`kit_commit\` or \`kit_commit_all\` in a terminal.
@@ -337,6 +343,7 @@ EOF
 ## 4. COMMITS${vars.mcpUrl ? `
 🔧 **PREFERRED: Use MCP tool \`kit_commit\`** (NOT a bash command — MCP protocol only)
 **session_id for all MCP calls: \`${vars.sessionId}\`**
+⚠️ **COMMIT FREQUENTLY** — commit after every meaningful change (a logical unit, a passing test, a fixed bug), not once at the end. Aim for a commit every few minutes of work. KIT auto-saves WIP every ~5 min as a safety net, but your real, message-bearing commits are what count — commit before pausing or ending the session.
 ⚠️ **\`kit_commit\`, \`kit_commit_all\`, \`kit_lock_file\`, \`kit_request_review\` REQUIRE a \`cwd\` parameter** — pass the output of \`pwd\`. KIT verifies it equals this session's worktree (\`${vars.repoPath}\`) on branch \`${vars.branchName || 'YOUR_SESSION_BRANCH'}\` and REJECTS the call otherwise. Never commit from a different directory or after \`git checkout\` to another branch — \`cd\` back first.
 
 ### ⚠️ FALLBACK: If MCP tools are not available` : ''}

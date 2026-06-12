@@ -108,6 +108,8 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<{ success: boolean; message: string } | null>(null);
   const [showErrorPopup, setShowErrorPopup] = useState(false);
+  // Prompt shown before sync/rebase when the worktree has uncommitted changes.
+  const [dirtyRebasePrompt, setDirtyRebasePrompt] = useState<{ count: number; repoPath: string; baseBranch: string } | null>(null);
   const [editingBaseBranch, setEditingBaseBranch] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);       // primary branches only
   const [allBranches, setAllBranches] = useState<string[]>([]);  // full list for advanced dialog
@@ -201,19 +203,30 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
 
   const handleSync = async () => {
     if (syncing) return;
+    const repoPath = session.worktreePath || session.repoPath;
+    const baseBranch = session.baseBranch || 'main';
+    if (!repoPath) {
+      setSyncResult({ success: false, message: 'No repository path configured' });
+      setShowErrorPopup(true);
+      return;
+    }
+    // Ask before rebasing if there's uncommitted work — a rebase on a dirty tree
+    // either fails or silently stashes; committing first keeps the work safe.
+    try {
+      const safety = await window.api?.git?.getWorktreeSafetyInfo?.(repoPath);
+      if (safety?.success && safety.data?.hasUncommittedChanges) {
+        setDirtyRebasePrompt({ count: safety.data.uncommittedFiles?.length ?? 0, repoPath, baseBranch });
+        return;
+      }
+    } catch { /* if the check fails, fall through and let the rebase proceed */ }
+    await doSync(repoPath, baseBranch);
+  };
+
+  const doSync = async (repoPath: string, baseBranch: string) => {
     setSyncing(true);
     setSyncResult(null);
     setShowErrorPopup(false);
     try {
-      const repoPath = session.worktreePath || session.repoPath;
-      const baseBranch = session.baseBranch || 'main';
-
-      if (!repoPath) {
-        setSyncResult({ success: false, message: 'No repository path configured' });
-        setShowErrorPopup(true);
-        return;
-      }
-
       console.log(`[SessionDetail] Syncing ${repoPath} with ${baseBranch}...`);
 
       // First fetch
@@ -349,6 +362,45 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
   return (
     <div className="h-full flex flex-col bg-surface">
       {/* Error/Warning Popup */}
+      {dirtyRebasePrompt && (
+        <div className="fixed inset-0 bg-black/15 backdrop-blur-[2px] flex items-center justify-center z-50">
+          <div className="bg-white border border-[rgba(0,0,0,0.10)] rounded-[18px] shadow-[0_8px_24px_rgba(0,0,0,0.12)] max-w-md w-full mx-4 p-5">
+            <p className="text-[10px] font-mono uppercase tracking-[0.14em] text-[rgba(0,0,0,0.45)]">Before syncing</p>
+            <h3 className="text-base font-semibold text-text-primary mt-1">You have uncommitted local changes</h3>
+            <p className="text-sm text-text-secondary mt-2">
+              This worktree has {dirtyRebasePrompt.count} uncommitted change{dirtyRebasePrompt.count === 1 ? '' : 's'}.
+              Rebasing onto <code className="text-kanvas-blue">{dirtyRebasePrompt.baseBranch}</code> with a dirty tree can
+              fail or stash your work. Commit them first?
+            </p>
+            <div className="flex flex-col gap-2 mt-4">
+              <button
+                onClick={async () => {
+                  const p = dirtyRebasePrompt; setDirtyRebasePrompt(null);
+                  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+                  await window.api?.git?.commitWorktree?.(p.repoPath, `WIP: pre-sync commit (${stamp})`);
+                  await doSync(p.repoPath, p.baseBranch);
+                }}
+                className="w-full px-4 py-2 bg-black text-white rounded-full font-medium hover:bg-black/90 transition-colors"
+              >
+                Commit &amp; sync
+              </button>
+              <button
+                onClick={() => { const p = dirtyRebasePrompt; setDirtyRebasePrompt(null); void doSync(p.repoPath, p.baseBranch); }}
+                className="w-full px-4 py-2 bg-white border border-[rgba(0,0,0,0.10)] rounded-full font-medium text-text-primary hover:bg-[#FAFAF7] transition-colors"
+              >
+                Sync without committing
+              </button>
+              <button
+                onClick={() => setDirtyRebasePrompt(null)}
+                className="w-full px-4 py-2 text-text-secondary rounded-full hover:bg-[rgba(0,0,0,0.04)] transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showErrorPopup && syncResult && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className={`bg-surface border rounded-lg shadow-xl max-w-md w-full mx-4 p-6 ${

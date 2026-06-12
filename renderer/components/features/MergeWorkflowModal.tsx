@@ -100,6 +100,9 @@ export function MergeWorkflowModal({
   // (see handleExecuteMerge). Stored sessionId gets deleted in handleClose.
   const pendingSessionDelete = useRef<string | null>(null);
   const [offline, setOffline] = useState(false);
+  // Uncommitted changes in the source worktree (prompt to commit before merging).
+  const [dirtyCount, setDirtyCount] = useState(0);
+  const [committingDirty, setCommittingDirty] = useState(false);
 
   // Wrap onClose so the deferred session delete fires after the user
   // acknowledges the success screen, rather than immediately on merge complete.
@@ -138,6 +141,7 @@ export function MergeWorkflowModal({
       setShowAdvancedBranches(false);
       setProgressLog([]);
       setActualBranch(sourceBranch);
+      setDirtyCount(0);
       return;
     }
 
@@ -171,6 +175,14 @@ export function MergeWorkflowModal({
       }
 
       setActualBranch(resolvedBranch);
+
+      // Detect uncommitted changes in the source worktree so we can prompt to
+      // commit them before merging (otherwise that work isn't part of the merge).
+      try {
+        const safetyPath = worktreePath || repoPath;
+        const safety = await window.api?.git?.getWorktreeSafetyInfo?.(safetyPath);
+        setDirtyCount(safety?.success && safety.data?.hasUncommittedChanges ? (safety.data.uncommittedFiles?.length ?? 0) : 0);
+      } catch { setDirtyCount(0); }
 
       // Step 2: Load branches list — primaries only by default, full list for Advanced dialog.
       // Use listBranchesForRepo (PATH-based): git.branches takes a sessionId and resolves
@@ -592,6 +604,33 @@ export function MergeWorkflowModal({
               <p className="text-xs text-red-700">
                 <span className="font-medium">Not connected</span> — AI conflict resolution is unavailable. Clean merges will still work.
               </p>
+            </div>
+          )}
+
+          {/* Uncommitted-changes prompt — commit before merging so the work is included */}
+          {step === 'preview' && dirtyCount > 0 && (
+            <div className="mt-2 p-2.5 bg-amber-50 border border-amber-300 rounded-lg flex items-center justify-between gap-3">
+              <p className="text-xs text-amber-800">
+                <span className="font-medium">You have {dirtyCount} uncommitted change{dirtyCount === 1 ? '' : 's'}</span> in
+                {' '}<code className="bg-amber-100 px-1 rounded">{actualBranch}</code>. They won't be part of this merge unless you commit them first.
+              </p>
+              <button
+                type="button"
+                disabled={committingDirty}
+                onClick={async () => {
+                  setCommittingDirty(true);
+                  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+                  const r = await window.api?.git?.commitWorktree?.(worktreePath || repoPath, `WIP: pre-merge commit (${stamp})`);
+                  if (r?.success) {
+                    setDirtyCount(0);
+                    await loadPreview(); // refresh the preview to include the new commit
+                  }
+                  setCommittingDirty(false);
+                }}
+                className="flex-shrink-0 px-3 py-1.5 bg-amber-600 text-white rounded-full text-xs font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors"
+              >
+                {committingDirty ? 'Committing…' : 'Commit changes'}
+              </button>
             </div>
           )}
 

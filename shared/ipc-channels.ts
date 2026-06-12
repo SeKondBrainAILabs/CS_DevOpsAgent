@@ -209,6 +209,7 @@ export const IPC = {
   GIT_CHECK_REMOTE: 'git:check-remote',
   GIT_REBASE: 'git:rebase',
   GIT_PERFORM_REBASE: 'git:perform-rebase',
+  GIT_COMMIT_WORKTREE: 'git:commit-worktree', // Path-based commit-all (pre-merge/rebase save)
   GIT_LIST_WORKTREES: 'git:list-worktrees',
   GIT_PRUNE_WORKTREES: 'git:prune-worktrees',
   GIT_REMOVE_WORKTREE_PATH: 'git:remove-worktree-path',

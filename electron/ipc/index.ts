@@ -531,6 +531,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   // ==========================================================================
   // GIT REBASE HANDLERS
   // ==========================================================================
+  ipcMain.handle(IPC.GIT_COMMIT_WORKTREE, async (_, worktreePath: string, message: string) => {
+    return services.git.commitWorktree(worktreePath, message);
+  });
+
   ipcMain.handle(IPC.GIT_FETCH, async (_, repoPath: string, remote?: string) => {
     return services.git.fetchRemote(repoPath, remote);
   });
