@@ -459,6 +459,27 @@ function RepoInsightRow({
   const [resolveState, setResolveState] = useState<'idle' | 'analyzing' | 'done' | 'error'>('idle');
   const [resolveText, setResolveText] = useState('');
   const [runResults, setRunResults] = useState<Record<number, RunResult>>({});
+  const [runningAll, setRunningAll] = useState(false);
+  const [runningIndex, setRunningIndex] = useState<number | null>(null);
+
+  // Run all resolve commands in order. Stops on the first failure since later
+  // commands typically depend on earlier ones (e.g. `git add` then `git commit`).
+  const runAllCommands = useCallback(async (commands: ResolveCommand[]) => {
+    setRunningAll(true);
+    for (let i = 0; i < commands.length; i++) {
+      if (runResults[i]?.ok) continue; // skip already-succeeded commands
+      setRunningIndex(i);
+      const r = await window.api.shell?.execGitSafe?.(repo.path, commands[i].cmd);
+      const ok = r?.ok ?? false;
+      setRunResults(prev => ({
+        ...prev,
+        [i]: { ok, output: r ? `${r.stdout}${r.stderr ? '\n' + r.stderr : ''}`.trim() : 'No response' },
+      }));
+      if (!ok) break; // halt the chain on first failure
+    }
+    setRunningIndex(null);
+    setRunningAll(false);
+  }, [repo.path, runResults]);
 
   const branch = status?.currentBranch || 'unknown';
   const ahead = status?.ahead ?? 0;
@@ -775,9 +796,27 @@ COMMAND: git <command here>`;
                 {/* Commands */}
                 {commands.length > 0 && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                    <p style={{ fontSize: 11, fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.10em', color: 'rgba(0,0,0,0.40)', marginBottom: 2 }}>
-                      Commands to run
-                    </p>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+                      <p style={{ fontSize: 11, fontFamily: 'var(--f-mono)', textTransform: 'uppercase', letterSpacing: '0.10em', color: 'rgba(0,0,0,0.40)', margin: 0 }}>
+                        Commands to run
+                      </p>
+                      {commands.length > 1 && (
+                        <button
+                          type="button"
+                          disabled={runningAll || commands.every((_, i) => runResults[i]?.ok)}
+                          onClick={() => void runAllCommands(commands)}
+                          style={{
+                            height: 24, padding: '0 12px', fontSize: 11, borderRadius: 999, border: 'none',
+                            background: runningAll ? '#e5e7eb' : '#000',
+                            color: runningAll ? '#6b7280' : '#fff',
+                            cursor: runningAll ? 'default' : 'pointer', fontWeight: 600, flexShrink: 0,
+                          }}
+                          title="Run every command in order; stops if one fails"
+                        >
+                          {runningAll ? `Running ${(runningIndex ?? 0) + 1}/${commands.length}…` : '▶▶ Run all'}
+                        </button>
+                      )}
+                    </div>
                     {commands.map((c, ci) => {
                       const res = runResults[ci];
                       return (
@@ -796,16 +835,16 @@ COMMAND: git <command here>`;
                             </code>
                             <button
                               type="button"
-                              disabled={!!res || resolveState === 'analyzing'}
+                              disabled={!!res || resolveState === 'analyzing' || runningAll}
                               style={{
                                 height: 24,
                                 padding: '0 10px',
                                 fontSize: 11,
                                 borderRadius: 999,
                                 border: 'none',
-                                background: res ? (res.ok ? '#dcfce7' : '#fee2e2') : '#000',
-                                color: res ? (res.ok ? '#059669' : '#b91c1c') : '#fff',
-                                cursor: res ? 'default' : 'pointer',
+                                background: res ? (res.ok ? '#dcfce7' : '#fee2e2') : (runningIndex === ci ? '#e5e7eb' : '#000'),
+                                color: res ? (res.ok ? '#059669' : '#b91c1c') : (runningIndex === ci ? '#6b7280' : '#fff'),
+                                cursor: res || runningAll ? 'default' : 'pointer',
                                 fontWeight: 600,
                                 flexShrink: 0,
                               }}
@@ -820,7 +859,7 @@ COMMAND: git <command here>`;
                                 }));
                               }}
                             >
-                              {res ? (res.ok ? '✓ Done' : '✗ Failed') : '▶ Run'}
+                              {res ? (res.ok ? '✓ Done' : '✗ Failed') : (runningIndex === ci ? 'Running…' : '▶ Run')}
                             </button>
                           </div>
                           {res?.output && (

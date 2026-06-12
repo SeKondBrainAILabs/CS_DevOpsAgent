@@ -7,6 +7,7 @@ import { ipcMain, BrowserWindow, dialog, app } from 'electron';
 import { IPC } from '../../shared/ipc-channels';
 import type { Services } from '../services';
 import { databaseService } from '../services/DatabaseService';
+import { isActiveInstance } from '../../shared/instance-status';
 
 /**
  * Register all IPC handlers
@@ -1527,16 +1528,18 @@ async function startWatchersForExistingSessions(services: Services): Promise<voi
           });
         }
 
-        // Track sessions that were active — will auto-restart after watchers settle
-        if (instance.status === 'active') {
+        // Track every still-alive session — they all auto-restart after watchers
+        // settle so no agent is left dormant after an app restart. (Only terminal
+        // states — completed / closed / failed — are skipped.)
+        if (isActiveInstance(instance)) {
           activeSessions.push(instance.sessionId);
         }
       }
     }
 
-    // Auto-restart sessions that were active when the app was last closed
+    // Auto-restart every alive session when the app starts so all agents resume.
     if (activeSessions.length > 0) {
-      console.log(`[IPC] Auto-restarting ${activeSessions.length} previously active session(s)`);
+      console.log(`[IPC] Auto-restarting ${activeSessions.length} session(s) on app launch`);
       setTimeout(async () => {
         for (const sessionId of activeSessions) {
           try {
