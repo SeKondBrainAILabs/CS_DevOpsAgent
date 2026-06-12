@@ -436,6 +436,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return result;
   });
 
+  ipcMain.handle(IPC.INSTANCE_GET_LAST_CHANGE, async (_, sessionId: string) => {
+    return services.agentInstance.getSessionLastChange(sessionId);
+  });
+
   ipcMain.handle(IPC.INSTANCE_CLEAR_ALL, async () => {
     return services.agentInstance.clearAllInstances();
   });

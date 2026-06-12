@@ -7,7 +7,7 @@
  * Compact rows with columnar session info
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { AgentCardSkeleton } from './AgentCard';
 import { MergeWorkflowModal } from './MergeWorkflowModal';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
@@ -365,7 +365,25 @@ function SessionRow({
   const branch = session.branchName || '';
   // Extract trailing suffix like "-mr4c", "-l63a", "-UXUPG" from branch name
   const suffix = branch.match(/-([a-zA-Z0-9]{3,5})$/)?.[1] || branch.slice(-5);
-  const timeAgo = session.updated ? getTimeAgo(new Date(session.updated)) : null;
+
+  // Real "last change" — most recent of last MCP/activity, last commit, or newest
+  // changed file in the worktree. Falls back to session.updated (bookkeeping) until
+  // it loads. Refreshes periodically so the row stays honest.
+  const [lastChangeAt, setLastChangeAt] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const fetchLastChange = () => {
+      window.api?.instance?.getLastChange?.(session.sessionId).then((r) => {
+        if (!cancelled && r?.success && r.data) setLastChangeAt(r.data);
+      }).catch(() => {});
+    };
+    fetchLastChange();
+    const id = setInterval(fetchLastChange, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [session.sessionId]);
+
+  const effectiveTime = lastChangeAt || session.updated;
+  const timeAgo = effectiveTime ? getTimeAgo(new Date(effectiveTime)) : null;
   const lastRebaseInfo = useAgentStore((state) => state.lastRebaseTimes.get(session.sessionId));
   const syncedAgo = lastRebaseInfo ? getTimeAgo(new Date(lastRebaseInfo.timestamp)) : null;
   // Color: green < 2h, yellow < 24h, red >= 24h, gray = never
@@ -412,9 +430,11 @@ function SessionRow({
         {/* Last sync indicator — green/yellow/orange based on staleness */}
         <span
           className={`text-[10px] flex-shrink-0 group-hover:hidden ${syncColor}`}
-          title={lastRebaseInfo
+          title={syncedAgo && lastRebaseInfo
             ? `Last synced: ${new Date(lastRebaseInfo.timestamp).toLocaleString()} — ${lastRebaseInfo.message}`
-            : 'Not yet synced this session'}
+            : effectiveTime
+              ? `Last change: ${new Date(effectiveTime).toLocaleString()} (last MCP activity / commit / file edit)`
+              : 'No activity yet'}
         >
           {syncedAgo ? `↕ ${syncedAgo}` : timeAgo || ''}
         </span>

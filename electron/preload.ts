@@ -671,6 +671,10 @@ const api = {
     }, commitChanges?: boolean): Promise<IpcResult<AgentInstance>> =>
       ipcRenderer.invoke(IPC.INSTANCE_RESTART, sessionId, sessionData, commitChanges),
 
+    /** Real "last change" time: max of last activity / last commit / newest changed file mtime. */
+    getLastChange: (sessionId: string): Promise<IpcResult<string | null>> =>
+      ipcRenderer.invoke(IPC.INSTANCE_GET_LAST_CHANGE, sessionId),
+
     clearAll: (): Promise<IpcResult<{ count: number }>> =>
       ipcRenderer.invoke(IPC.INSTANCE_CLEAR_ALL),
 

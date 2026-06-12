@@ -1782,6 +1782,59 @@ ${DEVOPS_KIT_DIR}/
    * @param sessionData - Optional session data to use if no instance exists
    */
   /**
+   * Compute a session's REAL "last change" time — the most recent of:
+   *   - last logged activity (covers MCP calls, commits, locks — written to the DB)
+   *   - the worktree's last commit time
+   *   - the newest mtime among uncommitted/untracked files in the worktree
+   *
+   * This is what the UI should show instead of the session's `updated` bookkeeping
+   * field (which moves on create/restart, not on real work). Returns an ISO string
+   * or null. Cheap: uses `git status --porcelain` (changed files only), not a full
+   * tree walk.
+   */
+  async getSessionLastChange(sessionId: string): Promise<IpcResult<string | null>> {
+    try {
+      let instance: AgentInstance | undefined;
+      for (const inst of this.instances.values()) {
+        if (inst.sessionId === sessionId || inst.id === sessionId) { instance = inst; break; }
+      }
+      const worktreePath = instance?.worktreePath || instance?.config?.repoPath;
+
+      const candidates: number[] = [];
+
+      // 1. Last logged activity (MCP calls etc.)
+      const dbTs = databaseService.getLatestActivityTimestamp(instance?.sessionId || sessionId);
+      if (dbTs) { const t = Date.parse(dbTs); if (!Number.isNaN(t)) candidates.push(t); }
+
+      if (worktreePath && existsSync(worktreePath)) {
+        // 2. Last commit time on the worktree's branch.
+        try {
+          const { stdout } = await execaCmd('git', ['log', '-1', '--format=%cI'], { cwd: worktreePath });
+          const t = Date.parse(stdout.trim());
+          if (!Number.isNaN(t)) candidates.push(t);
+        } catch { /* no commits yet */ }
+
+        // 3. Newest mtime among changed/untracked files (the agent's live edits).
+        try {
+          const { stdout } = await execaCmd('git', ['status', '--porcelain'], { cwd: worktreePath });
+          const files = stdout.split('\n').map(l => l.slice(3).trim()).filter(Boolean).slice(0, 300);
+          for (const rel of files) {
+            try {
+              const st = await stat(join(worktreePath, rel.replace(/^"(.*)"$/, '$1')));
+              candidates.push(st.mtime.getTime());
+            } catch { /* file may be deleted/renamed */ }
+          }
+        } catch { /* not a git repo / worktree gone */ }
+      }
+
+      if (candidates.length === 0) return { success: true, data: null };
+      return { success: true, data: new Date(Math.max(...candidates)).toISOString() };
+    } catch (error) {
+      return { success: false, error: { code: 'LAST_CHANGE_FAILED', message: error instanceof Error ? error.message : 'failed' } };
+    }
+  }
+
+  /**
    * Remove any in-memory instances on the given repo+branch. Used by restart so
    * a re-created session can't leave a stale duplicate on the same branch (which
    * would surface as two rows like "1-31eb" / "2-31eb").

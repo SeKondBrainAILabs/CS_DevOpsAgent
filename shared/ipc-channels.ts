@@ -163,6 +163,7 @@ export const IPC = {
   INSTANCE_DELETE_SAFETY_CHECK: 'instance:delete-safety-check', // Pre-delete safety info
   INSTANCE_DELETE_WITH_CLEANUP: 'instance:delete-with-cleanup', // Delete with worktree/branch cleanup
   INSTANCE_RESTART: 'instance:restart',
+  INSTANCE_GET_LAST_CHANGE: 'instance:get-last-change', // Real last-change time (activity/commit/file mtime)
   INSTANCE_CLEAR_ALL: 'instance:clear-all',
   INSTANCE_UPDATE_BASE_BRANCH: 'instance:update-base-branch',
   RECENT_REPOS_LIST: 'recent-repos:list',
@@ -579,6 +580,7 @@ export const REQUEST_CHANNELS = [
   IPC.INSTANCE_DELETE_SAFETY_CHECK,
   IPC.INSTANCE_DELETE_WITH_CLEANUP,
   IPC.INSTANCE_RESTART,
+  IPC.INSTANCE_GET_LAST_CHANGE,
   IPC.RECENT_REPOS_LIST,
   IPC.RECENT_REPOS_ADD,
   IPC.RECENT_REPOS_REMOVE,

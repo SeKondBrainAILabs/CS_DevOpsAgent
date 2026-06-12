@@ -261,6 +261,18 @@ export class DatabaseService extends BaseService {
   }
 
   /**
+   * Most recent activity timestamp for a session (covers MCP calls + all logged
+   * activity, since they're written to activity_logs). Returns null if none.
+   */
+  getLatestActivityTimestamp(sessionId: string): string | null {
+    if (!this.db) return null;
+    const row = this.db
+      .prepare('SELECT MAX(timestamp) AS ts FROM activity_logs WHERE session_id = ?')
+      .get(sessionId) as { ts: string | null } | undefined;
+    return row?.ts ?? null;
+  }
+
+  /**
    * Get activity logs for a session
    */
   getActivityLogs(sessionId: string, limit = 500, offset = 0): ActivityLogEntry[] {
