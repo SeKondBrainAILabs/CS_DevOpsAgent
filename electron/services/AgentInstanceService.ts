@@ -1448,11 +1448,15 @@ ${DEVOPS_KIT_DIR}/
   /**
    * Get a specific instance
    */
-  getInstance(instanceId: string): IpcResult<AgentInstance | null> {
-    return {
-      success: true,
-      data: this.instances.get(instanceId) || null,
-    };
+  getInstance(instanceIdOrSessionId: string): IpcResult<AgentInstance | null> {
+    let found = this.instances.get(instanceIdOrSessionId) || null;
+    if (!found) {
+      // Fall back to matching by sessionId (callers often only have the session id).
+      for (const inst of this.instances.values()) {
+        if (inst.sessionId === instanceIdOrSessionId) { found = inst; break; }
+      }
+    }
+    return { success: true, data: found };
   }
 
   /**

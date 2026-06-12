@@ -429,6 +429,64 @@ export class GitService extends BaseService {
     }, 'GIT_COMMIT_WORKTREE_FAILED');
   }
 
+  /**
+   * Find existing version-tag prefixes in a repo (for the wizard to suggest one).
+   * A "version tag" is any tag ending in vMAJOR.MINOR.PATCH; the returned prefix
+   * is everything up to and including the leading "v" (e.g. "SDDMini-KH/v").
+   */
+  async detectVersionTagPrefixes(repoPath: string): Promise<IpcResult<Array<{ prefix: string; count: number; latest: string }>>> {
+    return this.wrap(async () => {
+      const out = await this.git(['tag', '--list'], repoPath).catch(() => '');
+      const byPrefix = new Map<string, { count: number; latestVer: [number, number, number]; latest: string }>();
+      for (const raw of out.split('\n')) {
+        const tag = raw.trim();
+        const m = tag.match(/^(.*v)(\d+)\.(\d+)\.(\d+)$/);
+        if (!m) continue;
+        const prefix = m[1];
+        const ver: [number, number, number] = [Number(m[2]), Number(m[3]), Number(m[4])];
+        const cur = byPrefix.get(prefix);
+        const isNewer = !cur || ver[0] > cur.latestVer[0] || (ver[0] === cur.latestVer[0] && (ver[1] > cur.latestVer[1] || (ver[1] === cur.latestVer[1] && ver[2] > cur.latestVer[2])));
+        byPrefix.set(prefix, { count: (cur?.count ?? 0) + 1, latestVer: isNewer ? ver : (cur?.latestVer ?? ver), latest: isNewer ? tag : (cur?.latest ?? tag) });
+      }
+      return Array.from(byPrefix.entries())
+        .map(([prefix, v]) => ({ prefix, count: v.count, latest: v.latest }))
+        .sort((a, b) => b.count - a.count);
+    }, 'GIT_DETECT_TAG_PREFIXES_FAILED');
+  }
+
+  /**
+   * Compute the next version tag for a prefix by bumping the patch of the highest
+   * existing tag. Fetches tags first (best-effort) so remote releases are counted.
+   */
+  async getNextVersionTag(repoPath: string, prefix: string): Promise<IpcResult<{ latest: string | null; next: string }>> {
+    return this.wrap(async () => {
+      try { await this.git(['fetch', '--tags', '--quiet', 'origin'], repoPath); } catch { /* offline ok */ }
+      const out = await this.git(['tag', '--list', `${prefix}*`], repoPath).catch(() => '');
+      const versions = out.split('\n')
+        .map(t => t.trim())
+        .filter(t => t.startsWith(prefix))
+        .map(t => t.slice(prefix.length).match(/^(\d+)\.(\d+)\.(\d+)$/))
+        .filter((m): m is RegExpMatchArray => !!m)
+        .map(m => [Number(m[1]), Number(m[2]), Number(m[3])] as [number, number, number]);
+      versions.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
+      const top = versions[versions.length - 1];
+      const latest = top ? `${prefix}${top[0]}.${top[1]}.${top[2]}` : null;
+      const next = top ? `${prefix}${top[0]}.${top[1]}.${top[2] + 1}` : `${prefix}0.0.1`;
+      return { latest, next };
+    }, 'GIT_NEXT_VERSION_FAILED');
+  }
+
+  /**
+   * Create an annotated tag and push it to origin. Pushing a tag that matches a
+   * workflow's `on: push: tags` pattern is what fires the GitHub Action.
+   */
+  async createAndPushTag(repoPath: string, tag: string, ref?: string): Promise<IpcResult<void>> {
+    return this.wrap(async () => {
+      await this.git(['tag', '-a', tag, '-m', tag, ...(ref ? [ref] : [])], repoPath);
+      await this.git(['push', 'origin', tag], repoPath);
+    }, 'GIT_CREATE_TAG_FAILED');
+  }
+
   async getCurrentBranchName(worktreePath: string): Promise<string | null> {
     try {
       const out = await this.git(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath);

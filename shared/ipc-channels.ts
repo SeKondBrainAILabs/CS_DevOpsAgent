@@ -210,6 +210,9 @@ export const IPC = {
   GIT_REBASE: 'git:rebase',
   GIT_PERFORM_REBASE: 'git:perform-rebase',
   GIT_COMMIT_WORKTREE: 'git:commit-worktree', // Path-based commit-all (pre-merge/rebase save)
+  GIT_DETECT_TAG_PREFIXES: 'git:detect-tag-prefixes', // Existing version-tag prefixes (wizard)
+  GIT_NEXT_VERSION_TAG: 'git:next-version-tag',       // Next version for a prefix
+  GIT_CREATE_PUSH_TAG: 'git:create-push-tag',         // Create + push a tag (fires the action)
   GIT_LIST_WORKTREES: 'git:list-worktrees',
   GIT_PRUNE_WORKTREES: 'git:prune-worktrees',
   GIT_REMOVE_WORKTREE_PATH: 'git:remove-worktree-path',

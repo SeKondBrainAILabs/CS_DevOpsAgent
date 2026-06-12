@@ -600,6 +600,23 @@ export interface AgentInstanceConfig {
   multiRepo?: MultiRepoConfig;
   // Custom agent: whether the agent supports MCP
   customMcpEnabled?: boolean;
+  // Optional: fire a GitHub Action when this session is merged (see MergeActionConfig).
+  mergeAction?: MergeActionConfig;
+}
+
+/**
+ * Configures a GitHub Action to fire when a session is merged. Currently the
+ * "tag-push" mechanism: KIT creates and pushes a version tag (e.g.
+ * "SDDMini-KH/v3.23.41") whose push triggers the workflow. The version is
+ * auto-incremented (patch) from the latest existing tag with the same prefix.
+ */
+export interface MergeActionConfig {
+  enabled: boolean;
+  type: 'tag-push';
+  /** Tag prefix up to and including the leading "v", e.g. "SDDMini-KH/v". */
+  tagPrefix: string;
+  /** How to bump the version from the latest tag. Patch only for now. */
+  versionBump: 'patch';
 }
 
 export interface AgentInstance {

@@ -38,6 +38,9 @@ interface AgentSettings {
   autoCommit: boolean;
   systemPrompt: string;
   contextPreservation: string;
+  // GitHub Action on merge (tag-push)
+  mergeActionEnabled: boolean;
+  mergeActionTagPrefix: string;
 }
 
 const DEFAULT_SYSTEM_PROMPT = `Follow existing code style and patterns
@@ -79,7 +82,12 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
     autoCommit: true,
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
     contextPreservation: DEFAULT_CONTEXT_PRESERVATION,
+    mergeActionEnabled: false,
+    mergeActionTagPrefix: '',
   });
+
+  // Detected version-tag prefixes in the selected repo (for the GH Action picker).
+  const [tagPrefixes, setTagPrefixes] = useState<Array<{ prefix: string; count: number; latest: string }>>([]);
 
   // Result
   const [createdInstance, setCreatedInstance] = useState<AgentInstance | null>(null);
@@ -162,6 +170,14 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
           // Default the base branch to the repo's current branch — but never to a
           // detached-HEAD/"HEAD" sentinel. Fall back to a primary that actually exists.
           setSettings((s) => ({ ...s, baseBranch: pickDefaultBaseBranch(validationResult.data!) }));
+          // Detect existing version-tag prefixes (for the GitHub-Action-on-merge picker).
+          window.api?.git?.detectTagPrefixes?.(initialRepoPath).then((r) => {
+            if (!cancelled && r?.success && r.data) {
+              setTagPrefixes(r.data);
+              // Pre-fill the most common prefix so the action is one toggle away.
+              if (r.data[0]) setSettings((s) => ({ ...s, mergeActionTagPrefix: s.mergeActionTagPrefix || r.data![0].prefix }));
+            }
+          }).catch(() => {});
         }
 
         // Advance past the 'setup' placeholder to the correct first step
@@ -204,6 +220,12 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
     setRepoValidation(validation);
     setError(null);
     setSettings(s => ({ ...s, baseBranch: pickDefaultBaseBranch(validation) }));
+    window.api?.git?.detectTagPrefixes?.(path).then((r) => {
+      if (r?.success && r.data) {
+        setTagPrefixes(r.data);
+        if (r.data[0]) setSettings((s) => ({ ...s, mergeActionTagPrefix: s.mergeActionTagPrefix || r.data![0].prefix }));
+      }
+    }).catch(() => {});
 
     // Load previous session defaults for this repo + detect submodules in parallel
     const [hasPrev] = await Promise.all([
@@ -364,6 +386,9 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
         contextPreservation: settings.contextPreservation,
         multiRepo,
         customMcpEnabled: agentType === 'custom' ? customMcpEnabled : undefined,
+        mergeAction: settings.mergeActionEnabled && settings.mergeActionTagPrefix.trim()
+          ? { enabled: true, type: 'tag-push' as const, tagPrefix: settings.mergeActionTagPrefix.trim(), versionBump: 'patch' as const }
+          : undefined,
       };
 
       const result = await window.api?.instance?.create(config);
@@ -790,6 +815,57 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
                       Manual commits only
                     </OptionButton>
                   </div>
+                </SettingCard>
+
+                {/* GitHub Action on merge (tag-push) */}
+                <SettingCard
+                  title="GitHub Action on merge"
+                  description="Fire a workflow when this session is merged, by pushing a version tag."
+                >
+                  <div className="flex gap-3">
+                    <OptionButton
+                      selected={!settings.mergeActionEnabled}
+                      onClick={() => setSettings(s => ({ ...s, mergeActionEnabled: false }))}
+                    >
+                      Off
+                    </OptionButton>
+                    <OptionButton
+                      selected={settings.mergeActionEnabled}
+                      onClick={() => setSettings(s => ({ ...s, mergeActionEnabled: true }))}
+                    >
+                      Push a version tag
+                    </OptionButton>
+                  </div>
+                  {settings.mergeActionEnabled && (
+                    <div className="mt-3 space-y-2">
+                      <label className="label">Tag prefix (the part before the version)</label>
+                      {tagPrefixes.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          {tagPrefixes.slice(0, 4).map(p => (
+                            <button
+                              key={p.prefix}
+                              type="button"
+                              onClick={() => setSettings(s => ({ ...s, mergeActionTagPrefix: p.prefix }))}
+                              className={`text-xs px-2 py-1 rounded-full border ${settings.mergeActionTagPrefix === p.prefix ? 'bg-black text-white border-black' : 'border-[rgba(0,0,0,0.10)] text-text-secondary hover:bg-[#FAFAF7]'}`}
+                              title={`${p.count} existing tags — latest ${p.latest}`}
+                            >
+                              {p.prefix}… <span className="opacity-60">(latest {p.latest.replace(p.prefix, '')})</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <input
+                        type="text"
+                        value={settings.mergeActionTagPrefix}
+                        onChange={(e) => setSettings(s => ({ ...s, mergeActionTagPrefix: e.target.value }))}
+                        className="input w-full font-mono"
+                        placeholder="SDDMini-KH/v"
+                      />
+                      <p className="text-[11px] text-text-secondary">
+                        On merge, KIT will create &amp; push the next patch tag (e.g. <code>{(settings.mergeActionTagPrefix || 'SDDMini-KH/v')}3.23.41</code>) — you can edit the version before it fires. Its push triggers the matching workflow.
+                      </p>
+                    </div>
+                  )}
                 </SettingCard>
               </div>
             </div>

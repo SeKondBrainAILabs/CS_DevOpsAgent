@@ -535,6 +535,18 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.git.commitWorktree(worktreePath, message);
   });
 
+  ipcMain.handle(IPC.GIT_DETECT_TAG_PREFIXES, async (_, repoPath: string) => {
+    return services.git.detectVersionTagPrefixes(repoPath);
+  });
+
+  ipcMain.handle(IPC.GIT_NEXT_VERSION_TAG, async (_, repoPath: string, prefix: string) => {
+    return services.git.getNextVersionTag(repoPath, prefix);
+  });
+
+  ipcMain.handle(IPC.GIT_CREATE_PUSH_TAG, async (_, repoPath: string, tag: string, ref?: string) => {
+    return services.git.createAndPushTag(repoPath, tag, ref);
+  });
+
   ipcMain.handle(IPC.GIT_FETCH, async (_, repoPath: string, remote?: string) => {
     return services.git.fetchRemote(repoPath, remote);
   });

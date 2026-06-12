@@ -104,6 +104,12 @@ export function MergeWorkflowModal({
   const [dirtyCount, setDirtyCount] = useState(0);
   const [committingDirty, setCommittingDirty] = useState(false);
 
+  // GitHub Action on merge (tag-push) — read from the session's config.
+  const [mergeActionPrefix, setMergeActionPrefix] = useState<string | null>(null);
+  const [actionVersionTag, setActionVersionTag] = useState('');
+  const [actionState, setActionState] = useState<'idle' | 'firing' | 'fired' | 'error'>('idle');
+  const [actionError, setActionError] = useState<string | null>(null);
+
   // Wrap onClose so the deferred session delete fires after the user
   // acknowledges the success screen, rather than immediately on merge complete.
   const handleClose = useCallback(() => {
@@ -142,6 +148,10 @@ export function MergeWorkflowModal({
       setProgressLog([]);
       setActualBranch(sourceBranch);
       setDirtyCount(0);
+      setMergeActionPrefix(null);
+      setActionVersionTag('');
+      setActionState('idle');
+      setActionError(null);
       return;
     }
 
@@ -184,6 +194,15 @@ export function MergeWorkflowModal({
         setDirtyCount(safety?.success && safety.data?.hasUncommittedChanges ? (safety.data.uncommittedFiles?.length ?? 0) : 0);
       } catch { setDirtyCount(0); }
 
+      // Read the session's GitHub-Action-on-merge config (tag-push), if any.
+      try {
+        if (sessionId) {
+          const inst = await window.api?.instance?.get?.(sessionId);
+          const ma = inst?.success ? inst.data?.config?.mergeAction : undefined;
+          setMergeActionPrefix(ma?.enabled && ma.type === 'tag-push' ? ma.tagPrefix : null);
+        }
+      } catch { setMergeActionPrefix(null); }
+
       // Step 2: Load branches list — primaries only by default, full list for Advanced dialog.
       // Use listBranchesForRepo (PATH-based): git.branches takes a sessionId and resolves
       // the worktree from a registry only populated while the watcher runs, so it returned
@@ -213,6 +232,30 @@ export function MergeWorkflowModal({
 
     init();
   }, [isOpen, sourceBranch, initialTargetBranch, repoPath, worktreePath]);
+
+  // When the merge completes and a tag-push action is configured, pre-compute the
+  // next version tag (patch bump) so the user can confirm/edit before firing.
+  useEffect(() => {
+    if (step === 'complete' && mergeActionPrefix && !actionVersionTag) {
+      window.api?.git?.nextVersionTag?.(repoPath, mergeActionPrefix).then((r) => {
+        if (r?.success && r.data) setActionVersionTag(r.data.next);
+      }).catch(() => {});
+    }
+  }, [step, mergeActionPrefix, repoPath, actionVersionTag]);
+
+  const fireMergeAction = async () => {
+    if (!actionVersionTag.trim()) return;
+    setActionState('firing');
+    setActionError(null);
+    try {
+      const r = await window.api?.git?.createAndPushTag?.(repoPath, actionVersionTag.trim());
+      if (r?.success) setActionState('fired');
+      else { setActionState('error'); setActionError(r?.error?.message || 'Failed to push tag'); }
+    } catch (e) {
+      setActionState('error');
+      setActionError(e instanceof Error ? e.message : 'Failed to push tag');
+    }
+  };
 
   const loadPreviewWithBranch = async (branch: string) => {
     setLoading(true);
@@ -995,6 +1038,43 @@ export function MergeWorkflowModal({
                     <p key={f} className="text-xs font-mono text-yellow-600 pl-2">{f}</p>
                   ))}
                   <p className="text-xs text-yellow-600 mt-1">The merged version was kept for these files.</p>
+                </div>
+              )}
+
+              {/* GitHub Action on merge (tag-push) */}
+              {mergeActionPrefix && (
+                <div className="mt-4 p-3 bg-[#FAFAF7] border border-[rgba(0,0,0,0.10)] rounded-[14px] text-left">
+                  {actionState === 'fired' ? (
+                    <p className="text-sm text-green-700 flex items-center gap-1.5">
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                      Pushed <code className="font-mono">{actionVersionTag}</code> — GitHub Action triggered.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-[10px] font-mono uppercase tracking-[0.14em] text-[rgba(0,0,0,0.45)]">GitHub Action</p>
+                      <p className="text-sm text-text-primary mt-0.5">Fire the workflow by pushing a version tag</p>
+                      <div className="flex items-center gap-2 mt-2">
+                        <input
+                          type="text"
+                          value={actionVersionTag}
+                          onChange={(e) => setActionVersionTag(e.target.value)}
+                          disabled={actionState === 'firing'}
+                          className="flex-1 px-2 py-1.5 rounded-[10px] bg-white border border-[rgba(0,0,0,0.10)] text-sm font-mono focus:outline-none focus:ring-2 focus:ring-kanvas-blue/50"
+                          placeholder="SDDMini-KH/v3.23.41"
+                        />
+                        <button
+                          type="button"
+                          disabled={actionState === 'firing' || !actionVersionTag.trim()}
+                          onClick={() => void fireMergeAction()}
+                          className="flex-shrink-0 px-3 py-1.5 bg-black text-white rounded-full text-xs font-medium hover:bg-black/90 disabled:opacity-50 transition-colors"
+                        >
+                          {actionState === 'firing' ? 'Pushing…' : 'Create & push tag'}
+                        </button>
+                      </div>
+                      {actionError && <p className="text-xs text-red-600 mt-1.5">{actionError}</p>}
+                      <p className="text-[11px] text-text-secondary mt-1.5">Auto-incremented patch from the latest tag. Edit the version if needed.</p>
+                    </>
+                  )}
                 </div>
               )}
             </div>

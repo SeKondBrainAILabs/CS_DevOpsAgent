@@ -251,6 +251,18 @@ const api = {
     commitWorktree: (worktreePath: string, message: string): Promise<IpcResult<{ committed: boolean; hash?: string }>> =>
       ipcRenderer.invoke(IPC.GIT_COMMIT_WORKTREE, worktreePath, message),
 
+    /** Existing version-tag prefixes in a repo (e.g. "SDDMini-KH/v"). */
+    detectTagPrefixes: (repoPath: string): Promise<IpcResult<Array<{ prefix: string; count: number; latest: string }>>> =>
+      ipcRenderer.invoke(IPC.GIT_DETECT_TAG_PREFIXES, repoPath),
+
+    /** Next version tag for a prefix (patch-bumped from the latest). */
+    nextVersionTag: (repoPath: string, prefix: string): Promise<IpcResult<{ latest: string | null; next: string }>> =>
+      ipcRenderer.invoke(IPC.GIT_NEXT_VERSION_TAG, repoPath, prefix),
+
+    /** Create + push a tag (its push fires the matching GitHub Action). */
+    createAndPushTag: (repoPath: string, tag: string, ref?: string): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.GIT_CREATE_PUSH_TAG, repoPath, tag, ref),
+
     stashPop: (repoPath: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.GIT_STASH_POP, repoPath),
 
