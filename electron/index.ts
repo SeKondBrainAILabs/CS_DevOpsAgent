@@ -1,15 +1,64 @@
 /**
  * Electron Main Process Entry Point
- * SeKondBrain Kanvas - Desktop DevOps Agent
+ * KIT for DevOps - Desktop DevOps Agent
  */
 
 import { app, BrowserWindow, shell } from 'electron';
 import { join } from 'path';
+import { existsSync, mkdirSync, renameSync, rmSync } from 'fs';
 import { registerIpcHandlers, removeIpcHandlers } from './ipc';
 import { initializeServices, disposeServices, type Services } from './services';
 import { startMemoryProbe } from './diagnostics/MemoryProbe';
 
 import { IPC } from '../shared/ipc-channels';
+
+// One-time data-dir migration from the legacy "sekondbrain-kanvas" userData
+// directory to the current "kit-for-devops" one. Must run before any service
+// touches userData, so we do it synchronously at module load.
+//
+// Why not just check "does the new dir exist?": Electron pre-creates the
+// userData directory and writes Chromium files (Cookies, Preferences, …)
+// before our module-level code runs. So the dir always exists by the time
+// we get here — we need a marker tied to *our* data instead. The DB file is
+// the right signal: present in legacy = real data; absent in current = nothing
+// to lose. We move only our files (data/, logs/, *.json), leaving Chromium
+// state alone in whichever dir it already lives.
+(function migrateLegacyUserDataDir() {
+  try {
+    const appData = app.getPath('appData');
+    const legacyDir = join(appData, 'sekondbrain-kanvas');
+    const currentDir = join(appData, 'kit-for-devops');
+    const legacyDb = join(legacyDir, 'data', 'kanvas.db');
+    const currentDb = join(currentDir, 'data', 'kanvas.db');
+    if (!existsSync(legacyDb) || existsSync(currentDb)) return;
+
+    mkdirSync(currentDir, { recursive: true });
+    // Move our data subdir (DB + WAL/SHM travel together)
+    renameSync(join(legacyDir, 'data'), join(currentDir, 'data'));
+    // Move our electron-store JSON files and logs subdir if present
+    for (const item of [
+      'kanvas-instances.json',
+      'kanvas-project-groups.json',
+      'kanvas-workspaces.json',
+      'sekondbrain-kanvas.json',
+      'logs',
+    ]) {
+      const src = join(legacyDir, item);
+      const dst = join(currentDir, item);
+      if (existsSync(src) && !existsSync(dst)) renameSync(src, dst);
+    }
+    // Best-effort cleanup of the now-empty (or Chromium-only) legacy dir.
+    // We don't fail migration if this trips — the data is what mattered.
+    try {
+      rmSync(legacyDir, { recursive: true, force: true });
+    } catch {
+      // leave it; user can delete by hand
+    }
+    console.log(`[Migration] Moved userData files ${legacyDir} -> ${currentDir}`);
+  } catch (err) {
+    console.error('[Migration] Failed to migrate legacy userData dir:', err);
+  }
+})();
 
 let mainWindow: BrowserWindow | null = null;
 let services: Services | null = null;
