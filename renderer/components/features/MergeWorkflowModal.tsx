@@ -73,6 +73,10 @@ export function MergeWorkflowModal({
     });
   }, [repoPath, actualBranch, targetBranch, sessionId, worktreePath]);
   const branchMismatch = actualBranch !== sourceBranch;
+  // Same-branch merge is a no-op and git will reject it. This happens when the
+  // session worktree is checked out on the target branch itself (so the resolved
+  // active branch equals the target) instead of its own session branch.
+  const sameBranch = actualBranch.replace(/^origin\//, '') === targetBranch.replace(/^origin\//, '');
 
   // Merge options
   // Default OFF — worktree contains the agent's work; auto-deletion is too aggressive
@@ -629,8 +633,18 @@ export function MergeWorkflowModal({
             </button>
           </div>
 
-          {/* Branch mismatch notice */}
-          {branchMismatch && (
+          {/* Same-branch notice — supersedes the auto-correct notice since it blocks the merge */}
+          {sameBranch ? (
+            <div className="mt-2 p-2 bg-amber-50 border border-amber-300 rounded-lg">
+              <p className="text-xs text-amber-800">
+                <span className="font-medium">Nothing to merge:</span>{' '}
+                this session's worktree is checked out on{' '}
+                <code className="bg-amber-100 px-1 rounded">{actualBranch}</code>, the same as the
+                target. Its commits are already on <code className="bg-amber-100 px-1 rounded">{targetBranch}</code>.{' '}
+                Pick a different target, or switch the worktree to its own session branch to keep the work separate.
+              </p>
+            </div>
+          ) : branchMismatch && (
             <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-lg">
               <p className="text-xs text-blue-700">
                 <span className="font-medium">Branch auto-corrected:</span>{' '}
@@ -1179,9 +1193,9 @@ export function MergeWorkflowModal({
                   {/* Normal continue */}
                   <button
                     onClick={() => setStep('options')}
-                    disabled={!preview?.canMerge}
+                    disabled={!preview?.canMerge || sameBranch}
                     className={`px-4 py-2 rounded-full font-medium transition-colors ${
-                      preview?.canMerge
+                      preview?.canMerge && !sameBranch
                         ? 'bg-black text-white hover:bg-black/90'
                         : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                     }`}

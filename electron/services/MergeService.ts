@@ -486,6 +486,25 @@ export class MergeService extends BaseService {
       // Strip 'origin/' prefix — branch names may be stored as 'origin/main'
       // from the branch picker dropdown which lists remote tracking branches.
       targetBranch = targetBranch.replace(/^origin\//, '');
+      const normalizedSource = sourceBranch.replace(/^origin\//, '');
+
+      // Guard: source and target are the same branch. This happens when a session
+      // worktree is sitting on the target branch itself (e.g. checked out on
+      // `main`) rather than its own session branch — the branch auto-resolve then
+      // reports the target as the "active" branch. A branch can't be merged into
+      // itself, and in a worktree setup all worktrees share the same refs, so the
+      // commits already live on `main`. Fail fast with a clear message instead of
+      // attempting a checkout git will reject ("'main' is already used by worktree…").
+      if (normalizedSource === targetBranch) {
+        return {
+          success: false,
+          message:
+            `Source and target are the same branch ('${targetBranch}'). This session's ` +
+            `worktree is checked out on '${targetBranch}' rather than its own session branch, ` +
+            `so its commits are already on '${targetBranch}' — there is nothing to merge. ` +
+            `If you intended to keep this work separate, switch the worktree to a session branch first.`,
+        };
+      }
 
       let didStash = false;
 
@@ -617,7 +636,22 @@ export class MergeService extends BaseService {
       if (currentBranch !== targetBranch) {
         const checkoutResult = await this.git(['checkout', targetBranch], repoPath);
         if (checkoutResult.exitCode !== 0) {
-          throw new Error(`Failed to checkout ${targetBranch}: ${checkoutResult.stderr}`);
+          const stderr = checkoutResult.stderr || '';
+          // A branch can only be checked out in one worktree at a time. If the
+          // target is held by a session worktree, git refuses with
+          // "fatal: '<branch>' is already used by worktree at '<path>'".
+          // Surface an actionable message instead of the raw fatal.
+          const heldBy = stderr.match(/already used by worktree at '?([^'\n]+)'?/i);
+          if (heldBy) {
+            return {
+              success: false,
+              message:
+                `Cannot merge into '${targetBranch}': it is currently checked out in another ` +
+                `worktree (${heldBy[1].trim()}). Switch that session off '${targetBranch}' ` +
+                `(or close it) so the branch is free, then retry the merge.`,
+            };
+          }
+          throw new Error(`Failed to checkout ${targetBranch}: ${stderr}`);
         }
       }
 
