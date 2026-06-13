@@ -1556,9 +1556,31 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
 }
 
 /**
- * Start file watchers for all existing sessions and auto-restart active ones
+ * Start file watchers for all existing sessions and auto-restart active ones.
+ *
+ * Safe-boot escape hatch: if a `.safe-boot` file exists in userData, skip the
+ * watcher startup and the auto-restart loop entirely. Sessions still load into
+ * the UI from electron-store; the user can manually start what they want. Use
+ * this when prior state has stale sessions whose initial-scan watcher events
+ * overwhelm the renderer (one session in a million-file repo emits 10k+ adds
+ * before the user can even see the dashboard).
+ *
+ * To activate:  touch ~/Library/Application\ Support/kit-for-devops/.safe-boot
+ * To restore:   rm    ~/Library/Application\ Support/kit-for-devops/.safe-boot
  */
 async function startWatchersForExistingSessions(services: Services): Promise<void> {
+  try {
+    const { existsSync } = await import('fs');
+    const { join } = await import('path');
+    const safeBootMarker = join(app.getPath('userData'), '.safe-boot');
+    if (existsSync(safeBootMarker)) {
+      console.log(`[IPC] Safe boot: ${safeBootMarker} present — skipping watcher startup and auto-restart`);
+      return;
+    }
+  } catch (err) {
+    console.warn('[IPC] Safe-boot check failed (continuing with normal startup):', err);
+  }
+
   const result = services.agentInstance.listInstances();
   if (result.success && result.data) {
     console.log(`[IPC] Starting watchers for ${result.data.length} existing sessions`);
