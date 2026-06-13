@@ -1561,6 +1561,10 @@ async function startWatchersForExistingSessions(services: Services): Promise<voi
     if (activeSessions.length > 0) {
       console.log(`[IPC] Auto-restarting ${activeSessions.length} session(s) on app launch`);
       setTimeout(async () => {
+        // STAGGER the restarts. Each restartInstance does git + fs + DB work and
+        // re-inits a worktree; firing them all at once on launch spikes CPU and can
+        // make the app unresponsive. Space them out so the load spreads over time.
+        const RESTART_GAP_MS = 2500;
         for (const sessionId of activeSessions) {
           try {
             const restart = await services.agentInstance.restartInstance(sessionId, undefined, true);
@@ -1575,6 +1579,8 @@ async function startWatchersForExistingSessions(services: Services): Promise<voi
           } catch (err) {
             console.warn(`[IPC] Auto-restart failed for session ${sessionId}:`, err);
           }
+          // Breathe between sessions so the event loop stays responsive.
+          await new Promise((r) => setTimeout(r, RESTART_GAP_MS));
         }
       }, 2000); // Wait 2s for watchers to initialise before restarting
     }

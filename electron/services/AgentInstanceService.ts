@@ -1811,24 +1811,22 @@ ${DEVOPS_KIT_DIR}/
       if (dbTs) { const t = Date.parse(dbTs); if (!Number.isNaN(t)) candidates.push(t); }
 
       if (worktreePath && existsSync(worktreePath)) {
-        // 2. Last commit time on the worktree's branch.
+        // 2. Last commit time on the worktree's branch (one cheap git call).
         try {
           const { stdout } = await execaCmd('git', ['log', '-1', '--format=%cI'], { cwd: worktreePath });
           const t = Date.parse(stdout.trim());
           if (!Number.isNaN(t)) candidates.push(t);
         } catch { /* no commits yet */ }
 
-        // 3. Newest mtime among changed/untracked files (the agent's live edits).
+        // 3. Worktree directory mtime — a CHEAP single stat that catches recent
+        //    file adds/removes. We intentionally do NOT run `git status` + stat
+        //    every file here: on a large repo that's expensive and this method is
+        //    polled per session. Uncommitted edits are captured within minutes by
+        //    the watcher's auto-commit (→ #2) and by logged activity (→ #1).
         try {
-          const { stdout } = await execaCmd('git', ['status', '--porcelain'], { cwd: worktreePath });
-          const files = stdout.split('\n').map(l => l.slice(3).trim()).filter(Boolean).slice(0, 300);
-          for (const rel of files) {
-            try {
-              const st = await stat(join(worktreePath, rel.replace(/^"(.*)"$/, '$1')));
-              candidates.push(st.mtime.getTime());
-            } catch { /* file may be deleted/renamed */ }
-          }
-        } catch { /* not a git repo / worktree gone */ }
+          const st = await stat(worktreePath);
+          candidates.push(st.mtime.getTime());
+        } catch { /* worktree gone */ }
       }
 
       if (candidates.length === 0) return { success: true, data: null };

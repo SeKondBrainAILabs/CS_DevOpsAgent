@@ -373,12 +373,16 @@ function SessionRow({
   useEffect(() => {
     let cancelled = false;
     const fetchLastChange = () => {
+      // Skip polling while the window is hidden — saves CPU when KIT is in the
+      // background (this runs once per session row).
+      if (typeof document !== 'undefined' && document.hidden) return;
       window.api?.instance?.getLastChange?.(session.sessionId).then((r) => {
         if (!cancelled && r?.success && r.data) setLastChangeAt(r.data);
       }).catch(() => {});
     };
     fetchLastChange();
-    const id = setInterval(fetchLastChange, 30000);
+    // 2 min base interval + per-row jitter so all rows don't fire at once.
+    const id = setInterval(fetchLastChange, 120000 + Math.floor(Math.random() * 15000));
     return () => { cancelled = true; clearInterval(id); };
   }, [session.sessionId]);
 
