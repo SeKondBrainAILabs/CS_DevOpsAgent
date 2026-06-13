@@ -319,6 +319,13 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     console.log(`[Services] Multi-repo session ${sessionId} registered with MCP binder (${repos.length} repos)`);
   };
 
+  // Try to revive any instance whose worktree dir is missing — if the source
+  // repo + branch are still around, `git worktree add --force` brings it back.
+  // MUST run before registerExistingSessionsWithBinder, which internally reaps
+  // anything still missing as 'closed'. Otherwise a repairable session gets
+  // marked closed at startup and never restored.
+  await agentInstance.repairOrphanWorktrees();
+
   // Re-register existing sessions loaded from electron-store (binder is in-memory only)
   agentInstance.registerExistingSessionsWithBinder();
 
