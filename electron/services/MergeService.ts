@@ -8,6 +8,28 @@ import type { IpcResult, MergePreview, MergeResult } from '../../shared/types';
 import { promises as fs } from 'fs';
 import path from 'path';
 
+// Parse the porcelain output of `git worktree list --porcelain` and return
+// the worktree path that currently has `branch` checked out, or null if no
+// worktree holds it. The porcelain format is blank-line-separated records of:
+//   worktree /path/to/dir
+//   HEAD <sha>
+//   branch refs/heads/<branch-name>
+// (Some records have `detached` or `bare` instead of branch.)
+function parseWorktreeHoldingBranch(porcelain: string, branch: string): string | null {
+  const records = porcelain.split('\n\n');
+  for (const record of records) {
+    const lines = record.split('\n');
+    let worktree: string | null = null;
+    let onBranch: string | null = null;
+    for (const line of lines) {
+      if (line.startsWith('worktree ')) worktree = line.slice('worktree '.length).trim();
+      else if (line.startsWith('branch ')) onBranch = line.slice('branch '.length).trim();
+    }
+    if (worktree && onBranch === `refs/heads/${branch}`) return worktree;
+  }
+  return null;
+}
+
 // Dynamic import helper for execa (ESM-only module)
 // Handles various bundling scenarios with fallback patterns
 let _execa: ((cmd: string, args: string[], options?: object) => Promise<{ stdout: string; stderr: string; exitCode?: number }>) | null = null;
@@ -512,6 +534,32 @@ export class MergeService extends BaseService {
       // This prevents agent artifacts from blocking merges
       await this.ensureAgentArtifactsIgnored(repoPath);
 
+      // If the target branch is checked out in another worktree, route the
+      // merge there instead of trying to `git checkout` it in the main repo
+      // (git refuses with "fatal: '<branch>' is already used by worktree at …").
+      // The holding worktree is already on the target branch — we just need to
+      // pull + merge there. All subsequent target-branch git ops use
+      // `mergeWorkdir`; main-repo housekeeping (worktree pruning, branch
+      // deletion) still uses `repoPath`.
+      let mergeWorkdir = repoPath;
+      try {
+        const { stdout: worktreeList } = await this.git(
+          ['worktree', 'list', '--porcelain'],
+          repoPath
+        );
+        const holdingWorktree = parseWorktreeHoldingBranch(worktreeList, targetBranch);
+        if (holdingWorktree && holdingWorktree !== repoPath) {
+          console.log(
+            `[MergeService] Target '${targetBranch}' is held by worktree ${holdingWorktree}; routing merge there`
+          );
+          mergeWorkdir = holdingWorktree;
+        }
+      } catch (err) {
+        // Non-fatal: fall through to the in-repo checkout path, which already
+        // surfaces a clear error if the branch is held elsewhere.
+        console.warn('[MergeService] worktree list failed; using main repo as merge workdir:', err);
+      }
+
       // CRITICAL: If worktreePath provided, commit any uncommitted changes first!
       // This prevents data loss when user has uncommitted changes in the worktree.
       if (options.worktreePath) {
@@ -600,15 +648,17 @@ export class MergeService extends BaseService {
         }
       }
 
-      // Clean up any stale merge state from a previous interrupted attempt
-      const { stdout: mergeHead } = await this.git(['rev-parse', '--verify', 'MERGE_HEAD'], repoPath);
+      // Clean up any stale merge state from a previous interrupted attempt.
+      // This runs inside mergeWorkdir because merge state (MERGE_HEAD) is
+      // per-worktree, not shared across worktrees.
+      const { stdout: mergeHead } = await this.git(['rev-parse', '--verify', 'MERGE_HEAD'], mergeWorkdir);
       if (mergeHead) {
         console.log(`[MergeService] Cleaning up stale merge-in-progress before starting new merge`);
-        await this.git(['merge', '--abort'], repoPath);
+        await this.git(['merge', '--abort'], mergeWorkdir);
       }
 
-      // Get current branch
-      const { stdout: currentBranch } = await this.git(['branch', '--show-current'], repoPath);
+      // Get current branch (in the workdir we'll merge in)
+      const { stdout: currentBranch } = await this.git(['branch', '--show-current'], mergeWorkdir);
 
       // Verify target branch exists on remote before checking out.
       // Repos may use 'master', 'development', or another name instead of 'main'.
@@ -632,15 +682,17 @@ export class MergeService extends BaseService {
         };
       }
 
-      // Checkout target branch if needed
+      // Checkout target branch if needed. We only need to checkout when the
+      // workdir isn't already on the target branch — and when mergeWorkdir was
+      // routed to a holding worktree above, it's already on targetBranch, so
+      // currentBranch === targetBranch and this whole block is a no-op.
       if (currentBranch !== targetBranch) {
-        const checkoutResult = await this.git(['checkout', targetBranch], repoPath);
+        const checkoutResult = await this.git(['checkout', targetBranch], mergeWorkdir);
         if (checkoutResult.exitCode !== 0) {
           const stderr = checkoutResult.stderr || '';
           // A branch can only be checked out in one worktree at a time. If the
-          // target is held by a session worktree, git refuses with
-          // "fatal: '<branch>' is already used by worktree at '<path>'".
-          // Surface an actionable message instead of the raw fatal.
+          // target is held by a session worktree we couldn't locate above (e.g.
+          // worktree list was unreadable), surface the actionable fallback.
           const heldBy = stderr.match(/already used by worktree at '?([^'\n]+)'?/i);
           if (heldBy) {
             return {
@@ -656,12 +708,12 @@ export class MergeService extends BaseService {
       }
 
       // Pull latest changes — check result to avoid merging on a dirty state
-      const pullResult = await this.git(['pull', 'origin', targetBranch], repoPath);
+      const pullResult = await this.git(['pull', 'origin', targetBranch], mergeWorkdir);
       if (pullResult.exitCode !== 0) {
         console.error(`[MergeService] Pull failed:`, pullResult.stderr);
         // Restore original branch — no merge has been started so no merge --abort needed
         if (currentBranch !== targetBranch) {
-          await this.git(['checkout', currentBranch], repoPath);
+          await this.git(['checkout', currentBranch], mergeWorkdir);
         }
         return {
           success: false,
@@ -672,7 +724,7 @@ export class MergeService extends BaseService {
       // Perform the merge
       let mergeResult = await this.git(
         ['merge', sourceBranch, '-m', `Merge branch '${sourceBranch}' into ${targetBranch}`],
-        repoPath
+        mergeWorkdir
       );
 
       // Handle untracked files blocking the merge - stash and retry
@@ -681,7 +733,7 @@ export class MergeService extends BaseService {
         if (blockingFiles && blockingFiles.length > 0) {
           console.log(`[MergeService] Untracked files blocking merge, stashing: ${blockingFiles.join(', ')}`);
 
-          const cleanResult = await this.cleanUntrackedBlockingFiles(repoPath, blockingFiles);
+          const cleanResult = await this.cleanUntrackedBlockingFiles(mergeWorkdir, blockingFiles);
           if (cleanResult.success && cleanResult.data && cleanResult.data.failed.length === 0) {
             didStash = true;
             console.log(`[MergeService] Stashed ${cleanResult.data.stashed.length} blocking files (${cleanResult.data.stashRef}), retrying merge...`);
@@ -689,7 +741,7 @@ export class MergeService extends BaseService {
             // Retry the merge after stashing
             mergeResult = await this.git(
               ['merge', sourceBranch, '-m', `Merge branch '${sourceBranch}' into ${targetBranch}`],
-              repoPath
+              mergeWorkdir
             );
           } else {
             // Could not stash all blocking files
@@ -711,12 +763,12 @@ export class MergeService extends BaseService {
         if (trackedBlockers && trackedBlockers.length > 0) {
           console.log(`[MergeService] Tracked dirty files blocking merge, stashing: ${trackedBlockers.join(', ')}`);
 
-          const stashResult = await this.stashTrackedDirtyFiles(repoPath, trackedBlockers);
+          const stashResult = await this.stashTrackedDirtyFiles(mergeWorkdir, trackedBlockers);
           if (stashResult) {
             didStash = true;
             mergeResult = await this.git(
               ['merge', sourceBranch, '-m', `Merge branch '${sourceBranch}' into ${targetBranch}`],
-              repoPath
+              mergeWorkdir
             );
           } else {
             return {
@@ -730,11 +782,11 @@ export class MergeService extends BaseService {
 
       if (mergeResult.exitCode !== 0) {
         // Capture conflict file list before aborting the merge
-        const { stdout: conflictOutput } = await this.git(['diff', '--name-only', '--diff-filter=U'], repoPath);
+        const { stdout: conflictOutput } = await this.git(['diff', '--name-only', '--diff-filter=U'], mergeWorkdir);
         const conflictingFiles = conflictOutput.split('\n').filter(Boolean);
 
         // Abort the failed merge — working tree must be clean before we try rebase
-        await this.git(['merge', '--abort'], repoPath);
+        await this.git(['merge', '--abort'], mergeWorkdir);
         console.log(`[MergeService] Merge had conflicts (${conflictingFiles.length} file(s)) — trying rebase strategy`);
 
         // ── Rebase fallback ──────────────────────────────────────────────────
@@ -787,37 +839,41 @@ export class MergeService extends BaseService {
         }
 
         if (rebasedSuccessfully) {
-          // Now do the merge on the target branch — should be conflict-free
-          const checkoutTarget = await this.git(['checkout', targetBranch], repoPath);
-          if (checkoutTarget.exitCode !== 0) {
-            return {
-              success: false,
-              message: `Rebase succeeded but could not re-checkout ${targetBranch}: ${checkoutTarget.stderr}`,
-              conflictingFiles,
-            };
+          // Now do the merge on the target branch — should be conflict-free.
+          // If mergeWorkdir is the holding worktree, it's already on target;
+          // only the main-repo path needs the explicit checkout.
+          if (mergeWorkdir === repoPath) {
+            const checkoutTarget = await this.git(['checkout', targetBranch], mergeWorkdir);
+            if (checkoutTarget.exitCode !== 0) {
+              return {
+                success: false,
+                message: `Rebase succeeded but could not re-checkout ${targetBranch}: ${checkoutTarget.stderr}`,
+                conflictingFiles,
+              };
+            }
           }
 
           // Pull to pick up any remote changes that happened in the interim
-          await this.git(['pull', 'origin', targetBranch], repoPath).catch(() => {});
+          await this.git(['pull', 'origin', targetBranch], mergeWorkdir).catch(() => {});
 
           mergeResult = await this.git(
             ['merge', sourceBranch, '--ff-only', '-m', `Merge branch '${sourceBranch}' into ${targetBranch} (via rebase)`],
-            repoPath
+            mergeWorkdir
           );
 
           if (mergeResult.exitCode !== 0) {
             // ff-only failed — fall back to regular merge (should be rare after a clean rebase)
             mergeResult = await this.git(
               ['merge', sourceBranch, '-m', `Merge branch '${sourceBranch}' into ${targetBranch} (via rebase)`],
-              repoPath
+              mergeWorkdir
             );
           }
 
           if (mergeResult.exitCode !== 0) {
             // Still failing — give up and restore original branch
-            await this.git(['merge', '--abort'], repoPath).catch(() => {});
+            await this.git(['merge', '--abort'], mergeWorkdir).catch(() => {});
             if (currentBranch !== targetBranch) {
-              await this.git(['checkout', currentBranch], repoPath).catch(() => {});
+              await this.git(['checkout', currentBranch], mergeWorkdir).catch(() => {});
             }
             return {
               success: false,
@@ -829,7 +885,7 @@ export class MergeService extends BaseService {
           // Both merge and rebase failed — give up
           // Switch back to original branch so repo isn't left on targetBranch
           if (currentBranch !== targetBranch) {
-            await this.git(['checkout', currentBranch], repoPath).catch(() => {});
+            await this.git(['checkout', currentBranch], mergeWorkdir).catch(() => {});
           }
 
           const allConflictFiles = [
@@ -844,25 +900,25 @@ export class MergeService extends BaseService {
       }
 
       // Get merge commit hash
-      const { stdout: mergeCommitHash } = await this.git(['rev-parse', 'HEAD'], repoPath);
+      const { stdout: mergeCommitHash } = await this.git(['rev-parse', 'HEAD'], mergeWorkdir);
 
       // Get files changed count
       const { stdout: diffStatOutput } = await this.git(
         ['diff', '--stat', `${targetBranch}@{1}..HEAD`],
-        repoPath
+        mergeWorkdir
       );
       const filesChangedMatch = diffStatOutput.match(/(\d+) files? changed/);
       const filesChanged = filesChangedMatch ? parseInt(filesChangedMatch[1], 10) : 0;
 
       // Push merged changes
-      await this.git(['push', 'origin', targetBranch], repoPath);
+      await this.git(['push', 'origin', targetBranch], mergeWorkdir);
 
       // Auto-pop stash if we stashed files before merge
       let stashRecovered: boolean | undefined;
       let stashConflictFiles: string[] | undefined;
       if (didStash) {
         try {
-          const stashResult = await this.popStashAfterMerge(repoPath);
+          const stashResult = await this.popStashAfterMerge(mergeWorkdir);
           stashRecovered = stashResult.stashRecovered;
           stashConflictFiles = stashResult.stashConflictFiles;
         } catch (err) {

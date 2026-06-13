@@ -241,10 +241,14 @@ export default function App(): React.ReactElement {
     <DashboardCanvas agent={selectedAgent} />
   );
 
-  // When selecting a session, switch back to dashboard view
+  // When selecting a session, switch back to dashboard view. Also close the
+  // RepoDetailModal — selecting a session navigates away from the repo view,
+  // and otherwise the modal stays mounted at z-50 covering the new
+  // SessionDetailView.
   const handleSelectSession = (sessionId: string | null) => {
     if (sessionId) {
       setMainView('dashboard');
+      closeRepoDetail();
     }
     setSelectedSession(sessionId);
   };
