@@ -319,6 +319,12 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     console.log(`[Services] Multi-repo session ${sessionId} registered with MCP binder (${repos.length} repos)`);
   };
 
+  // One-time migration for sessions still living at <repo>/local_deploy/<branch>.
+  // Moves them to <repo_parent>/KIT-DevOps-<repo_name>/<branch> via `git worktree
+  // move`, regenerates each prompt so the user's "Copy Prompt" shows the new
+  // path. Idempotent — sessions already on the new layout are skipped.
+  await agentInstance.migrateLegacyWorktrees();
+
   // Try to revive any instance whose worktree dir is missing — if the source
   // repo + branch are still around, `git worktree add --force` brings it back.
   // MUST run before registerExistingSessionsWithBinder, which internally reaps

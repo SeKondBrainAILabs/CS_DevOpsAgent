@@ -1481,6 +1481,113 @@ ${DEVOPS_KIT_DIR}/
   }
 
   /**
+   * One-time migration: for every non-terminal instance whose worktree still
+   * lives at the legacy `<repo>/local_deploy/<branchName>` path, move it to
+   * the new sibling location `<repo_parent>/KIT-DevOps-<repo_name>/<branchName>`
+   * via `git worktree move`, then update `instance.worktreePath` and
+   * regenerate the agent's prompt + instructions so the user-visible "Copy
+   * Prompt" output points the agent at the new directory.
+   *
+   * Skips:
+   *   - sessions already on the new layout
+   *   - sessions whose legacy dir is missing on disk (nothing to move)
+   *   - sessions whose target dir already exists (would conflict)
+   *   - terminal sessions (completed/failed/closed)
+   *
+   * Returns { moved, regenerated } counts.
+   */
+  async migrateLegacyWorktrees(): Promise<{ moved: number; regenerated: number }> {
+    let moved = 0;
+    let regenerated = 0;
+    const migrate = async (
+      repoPath: string,
+      currentPath: string | undefined,
+      branchName: string | undefined
+    ): Promise<string | null> => {
+      if (!repoPath || !currentPath || !branchName) return null;
+      // Only touch legacy paths: <something>/local_deploy/<branchName>
+      const legacyPattern = new RegExp(`^(.+)/local_deploy/${branchName.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}/?$`);
+      const m = currentPath.match(legacyPattern);
+      if (!m) return null;
+      if (!existsSync(currentPath)) return null;
+      const targetBase = getWorktreeBaseDir(repoPath);
+      const targetPath = join(targetBase, branchName);
+      if (existsSync(targetPath)) return null;
+      try {
+        await mkdir(targetBase, { recursive: true });
+        await execaCmd('git', ['worktree', 'move', currentPath, targetPath], { cwd: repoPath });
+        console.log(`[AgentInstanceService] Migrated worktree ${currentPath} -> ${targetPath}`);
+        return targetPath;
+      } catch (err) {
+        console.warn(`[AgentInstanceService] Could not migrate worktree ${currentPath}: ${err}`);
+        return null;
+      }
+    };
+
+    for (const instance of this.instances.values()) {
+      if (instance.status === 'completed' || instance.status === 'failed' || instance.status === 'closed') continue;
+      let anyMoved = false;
+
+      if (instance.multiRepoEntries && instance.multiRepoEntries.length > 0) {
+        for (const r of instance.multiRepoEntries) {
+          const newPath = await migrate(r.repoPath, r.worktreePath, r.branchName);
+          if (newPath) {
+            r.worktreePath = newPath;
+            anyMoved = true;
+            moved++;
+          }
+        }
+      } else {
+        const newPath = await migrate(instance.config.repoPath, instance.worktreePath, instance.config.branchName);
+        if (newPath) {
+          instance.worktreePath = newPath;
+          anyMoved = true;
+          moved++;
+        }
+      }
+
+      // Regenerate the agent's prompt/instructions with the new worktreePath so
+      // the user-visible "Copy Prompt" string isn't stale.
+      if (anyMoved) {
+        const wt = instance.worktreePath || instance.config.repoPath;
+        const vars: InstructionVars = {
+          repoPath: wt,
+          repoName: basename(instance.config.repoPath),
+          branchName: instance.config.branchName,
+          sessionId: instance.sessionId || instance.id,
+          taskDescription: instance.config.taskDescription,
+          systemPrompt: instance.config.systemPrompt || '',
+          contextPreservation: instance.config.contextPreservation || '',
+          rebaseFrequency: instance.config.rebaseFrequency || 'never',
+          baseBranch: instance.config.baseBranch,
+          mcpUrl: this.mcpServerUrl || undefined,
+          rpcUrl: this.rpcServerUrl || undefined,
+          customMcpEnabled: instance.config.customMcpEnabled,
+          ...(instance.multiRepoEntries && instance.multiRepoEntries.length > 0
+            ? {
+                multiRepoEntries: instance.multiRepoEntries,
+                commitScope: instance.config.multiRepo?.commitScope,
+              }
+            : {}),
+        };
+        try {
+          instance.instructions = getAgentInstructions(instance.config.agentType, vars);
+          instance.prompt = generateAgentPrompt(instance.config.agentType, vars);
+          regenerated++;
+        } catch (err) {
+          console.warn(`[AgentInstanceService] Failed to regenerate prompt for ${instance.id}: ${err}`);
+        }
+      }
+    }
+
+    if (moved > 0) {
+      this.saveInstances();
+      console.log(`[AgentInstanceService] Migrated ${moved} legacy worktree(s); regenerated ${regenerated} prompt(s)`);
+    }
+    return { moved, regenerated };
+  }
+
+  /**
    * Walk every non-terminal instance and, for each one whose worktree dir is
    * missing, attempt to re-create it via `git worktree add --force <path>
    * <branch>` from the source repo. Many "lost" worktrees still have an
