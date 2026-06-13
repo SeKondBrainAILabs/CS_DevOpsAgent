@@ -282,15 +282,26 @@ export class WatcherService extends BaseService {
           }
           // Ignore other dotfiles and common directories
           if (basename.startsWith('.')) return true;
+          // Nested worktree containers (`local_deploy`, `.worktrees`): recursing
+          // into a worktree that holds other sessions' worktrees produces a
+          // phantom-event storm → main-process memory runaway. Check segments
+          // RELATIVE to the watched root (substring would self-ignore the root,
+          // whose path contains '/local_deploy/').
+          const rel = path.relative(worktreePath, filePath);
+          if (rel) {
+            const segs = rel.split(path.sep);
+            if (segs.includes('local_deploy') || segs.includes('.worktrees')) return true;
+          }
           if (filePath.includes('node_modules')) return true;
           if (filePath.includes('.git')) return true;
-          if (filePath.includes('.worktrees')) return true;
           if (filePath.includes('/dist/')) return true;
           if (filePath.includes('/build/')) return true;
           return false;
         },
         persistent: true,
         ignoreInitial: true,
+        // Don't follow symlinks into sibling repos (unbounded cross-repo recursion).
+        followSymlinks: false,
         awaitWriteFinish: {
           stabilityThreshold: 1000,
           pollInterval: 500,
@@ -447,6 +458,18 @@ export class WatcherService extends BaseService {
       : instance.sessionId;
     const sessionId = realSessionId;
     const relativePath = path.relative(instance.worktreePath, filePath);
+
+    // Hard guard: drop events under nested worktree containers. A worktree
+    // checkout can contain its own `local_deploy/` (or `.worktrees/`) holding
+    // OTHER sessions' worktrees — and via symlinks/submodules the tree can nest
+    // arbitrarily deep. Processing those produces a phantom-event storm (one
+    // session emitted 6,759 add events) → activity rows + locks + IPC + DB per
+    // event → main-process memory runaway. This is the authoritative filter:
+    // it cannot be bypassed by chokidar's (unreliable) directory pruning.
+    const segments = relativePath.split(path.sep);
+    if (segments.includes('local_deploy') || segments.includes('.worktrees')) {
+      return;
+    }
 
     // Emit file change event
     const event: FileChangeEvent = {
