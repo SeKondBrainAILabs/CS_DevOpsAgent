@@ -1404,13 +1404,75 @@ ${DEVOPS_KIT_DIR}/
    * List all instances
    */
   /**
+   * Mark instances whose worktreePath no longer exists on disk as 'closed' and
+   * save. Returns the number of instances reaped.
+   *
+   * Why: `MergeService.executeMerge()` post-merge `git worktree remove` deletes
+   * the directory but doesn't update the `AgentInstance` record. The next launch
+   * then tries to re-register / restart / watch a path that's gone — `spawn git
+   * ENOENT` every operation, plus the agent (Codex/Claude) sees "workdir does
+   * not exist" if it follows the path. Cleaning these up at startup keeps the
+   * stale records from haunting the rest of the system. Multi-repo entries are
+   * checked too — if every secondary worktree is gone, the instance is closed.
+   */
+  reapOrphanInstances(): number {
+    let reaped = 0;
+    const reapedDetails: Array<{ id: string; sessionId: string; path: string }> = [];
+    for (const instance of this.instances.values()) {
+      if (instance.status === 'completed' || instance.status === 'failed' || instance.status === 'closed') continue;
+
+      // Pick the most specific path that actually identifies the session's
+      // working directory. If multiRepoEntries exist, every entry's worktree
+      // must be gone for us to consider the instance orphaned.
+      let allGone = false;
+      let firstMissing: string | null = null;
+      if (instance.multiRepoEntries && instance.multiRepoEntries.length > 0) {
+        allGone = instance.multiRepoEntries.every(r => r.worktreePath && !existsSync(r.worktreePath));
+        firstMissing = instance.multiRepoEntries.find(r => !existsSync(r.worktreePath))?.worktreePath || null;
+      } else {
+        const wt = instance.worktreePath;
+        // Only reap when worktreePath is set and missing. A session living in
+        // the repo root (no worktree) has worktreePath unset — that's a
+        // different shape and isn't an orphan even if repoPath is missing.
+        if (wt && !existsSync(wt)) {
+          allGone = true;
+          firstMissing = wt;
+        }
+      }
+
+      if (allGone) {
+        instance.status = 'closed';
+        reaped++;
+        reapedDetails.push({
+          id: instance.id,
+          sessionId: instance.sessionId || '(none)',
+          path: firstMissing || '(unknown)',
+        });
+      }
+    }
+    if (reaped > 0) {
+      this.saveInstances();
+      console.warn(
+        `[AgentInstanceService] Reaped ${reaped} orphan instance(s) whose worktree was removed off-app:\n` +
+          reapedDetails.map(d => `  - ${d.id} (${d.sessionId}) -> ${d.path}`).join('\n')
+      );
+    }
+    return reaped;
+  }
+
+  /**
    * Re-register all active sessions with MCP binder on startup.
    * Needed because the binder is in-memory and sessions are persisted in electron-store.
+   *
+   * Reaps orphan instances first so we don't try to re-register sessions whose
+   * worktree directory was removed off-app (typically by a merge cleanup).
    */
   registerExistingSessionsWithBinder(): void {
+    this.reapOrphanInstances();
+
     let count = 0;
     for (const instance of this.instances.values()) {
-      if (instance.status === 'completed' || instance.status === 'failed') continue;
+      if (instance.status === 'completed' || instance.status === 'failed' || instance.status === 'closed') continue;
       const worktree = instance.worktreePath || instance.config.repoPath;
       if (!instance.sessionId || !worktree) continue;
 

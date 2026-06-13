@@ -1581,14 +1581,32 @@ async function startWatchersForExistingSessions(services: Services): Promise<voi
     console.warn('[IPC] Safe-boot check failed (continuing with normal startup):', err);
   }
 
+  // Reap any instance whose worktree was removed off-app (e.g. post-merge
+  // cleanup) so we don't try to start watchers / restart agents against a
+  // path that no longer exists. Reaping happens inside the service so the
+  // saved state and in-memory map stay consistent before we read them.
+  services.agentInstance.reapOrphanInstances();
+
   const result = services.agentInstance.listInstances();
   if (result.success && result.data) {
     console.log(`[IPC] Starting watchers for ${result.data.length} existing sessions`);
     const activeSessions: string[] = [];
 
+    const { existsSync: pathExists } = await import('fs');
     for (const instance of result.data) {
+      // Skip instances already marked closed/completed/failed (e.g. by the
+      // orphan reap above). They stay visible in the UI but get no watcher.
+      if (instance.status === 'closed' || instance.status === 'completed' || instance.status === 'failed') continue;
+
       // Use worktree path if available, otherwise fallback to repo path
       const watchPath = instance.worktreePath || instance.config?.repoPath;
+      // Defensive: even after reaping, a multi-repo entry can leave a
+      // dangling primary path. Skip rather than spawning a watcher that
+      // ENOENTs on every git invocation.
+      if (watchPath && !pathExists(watchPath)) {
+        console.warn(`[IPC] Skipping watcher for ${instance.sessionId} — path missing: ${watchPath}`);
+        continue;
+      }
       if (watchPath) {
         // Start file watcher
         services.watcher.startWithPath(instance.sessionId, watchPath).catch((err) => {
