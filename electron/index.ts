@@ -7,6 +7,7 @@ import { app, BrowserWindow, shell } from 'electron';
 import { join } from 'path';
 import { registerIpcHandlers, removeIpcHandlers } from './ipc';
 import { initializeServices, disposeServices, type Services } from './services';
+import { startMemoryProbe } from './diagnostics/MemoryProbe';
 
 import { IPC } from '../shared/ipc-channels';
 
@@ -200,6 +201,25 @@ async function createWindow(): Promise<void> {
   } catch (error) {
     console.error('Service init error:', error);
   }
+
+  // Main-process memory/CPU watchdog. Always-on, cheap (one log line / 60s).
+  // Surfaces rss/heap growth, V8 detached-context count, active libuv handle
+  // tallies, and app gauges so a runaway is visible in logs; `kill -SIGUSR2 <pid>`
+  // dumps a heap snapshot on demand. Counters read `services` lazily each tick.
+  startMemoryProbe({
+    vitalsMs: 60_000,
+    counters: () => {
+      const w = services?.watcher?.debugCounts();
+      return {
+        watchers: w?.watchers ?? 0,
+        debounceTimers: w?.debounce ?? 0,
+        periodicTimers: w?.periodic ?? 0,
+        pendingEmits: services?.activity?.debugPendingEmits?.() ?? 0,
+        mcpSessions: services?.mcpServer?.debugSessionCount?.() ?? 0,
+        aiStreaming: services?.ai?.debugStreamActive?.() ? 1 : 0,
+      };
+    },
+  });
 
   // Handle load failures
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {

@@ -39,7 +39,13 @@ export interface ModeRequestOptions {
 export class AIService extends BaseService {
   private configService: ConfigService;
   private groq: Groq | null = null;
-  private abortController: AbortController | null = null;
+  // One controller per in-flight stream. A single shared field used to be
+  // clobbered when a second stream started — the first stream then checked the
+  // wrong controller's signal (so it could never be aborted) and, on finishing,
+  // nulled out the second stream's controller (so stopStream() became a no-op).
+  // Orphaned, uncancelable streams kept pumping chunks over IPC. Track each
+  // independently and abort them all on stopStream().
+  private activeStreams: Set<AbortController> = new Set();
   private currentModelKey: GroqModelKey = DEFAULT_MODEL;
 
   constructor(config: ConfigService) {
@@ -127,7 +133,8 @@ export class AIService extends BaseService {
   async *streamChat(messages: ChatMessage[], modelOverride?: GroqModelKey): AsyncGenerator<string, void, unknown> {
     const client = this.getClient();
     const modelId = modelOverride ? GROQ_MODELS[modelOverride] : this.getModelId();
-    this.abortController = new AbortController();
+    const controller = new AbortController();
+    this.activeStreams.add(controller);
 
     const groqMessages = messages.map((m) => ({
       role: m.role as 'user' | 'assistant' | 'system',
@@ -141,10 +148,10 @@ export class AIService extends BaseService {
         temperature: 0.5,
         max_tokens: 4096, // Increased for code tasks
         stream: true,
-      });
+      }, { signal: controller.signal });
 
       for await (const chunk of stream) {
-        if (this.abortController?.signal.aborted) {
+        if (controller.signal.aborted) {
           break;
         }
         const content = chunk.choices[0]?.delta?.content;
@@ -153,18 +160,24 @@ export class AIService extends BaseService {
         }
       }
     } finally {
-      this.abortController = null;
+      this.activeStreams.delete(controller);
     }
   }
 
   /**
-   * Stop the current stream
+   * Stop all in-flight streams. The renderer multiplexes every stream onto a
+   * single AI_STREAM_CHUNK channel, so "stop" means stop everything.
    */
   stopStream(): void {
-    if (this.abortController) {
-      this.abortController.abort();
-      this.abortController = null;
+    for (const controller of this.activeStreams) {
+      try { controller.abort(); } catch { /* already aborted */ }
     }
+    this.activeStreams.clear();
+  }
+
+  /** True while at least one stream is in flight (diagnostics gauge). */
+  debugStreamActive(): boolean {
+    return this.activeStreams.size > 0;
   }
 
   /**
@@ -254,7 +267,8 @@ export class AIService extends BaseService {
     const messages = this.buildMessagesFromMode(mode, options);
 
     const client = this.getClient();
-    this.abortController = new AbortController();
+    const controller = new AbortController();
+    this.activeStreams.add(controller);
 
     try {
       const stream = await client.chat.completions.create({
@@ -263,10 +277,10 @@ export class AIService extends BaseService {
         temperature: mode.settings.temperature ?? 0.5,
         max_tokens: mode.settings.max_tokens ?? 4096,
         stream: true,
-      });
+      }, { signal: controller.signal });
 
       for await (const chunk of stream) {
-        if (this.abortController?.signal.aborted) {
+        if (controller.signal.aborted) {
           break;
         }
         const content = chunk.choices[0]?.delta?.content;
@@ -275,7 +289,7 @@ export class AIService extends BaseService {
         }
       }
     } finally {
-      this.abortController = null;
+      this.activeStreams.delete(controller);
     }
   }
 

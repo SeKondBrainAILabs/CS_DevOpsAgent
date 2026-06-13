@@ -425,6 +425,16 @@ export class WatcherService extends BaseService {
     return this.success(this.watchers.has(sessionId));
   }
 
+  /** Live resource counts for diagnostics (watchers + outstanding timers). */
+  debugCounts(): { watchers: number; debounce: number; periodic: number; analysis: number } {
+    return {
+      watchers: this.watchers.size,
+      debounce: this.debounceTimers.size,
+      periodic: this.periodicCommitTimers.size,
+      analysis: this.analysisDebounceTimers.size,
+    };
+  }
+
   private handleFileChange(
     instance: WatcherInstance,
     filePath: string,

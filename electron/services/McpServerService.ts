@@ -138,6 +138,11 @@ export class McpServerService extends BaseService {
     this._dbService = db;
   }
 
+  /** Open transport count for diagnostics (HTTP + SSE sessions). */
+  debugSessionCount(): number {
+    return this.transports.size + this.sseTransports.size;
+  }
+
   setDebugLog(debugLog: DebugLogService): void {
     this.debugLog = debugLog;
   }

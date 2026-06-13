@@ -9,6 +9,52 @@ import type { Services } from '../services';
 import { databaseService } from '../services/DatabaseService';
 import { isActiveInstance } from '../../shared/instance-status';
 
+// Coalesce AI stream deltas before crossing the IPC boundary. The Groq stream
+// yields one delta per token; sending each over webContents.send() individually
+// means a structured-clone serialize (String::WriteUtf8 + Buffer::New) per token
+// — a serialization storm under load. Buffering deltas and flushing on a short
+// timer (or when the buffer gets large) cuts send() calls by 10–50× with no
+// visible latency, and is transparent to the renderer's append-based onChunk.
+const AI_STREAM_FLUSH_MS = 24;     // ~40 fps — below human-perceptible for text
+const AI_STREAM_FLUSH_CHARS = 2048; // hard flush so a fast stream stays bounded
+
+/**
+ * Pump an async iterable of text deltas to the renderer over AI_STREAM_CHUNK,
+ * coalescing deltas, then emit AI_STREAM_END. Errors propagate to the caller.
+ */
+async function pumpAiStream(
+  win: BrowserWindow,
+  chunks: AsyncIterable<string>
+): Promise<void> {
+  let buffer = '';
+  let flushTimer: NodeJS.Timeout | null = null;
+
+  const send = (text: string) => {
+    if (!text) return;
+    if (win.isDestroyed()) return;
+    win.webContents.send(IPC.AI_STREAM_CHUNK, text);
+  };
+  const flush = () => {
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    if (buffer) { send(buffer); buffer = ''; }
+  };
+
+  try {
+    for await (const chunk of chunks) {
+      buffer += chunk;
+      if (buffer.length >= AI_STREAM_FLUSH_CHARS) {
+        flush();
+      } else if (!flushTimer) {
+        flushTimer = setTimeout(flush, AI_STREAM_FLUSH_MS);
+      }
+    }
+    flush(); // drain whatever is left before signalling end
+    if (!win.isDestroyed()) win.webContents.send(IPC.AI_STREAM_END);
+  } finally {
+    if (flushTimer) clearTimeout(flushTimer);
+  }
+}
+
 /**
  * Register all IPC handlers
  * Removes existing handlers first to support HMR during development
@@ -228,15 +274,14 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
 
   ipcMain.on(IPC.AI_STREAM_START, async (_, messages, modelOverride?: string) => {
     try {
-      for await (const chunk of services.ai.streamChat(messages, modelOverride as any)) {
-        mainWindow.webContents.send(IPC.AI_STREAM_CHUNK, chunk);
-      }
-      mainWindow.webContents.send(IPC.AI_STREAM_END);
+      await pumpAiStream(mainWindow, services.ai.streamChat(messages, modelOverride as any));
     } catch (error) {
-      mainWindow.webContents.send(
-        IPC.AI_STREAM_ERROR,
-        error instanceof Error ? error.message : 'Unknown error'
-      );
+      if (!mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(
+          IPC.AI_STREAM_ERROR,
+          error instanceof Error ? error.message : 'Unknown error'
+        );
+      }
     }
   });
 
@@ -251,15 +296,14 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
 
   ipcMain.on(IPC.AI_STREAM_WITH_MODE, async (_, options) => {
     try {
-      for await (const chunk of services.ai.streamWithMode(options)) {
-        mainWindow.webContents.send(IPC.AI_STREAM_CHUNK, chunk);
-      }
-      mainWindow.webContents.send(IPC.AI_STREAM_END);
+      await pumpAiStream(mainWindow, services.ai.streamWithMode(options));
     } catch (error) {
-      mainWindow.webContents.send(
-        IPC.AI_STREAM_ERROR,
-        error instanceof Error ? error.message : 'Unknown error'
-      );
+      if (!mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(
+          IPC.AI_STREAM_ERROR,
+          error instanceof Error ? error.message : 'Unknown error'
+        );
+      }
     }
   });
 
