@@ -235,11 +235,18 @@ export class WatcherService extends BaseService {
         return; // Already watching
       }
 
-      // Register the worktree with GitService so commits can work
-      // For worktrees, repoPath is the parent of local_deploy
-      const repoPath = worktreePath.includes('/local_deploy/')
-        ? worktreePath.split('/local_deploy/')[0]
-        : worktreePath;
+      // Register the worktree with GitService so commits can work. Derive the
+      // source repo path from the worktree path, handling both layouts:
+      //   - Legacy (≤ v2.6.53): <repo>/local_deploy/<branch>
+      //   - Current:            <repo_parent>/KIT-DevOps-<repo_name>/<branch>
+      let repoPath = worktreePath;
+      const legacyMatch = worktreePath.match(/^(.+)\/local_deploy\/[^/]+\/?$/);
+      const newMatch = worktreePath.match(/^(.+)\/KIT-DevOps-([^/]+)\/[^/]+\/?$/);
+      if (legacyMatch) {
+        repoPath = legacyMatch[1];
+      } else if (newMatch) {
+        repoPath = `${newMatch[1]}/${newMatch[2]}`;
+      }
       this.gitService.registerWorktree(sessionId, repoPath, worktreePath);
       console.log(`[WatcherService] Registered worktree for ${sessionId}: ${worktreePath} (repo: ${repoPath})`);
 

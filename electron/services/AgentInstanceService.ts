@@ -9,7 +9,7 @@
 import { spawn } from 'child_process';
 import { mkdir, writeFile, readFile, readdir, stat, access } from 'fs/promises';
 import { existsSync, constants } from 'fs';
-import { join, basename } from 'path';
+import { dirname, join, basename } from 'path';
 import { homedir } from 'os';
 import { BrowserWindow } from 'electron';
 import Store from 'electron-store';
@@ -76,6 +76,24 @@ import { symlink, lstat } from 'fs/promises';
 import type { TerminalLogService } from './TerminalLogService';
 import type { ConfigService } from './ConfigService';
 import { MCP_CONFIG_FILE, CONTRACTS_PATHS } from '../../shared/agent-protocol';
+
+/**
+ * Compute the worktree base dir for a repo. Worktrees live OUTSIDE the source
+ * repo (sibling of the repo dir) so external `rm -rf .git`, `git clean -fdx`,
+ * or session-manager prune passes can't silently wipe them.
+ *
+ *   <repo_parent>/<repo_name>           ← source repo
+ *   <repo_parent>/KIT-DevOps-<repo_name>/<branchName>   ← worktrees go here
+ *
+ * Git tracks worktrees by absolute path in `.git/worktrees/<id>/`, so this
+ * layout works transparently for `git status`, `commit`, `log`, merges, etc.
+ * Exported (module-scope `function`) so other modules can reproduce the path.
+ */
+export function getWorktreeBaseDir(repoPath: string): string {
+  const parent = dirname(repoPath);
+  const name = basename(repoPath);
+  return join(parent, `KIT-DevOps-${name}`);
+}
 
 interface SessionState {
   sessionId: string;
@@ -791,24 +809,43 @@ ${DEVOPS_KIT_DIR}/
   }
 
   /**
-   * Create worktree for isolated development
-   * Creates worktree in local_deploy/{branchName} directory
+   * Create worktree for isolated development.
+   *
+   * **Layout change (v2.6.54):** worktrees live OUTSIDE the source repo, at
+   *   `<repo_parent>/KIT-DevOps-<repo_name>/<branchName>/`
+   * (a sibling of the repo dir). The old layout, `<repo>/local_deploy/...`,
+   * sat inside the source tree, which meant any external `rm -rf .git`,
+   * `git clean -fdx`, or session-manager prune (e.g. a Codex coordinator
+   * scanning `local_deploy/codex-session-*`) would silently wipe the
+   * worktree directory. The new path is on the same disk as the repo so
+   * `git worktree add` doesn't need a `--no-checkout-link` workaround, and
+   * git tracks the worktree by absolute path so every git op continues to
+   * work normally.
+   *
+   * If a worktree already exists at the LEGACY `local_deploy/...` location,
+   * we honor it (backward compat). Only newly-created worktrees go to the
+   * new location.
    */
   private async createWorktreeIfNeeded(config: AgentInstanceConfig): Promise<string> {
     try {
-      // Worktree directory: local_deploy/{branchName}
-      const worktreeDir = join(config.repoPath, 'local_deploy', config.branchName);
+      const legacyDir = join(config.repoPath, 'local_deploy', config.branchName);
+      const newWorktreeBaseDir = getWorktreeBaseDir(config.repoPath);
+      const worktreeDir = join(newWorktreeBaseDir, config.branchName);
 
-      // Check if worktree already exists
+      // Honor an existing legacy worktree (created before v2.6.54) rather than
+      // making a duplicate. Same for the new path.
+      if (existsSync(legacyDir)) {
+        console.log(`[AgentInstanceService] Worktree already exists at legacy path ${legacyDir} — honoring it`);
+        return legacyDir;
+      }
       if (existsSync(worktreeDir)) {
         console.log(`[AgentInstanceService] Worktree already exists at ${worktreeDir}`);
         return worktreeDir;
       }
 
-      // Ensure local_deploy directory exists
-      const localDeployDir = join(config.repoPath, 'local_deploy');
-      if (!existsSync(localDeployDir)) {
-        await mkdir(localDeployDir, { recursive: true });
+      // Ensure the sibling base dir exists (e.g. `.../KIT-DevOps-<repo_name>/`).
+      if (!existsSync(newWorktreeBaseDir)) {
+        await mkdir(newWorktreeBaseDir, { recursive: true });
       }
 
       // Create worktree — CRITICAL: branch safety.
@@ -1273,17 +1310,20 @@ ${DEVOPS_KIT_DIR}/
             isSubmodule: true,
           });
         } else {
-          // External repo: create worktree in that repo's local_deploy/
+          // External repo: worktree lives at <externalRepoParent>/KIT-DevOps-<externalRepoName>/<branch>
+          // (sibling of the external repo dir) — same rationale as createWorktreeIfNeeded.
+          // Honor any existing legacy worktree at <repo>/local_deploy/<branch> for backward compat.
           const externalRepoPath = secondary.repoPath;
-          const worktreeDir = join(externalRepoPath, 'local_deploy', branchName);
+          const legacyDir = join(externalRepoPath, 'local_deploy', branchName);
+          const externalBaseDir = getWorktreeBaseDir(externalRepoPath);
+          const worktreeDir = existsSync(legacyDir) ? legacyDir : join(externalBaseDir, branchName);
 
           if (!existsSync(worktreeDir)) {
             // Create worktree — branch-safe (see createWorktreeIfNeeded for rationale).
             // Use `-b` when the branch is missing so we never detach onto a same-named tag.
             const base = (secondary.baseBranch || 'main').replace(/^origin\//, '');
-            const localDeployDir = join(externalRepoPath, 'local_deploy');
-            if (!existsSync(localDeployDir)) {
-              await mkdir(localDeployDir, { recursive: true });
+            if (!existsSync(externalBaseDir)) {
+              await mkdir(externalBaseDir, { recursive: true });
             }
             try {
               const branchResult = await execaCmd('git', ['branch', '--list', branchName], { cwd: externalRepoPath });
@@ -1404,16 +1444,86 @@ ${DEVOPS_KIT_DIR}/
    * List all instances
    */
   /**
+   * Attempt to re-establish a missing worktree by running
+   *   git worktree add --force <worktreePath> <branch>
+   * from the source repo. Works when the SOURCE repo and BRANCH still exist —
+   * git materializes the worktree dir again from the branch HEAD. Returns true
+   * on success.
+   *
+   * Use case: an external `rm -rf .git` / clone of the source repo blows away
+   * the worktree registry; the worktree dir on disk may also be gone (e.g.
+   * external session-manager prune). With the source repo and branch still
+   * present, this re-creates the worktree in place. No user work is lost
+   * unless it was uncommitted at the moment of the prune — that's gone with
+   * any external delete and outside our recovery window.
+   */
+  private async tryRepairWorktree(
+    repoPath: string,
+    worktreePath: string,
+    branchName: string | undefined
+  ): Promise<boolean> {
+    if (!repoPath || !worktreePath || !branchName) return false;
+    if (!existsSync(repoPath)) return false;
+    try {
+      // Does the branch still exist in the source repo? If not, we can't
+      // re-attach to it without inventing history.
+      const branchListed = await execaCmd('git', ['branch', '--list', branchName], { cwd: repoPath });
+      if (!branchListed.stdout.trim()) return false;
+      // Ensure parent dir exists, then materialize the worktree.
+      await mkdir(dirname(worktreePath), { recursive: true });
+      await execaCmd('git', ['worktree', 'add', '--force', worktreePath, branchName], { cwd: repoPath });
+      console.log(`[AgentInstanceService] Repaired worktree at ${worktreePath} (branch ${branchName})`);
+      return true;
+    } catch (err) {
+      console.warn(`[AgentInstanceService] Could not repair worktree at ${worktreePath}: ${err}`);
+      return false;
+    }
+  }
+
+  /**
+   * Walk every non-terminal instance and, for each one whose worktree dir is
+   * missing, attempt to re-create it via `git worktree add --force <path>
+   * <branch>` from the source repo. Many "lost" worktrees still have an
+   * intact source repo + branch and come back with one command.
+   *
+   * Returns the count of worktrees successfully repaired. Anything still
+   * missing after this pass should be reaped via `reapOrphanInstances`.
+   */
+  async repairOrphanWorktrees(): Promise<number> {
+    let repaired = 0;
+    for (const instance of this.instances.values()) {
+      if (instance.status === 'completed' || instance.status === 'failed' || instance.status === 'closed') continue;
+      if (instance.multiRepoEntries && instance.multiRepoEntries.length > 0) {
+        for (const r of instance.multiRepoEntries) {
+          if (r.worktreePath && !existsSync(r.worktreePath)) {
+            const ok = await this.tryRepairWorktree(r.repoPath, r.worktreePath, r.branchName);
+            if (ok) repaired++;
+          }
+        }
+      } else {
+        const wt = instance.worktreePath;
+        if (wt && !existsSync(wt)) {
+          const ok = await this.tryRepairWorktree(instance.config.repoPath, wt, instance.config.branchName);
+          if (ok) repaired++;
+        }
+      }
+    }
+    if (repaired > 0) {
+      console.log(`[AgentInstanceService] Repaired ${repaired} worktree(s) via 'git worktree add --force'`);
+    }
+    return repaired;
+  }
+
+  /**
    * Mark instances whose worktreePath no longer exists on disk as 'closed' and
    * save. Returns the number of instances reaped.
    *
    * Why: `MergeService.executeMerge()` post-merge `git worktree remove` deletes
-   * the directory but doesn't update the `AgentInstance` record. The next launch
-   * then tries to re-register / restart / watch a path that's gone — `spawn git
-   * ENOENT` every operation, plus the agent (Codex/Claude) sees "workdir does
-   * not exist" if it follows the path. Cleaning these up at startup keeps the
-   * stale records from haunting the rest of the system. Multi-repo entries are
-   * checked too — if every secondary worktree is gone, the instance is closed.
+   * the directory but doesn't update the `AgentInstance` record. External
+   * session-manager prune passes do the same. The next launch then tries to
+   * re-register / restart / watch a path that's gone — `spawn git ENOENT`
+   * every operation. Best paired with `repairOrphanWorktrees()` first; what
+   * can't be repaired gets reaped here.
    */
   reapOrphanInstances(): number {
     let reaped = 0;
@@ -1421,9 +1531,6 @@ ${DEVOPS_KIT_DIR}/
     for (const instance of this.instances.values()) {
       if (instance.status === 'completed' || instance.status === 'failed' || instance.status === 'closed') continue;
 
-      // Pick the most specific path that actually identifies the session's
-      // working directory. If multiRepoEntries exist, every entry's worktree
-      // must be gone for us to consider the instance orphaned.
       let allGone = false;
       let firstMissing: string | null = null;
       if (instance.multiRepoEntries && instance.multiRepoEntries.length > 0) {
@@ -1431,9 +1538,6 @@ ${DEVOPS_KIT_DIR}/
         firstMissing = instance.multiRepoEntries.find(r => !existsSync(r.worktreePath))?.worktreePath || null;
       } else {
         const wt = instance.worktreePath;
-        // Only reap when worktreePath is set and missing. A session living in
-        // the repo root (no worktree) has worktreePath unset — that's a
-        // different shape and isn't an orphan even if repoPath is missing.
         if (wt && !existsSync(wt)) {
           allGone = true;
           firstMissing = wt;
@@ -1453,7 +1557,7 @@ ${DEVOPS_KIT_DIR}/
     if (reaped > 0) {
       this.saveInstances();
       console.warn(
-        `[AgentInstanceService] Reaped ${reaped} orphan instance(s) whose worktree was removed off-app:\n` +
+        `[AgentInstanceService] Reaped ${reaped} orphan instance(s) whose worktree was removed off-app and could not be repaired:\n` +
           reapedDetails.map(d => `  - ${d.id} (${d.sessionId}) -> ${d.path}`).join('\n')
       );
     }

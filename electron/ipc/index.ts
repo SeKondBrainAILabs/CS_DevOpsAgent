@@ -1581,10 +1581,11 @@ async function startWatchersForExistingSessions(services: Services): Promise<voi
     console.warn('[IPC] Safe-boot check failed (continuing with normal startup):', err);
   }
 
-  // Reap any instance whose worktree was removed off-app (e.g. post-merge
-  // cleanup) so we don't try to start watchers / restart agents against a
-  // path that no longer exists. Reaping happens inside the service so the
-  // saved state and in-memory map stay consistent before we read them.
+  // First, try to repair any instance whose worktree dir went missing — if
+  // the source repo + branch still exist, `git worktree add --force` brings
+  // the worktree back. Then reap whatever still can't be reached so we don't
+  // start watchers / restart agents against a path that no longer exists.
+  await services.agentInstance.repairOrphanWorktrees();
   services.agentInstance.reapOrphanInstances();
 
   const result = services.agentInstance.listInstances();
