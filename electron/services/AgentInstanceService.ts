@@ -1553,6 +1553,27 @@ ${DEVOPS_KIT_DIR}/
             moved++;
           }
         }
+        // For multi-repo instances, instance.worktreePath mirrors the primary
+        // entry's worktreePath, and submodule secondaries are derived from it.
+        // If the primary was migrated in a previous launch but this instance's
+        // top-level pointer (and the submodule-secondary derivations) weren't
+        // re-synced, do it now. Idempotent.
+        const primary = instance.multiRepoEntries.find(e => e.role === 'primary');
+        if (primary && primary.worktreePath) {
+          if (instance.worktreePath !== primary.worktreePath) {
+            instance.worktreePath = primary.worktreePath;
+            anyMoved = true;
+          }
+          for (const r of instance.multiRepoEntries) {
+            if (r.role === 'secondary' && r.isSubmodule) {
+              const expected = join(primary.worktreePath, r.repoPath || r.repoName || '');
+              if (r.worktreePath !== expected) {
+                r.worktreePath = expected;
+                anyMoved = true;
+              }
+            }
+          }
+        }
       } else {
         const newPath = await migrate(instance.config.repoPath, instance.worktreePath, instance.config.branchName);
         if (newPath) {
