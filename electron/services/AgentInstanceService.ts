@@ -1507,12 +1507,28 @@ ${DEVOPS_KIT_DIR}/
       if (!repoPath || !currentPath || !branchName) return null;
       // Only touch legacy paths: <something>/local_deploy/<branchName>
       const legacyPattern = new RegExp(`^(.+)/local_deploy/${branchName.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}/?$`);
-      const m = currentPath.match(legacyPattern);
-      if (!m) return null;
-      if (!existsSync(currentPath)) return null;
+      if (!legacyPattern.test(currentPath)) return null;
+
       const targetBase = getWorktreeBaseDir(repoPath);
       const targetPath = join(targetBase, branchName);
-      if (existsSync(targetPath)) return null;
+
+      // Already at the new location on disk? Just heal the in-memory pointer.
+      // This is the common case for sessions whose disk move succeeded in a
+      // prior migration but whose instance.worktreePath couldn't be re-saved
+      // (e.g. the IPC startup loop skipped them because the legacy path was
+      // missing, so no fresh createInstance ever recomputed the pointer).
+      // No `git worktree move` here — the files are already where we want them.
+      if (existsSync(targetPath)) {
+        console.log(`[AgentInstanceService] Worktree already at ${targetPath}; updating instance pointer from legacy ${currentPath}`);
+        return targetPath;
+      }
+
+      // Otherwise: legacy is still on disk and we need to actually move it.
+      if (!existsSync(currentPath)) {
+        // Neither side exists. Nothing we can do here — leave for the
+        // orphan reaper.
+        return null;
+      }
       try {
         await mkdir(targetBase, { recursive: true });
         await execaCmd('git', ['worktree', 'move', currentPath, targetPath], { cwd: repoPath });
@@ -2771,52 +2787,7 @@ ${DEVOPS_KIT_DIR}/
   // Private helpers
 
   private saveInstances(): void {
-    const instances = Array.from(this.instances.values());
-
-    // DEBUG (v2.6.60): instrument every save with a tally of how many live
-    // instances carry a legacy `local_deploy/...` worktreePath plus the
-    // caller stack. After v2.6.56 migrated the dirs on disk and updated
-    // in-memory paths to the new sibling layout, kanvas-instances.json
-    // still showed the legacy path. The path keeps getting clobbered AFTER
-    // migration; this log identifies which call site is regressing it.
-    //
-    // Output looks like:
-    //   [SaveInstances] tally legacy=N new=M total=K
-    //     legacy[0] inst=… sess=… branch=… path=…
-    //     caller: at <fn>:<line> <- at <fn>:<line> <- …
-    //
-    // Once the regressor is identified, this block goes away (next release).
-    try {
-      const legacy: Array<{ id: string; sessionId?: string; branch?: string; path?: string }> = [];
-      let newCount = 0;
-      for (const inst of instances) {
-        if (inst.status === 'completed' || inst.status === 'failed' || inst.status === 'closed') continue;
-        const wt = inst.worktreePath;
-        if (!wt) continue;
-        if (/\/local_deploy\/[^/]+\/?$/.test(wt)) {
-          legacy.push({ id: inst.id, sessionId: inst.sessionId, branch: inst.config?.branchName, path: wt });
-        } else if (/\/KIT-DevOps-[^/]+\/[^/]+\/?$/.test(wt)) {
-          newCount++;
-        }
-      }
-      const stack = (new Error().stack || '')
-        .split('\n')
-        .slice(2, 9)
-        .map(s => s.trim())
-        .join(' <- ');
-      console.log(`[SaveInstances] tally legacy=${legacy.length} new=${newCount} total=${instances.length}`);
-      if (legacy.length > 0) {
-        for (let i = 0; i < Math.min(legacy.length, 3); i++) {
-          const l = legacy[i];
-          console.log(`  legacy[${i}] inst=${l.id} sess=${l.sessionId} branch=${l.branch} path=${l.path}`);
-        }
-        console.log(`  caller: ${stack}`);
-      }
-    } catch {
-      // Diagnostics must not break persistence.
-    }
-
-    this.store.set('instances', instances);
+    this.store.set('instances', Array.from(this.instances.values()));
   }
 
   private emitStatusChange(instance: AgentInstance): void {
