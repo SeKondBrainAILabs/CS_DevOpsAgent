@@ -1622,19 +1622,69 @@ ${DEVOPS_KIT_DIR}/
   }
 
   /**
-   * One-time backfill that repatriates orphaned `mcp_calls` rows. For every
-   * (repoPath, branchName) group, route every CLOSED instance's mcp_calls to
-   * the still-LIVE instance in the same group. This recovers MCP history that
-   * was stranded under previous-restart sessionIds by builds before v2.6.58
-   * (when `transferSessionData` didn't include `mcp_calls`).
+   * Record `predecessorSessionId` on `instance` and persist. Used by both
+   * restart paths to extend the lineage chain. `inheritedChain` is the
+   * predecessor list of the instance being replaced — passed in so the new
+   * instance inherits its full ancestry, not just the immediate predecessor.
+   */
+  private recordPredecessor(
+    instance: AgentInstance,
+    predecessorSessionId: string,
+    inheritedChain: string[] = []
+  ): void {
+    if (!predecessorSessionId || predecessorSessionId === instance.sessionId) return;
+    const existing = instance.predecessorSessionIds || [];
+    // De-duplicate while preserving order (most ancient first, most recent last).
+    const merged = [...existing, ...inheritedChain, predecessorSessionId];
+    const seen = new Set<string>();
+    const deduped: string[] = [];
+    for (const sid of merged) {
+      if (!sid || sid === instance.sessionId) continue;
+      if (seen.has(sid)) continue;
+      seen.add(sid);
+      deduped.push(sid);
+    }
+    instance.predecessorSessionIds = deduped;
+    this.saveInstances();
+  }
+
+  /**
+   * Repatriate orphaned `mcp_calls` rows. Two strategies, in order:
    *
-   * Safe to run on every startup — it's idempotent (closed and live sessions
-   * never share the same sessionId, and after one pass the closed ids hold
-   * zero mcp rows).
+   *   1. **Lineage chain** (the reliable one going forward): for every live
+   *      instance with `predecessorSessionIds`, transfer mcp_calls from each
+   *      old sessionId to the live one. Lineage is recorded at restart time
+   *      by `recordPredecessor`, so this catches every previous-restart id
+   *      no matter how many restarts back.
    *
-   * Returns total rows transferred.
+   *   2. **(repoPath, branchName) group fallback**: for any closed instances
+   *      that ARE still in the Map (rare — `restartInstance` usually purges
+   *      them), match them to a live instance with the same repo+branch and
+   *      transfer. Cheap; runs after the chain pass and skips already-empty
+   *      sessionIds.
+   *
+   * Idempotent — after one pass the old ids hold zero mcp rows, so reruns
+   * find nothing to move.
    */
   backfillMcpCallsByLineage(): number {
+    let totalTransferred = 0;
+
+    // Pass 1: walk every live instance's recorded predecessor chain.
+    for (const inst of this.instances.values()) {
+      if (inst.status === 'closed' || inst.status === 'completed' || inst.status === 'failed') continue;
+      if (!inst.sessionId || !inst.predecessorSessionIds || inst.predecessorSessionIds.length === 0) continue;
+      for (const oldSid of inst.predecessorSessionIds) {
+        if (oldSid === inst.sessionId) continue;
+        const n = databaseService.transferMcpCalls(oldSid, inst.sessionId);
+        if (n > 0) {
+          totalTransferred += n;
+          console.log(`[AgentInstanceService] Backfilled ${n} mcp_calls row(s) via lineage: ${oldSid} -> ${inst.sessionId}`);
+        }
+      }
+    }
+
+    // Pass 2: (repoPath, branchName) match for any closed sibling that
+    // somehow survived purgeInstancesOnBranch.
     const byKey = new Map<string, { live: AgentInstance | null; closed: AgentInstance[] }>();
     for (const inst of this.instances.values()) {
       const cfg = inst.config;
@@ -1648,12 +1698,9 @@ ${DEVOPS_KIT_DIR}/
       if (inst.status === 'closed' || inst.status === 'completed' || inst.status === 'failed') {
         entry.closed.push(inst);
       } else if (!entry.live && inst.sessionId) {
-        // First non-terminal instance for this key is the lineage's current head.
         entry.live = inst;
       }
     }
-
-    let totalTransferred = 0;
     for (const { live, closed } of byKey.values()) {
       if (!live || !live.sessionId || closed.length === 0) continue;
       for (const old of closed) {
@@ -1661,10 +1708,11 @@ ${DEVOPS_KIT_DIR}/
         const n = databaseService.transferMcpCalls(old.sessionId, live.sessionId);
         if (n > 0) {
           totalTransferred += n;
-          console.log(`[AgentInstanceService] Backfilled ${n} mcp_calls row(s): ${old.sessionId} -> ${live.sessionId}`);
+          console.log(`[AgentInstanceService] Backfilled ${n} mcp_calls row(s) via repo+branch match: ${old.sessionId} -> ${live.sessionId}`);
         }
       }
     }
+
     if (totalTransferred > 0) {
       console.log(`[AgentInstanceService] mcp_calls backfill complete: ${totalTransferred} row(s) repatriated`);
     }
@@ -2251,6 +2299,12 @@ ${DEVOPS_KIT_DIR}/
         const newInstance = await this.createInstance(config);
 
         if (newInstance.success && newInstance.data) {
+          // Record lineage so backfillMcpCallsByLineage can repatriate any
+          // mcp_calls stranded under previous sessionIds. No prior instance
+          // record here (this is the "restart from session data" path), so
+          // the chain is just the immediate predecessor.
+          this.recordPredecessor(newInstance.data, sessionId);
+
           // Transfer database records (commits, activity logs) from old session to new
           if (newInstance.data.sessionId) {
             const transferred = databaseService.transferSessionData(sessionId, newInstance.data.sessionId);
@@ -2287,6 +2341,10 @@ ${DEVOPS_KIT_DIR}/
       const config = targetInstance.config;
       const oldInstanceId = targetInstance.id;
       const worktreePath = targetInstance.worktreePath || config.repoPath;
+      // Snapshot the target's predecessor chain BEFORE we delete it, so the
+      // new instance can inherit and extend it (used by the mcp_calls
+      // lineage backfill).
+      const inheritedPredecessors: string[] = [...(targetInstance.predecessorSessionIds || [])];
 
       console.log(`[AgentInstanceService] Restarting session ${sessionId} in ${worktreePath}`);
       this.terminalLogService?.info(`Found stored instance, restarting in ${worktreePath}`, sessionId, 'Restart');
@@ -2330,6 +2388,11 @@ ${DEVOPS_KIT_DIR}/
       const newInstance = await this.createInstance(config);
 
       if (newInstance.success && newInstance.data) {
+        // Carry the predecessor chain forward (inherited from targetInstance)
+        // and add the just-replaced sessionId. Persists immediately so the
+        // record survives a crash mid-restart.
+        this.recordPredecessor(newInstance.data, sessionId, inheritedPredecessors);
+
         // Transfer database records (commits, activity logs) from old session to new
         if (newInstance.data.sessionId) {
           const transferred = databaseService.transferSessionData(sessionId, newInstance.data.sessionId);

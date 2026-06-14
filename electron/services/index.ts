@@ -220,6 +220,10 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // Wire activityService into rebaseWatcher so rebase events appear in session timeline
   rebaseWatcher.setActivityService(activity);
 
+  // Same for MergeService — merge start/success/failure events show up in the
+  // session activity feed instead of only the debug log.
+  merge.setActivityService(activity);
+
   // Initialize Heartbeat service
   // For monitoring agent connection status
   const heartbeat = new HeartbeatService();

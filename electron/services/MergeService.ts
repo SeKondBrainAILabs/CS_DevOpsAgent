@@ -57,6 +57,7 @@ export class MergeService extends BaseService {
   private rebaseWatcher: any = null;
   private agentInstanceService: any = null;
   private lockService: any = null;
+  private activityService: any = null;
   private debugLog: { warn: (source: string, message: string, details?: unknown) => void } | null = null;
 
   setDebugLog(debugLog: { warn: (source: string, message: string, details?: unknown) => void }): void {
@@ -73,6 +74,63 @@ export class MergeService extends BaseService {
 
   setAgentInstanceService(service: any): void {
     this.agentInstanceService = service;
+  }
+
+  setActivityService(service: any): void {
+    this.activityService = service;
+  }
+
+  /**
+   * Look up the live AgentInstance whose config matches (repoPath, sourceBranch),
+   * so we can attribute merge activity to its sessionId. Returns the matching
+   * sessionId if found, otherwise `undefined` — the caller should skip logging
+   * rather than logging to an unknown session.
+   */
+  private findSourceSessionId(repoPath: string, sourceBranch: string): string | undefined {
+    if (!this.agentInstanceService) return undefined;
+    try {
+      const result = this.agentInstanceService.listInstances();
+      if (!result?.success || !Array.isArray(result.data)) return undefined;
+      for (const inst of result.data) {
+        const cfg = inst?.config;
+        if (
+          cfg?.repoPath === repoPath &&
+          cfg?.branchName === sourceBranch &&
+          inst.status !== 'completed' &&
+          inst.status !== 'failed' &&
+          inst.status !== 'closed' &&
+          inst.sessionId
+        ) {
+          return inst.sessionId as string;
+        }
+      }
+    } catch {
+      // Non-fatal — skip attribution.
+    }
+    return undefined;
+  }
+
+  /**
+   * Convenience: write a merge-related entry to the activity feed if we can
+   * figure out which session owns the source branch. No-op if we can't (e.g.
+   * merge initiated from the workspace browser with no live agent on that
+   * branch).
+   */
+  private logActivity(
+    repoPath: string,
+    sourceBranch: string,
+    type: string,
+    message: string,
+    details?: unknown
+  ): void {
+    if (!this.activityService) return;
+    const sid = this.findSourceSessionId(repoPath, sourceBranch);
+    if (!sid) return;
+    try {
+      this.activityService.log(sid, type, message, details);
+    } catch {
+      // Non-fatal.
+    }
   }
 
   setLockService(service: any): void {
@@ -530,6 +588,12 @@ export class MergeService extends BaseService {
 
       let didStash = false;
 
+      // Activity feed: announce the merge so the session timeline reflects it.
+      this.logActivity(repoPath, normalizedSource, 'git', `Merging ${normalizedSource} → ${targetBranch}`, {
+        sourceBranch: normalizedSource,
+        targetBranch,
+      });
+
       // Ensure .S9N_KIT_DevOpsAgent/ is in .gitignore of the target repo
       // This prevents agent artifacts from blocking merges
       await this.ensureAgentArtifactsIgnored(repoPath);
@@ -891,6 +955,13 @@ export class MergeService extends BaseService {
           const allConflictFiles = [
             ...new Set([...conflictingFiles, ...rebaseConflictFiles]),
           ];
+          this.logActivity(
+            repoPath,
+            normalizedSource,
+            'warning',
+            `Merge ${normalizedSource} → ${targetBranch} failed (${allConflictFiles.length} conflict${allConflictFiles.length === 1 ? '' : 's'})`,
+            { conflictingFiles: allConflictFiles }
+          );
           return {
             success: false,
             message: 'Merge failed due to conflicts (rebase fallback also conflicted)',
@@ -974,6 +1045,15 @@ export class MergeService extends BaseService {
       if (options.deleteRemoteBranch) {
         await this.git(['push', 'origin', '--delete', sourceBranch], repoPath);
       }
+
+      // Activity feed: announce the successful merge.
+      this.logActivity(
+        repoPath,
+        normalizedSource,
+        'success',
+        `Merged ${normalizedSource} → ${targetBranch}${filesChanged ? ` (${filesChanged} file${filesChanged === 1 ? '' : 's'} changed)` : ''}`,
+        { mergeCommitHash, filesChanged, stashRecovered }
+      );
 
       return {
         success: true,

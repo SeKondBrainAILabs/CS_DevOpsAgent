@@ -630,6 +630,15 @@ export interface AgentInstance {
   worktreePath?: string; // Path to isolated worktree (local_deploy/{branchName})
   error?: string;
   multiRepoEntries?: RepoEntry[]; // Populated repos with worktree paths (multi-repo mode)
+  /**
+   * Ordered chain of sessionIds this instance has replaced via restart. The
+   * most recent predecessor is the last element; the oldest is first. Used by
+   * `backfillMcpCallsByLineage` to repatriate orphaned `mcp_calls` rows that
+   * would otherwise be invisible after the predecessor records are purged by
+   * `purgeInstancesOnBranch`. Empty/missing for instances created before
+   * v2.6.59 — no recovery is possible for those without lineage data.
+   */
+  predecessorSessionIds?: string[];
 }
 
 // =============================================================================
