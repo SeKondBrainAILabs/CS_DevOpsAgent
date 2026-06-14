@@ -1057,8 +1057,8 @@ export class DatabaseService extends BaseService {
    * Transfer all session data from one sessionId to another
    * Used during session restart to preserve commit history and activity logs
    */
-  transferSessionData(oldSessionId: string, newSessionId: string): { transferred: { commits: number; activity: number; terminal: number; history: number } } {
-    const result = { commits: 0, activity: 0, terminal: 0, history: 0 };
+  transferSessionData(oldSessionId: string, newSessionId: string): { transferred: { commits: number; activity: number; terminal: number; history: number; mcp: number } } {
+    const result = { commits: 0, activity: 0, terminal: 0, history: 0, mcp: 0 };
     if (!this.db) return { transferred: result };
 
     try {
@@ -1082,11 +1082,37 @@ export class DatabaseService extends BaseService {
       const historyResult = historyStmt.run(newSessionId, oldSessionId);
       result.history = historyResult.changes;
 
+      // Transfer MCP call log. Was missing from the original transfer set, so
+      // every session restart stranded the previous run's MCP activity under
+      // the old id and the MCP tab (which strictly filters on sessionId) went
+      // blank after the first auto-restart.
+      const mcpStmt = this.db.prepare('UPDATE mcp_calls SET session_id = ? WHERE session_id = ?');
+      const mcpResult = mcpStmt.run(newSessionId, oldSessionId);
+      result.mcp = mcpResult.changes;
+
       console.log(`[DatabaseService] Transferred session data from ${oldSessionId} to ${newSessionId}: ${JSON.stringify(result)}`);
       return { transferred: result };
     } catch (error) {
       console.error(`[DatabaseService] Failed to transfer session data:`, error);
       return { transferred: result };
+    }
+  }
+
+  /**
+   * Move every `mcp_calls` row whose `session_id` is `oldSessionId` over to
+   * `newSessionId`. Returns the number of rows updated. Used by the startup
+   * backfill (`backfillMcpCallsByLineage`) to repatriate calls that were
+   * stranded under an earlier sessionId by previous releases that didn't
+   * include mcp_calls in `transferSessionData`.
+   */
+  transferMcpCalls(oldSessionId: string, newSessionId: string): number {
+    if (!this.db) return 0;
+    try {
+      const stmt = this.db.prepare('UPDATE mcp_calls SET session_id = ? WHERE session_id = ?');
+      return stmt.run(newSessionId, oldSessionId).changes;
+    } catch (error) {
+      console.error('[DatabaseService] Failed to transfer mcp_calls:', error);
+      return 0;
     }
   }
 

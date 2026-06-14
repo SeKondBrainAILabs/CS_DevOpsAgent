@@ -1622,6 +1622,56 @@ ${DEVOPS_KIT_DIR}/
   }
 
   /**
+   * One-time backfill that repatriates orphaned `mcp_calls` rows. For every
+   * (repoPath, branchName) group, route every CLOSED instance's mcp_calls to
+   * the still-LIVE instance in the same group. This recovers MCP history that
+   * was stranded under previous-restart sessionIds by builds before v2.6.58
+   * (when `transferSessionData` didn't include `mcp_calls`).
+   *
+   * Safe to run on every startup — it's idempotent (closed and live sessions
+   * never share the same sessionId, and after one pass the closed ids hold
+   * zero mcp rows).
+   *
+   * Returns total rows transferred.
+   */
+  backfillMcpCallsByLineage(): number {
+    const byKey = new Map<string, { live: AgentInstance | null; closed: AgentInstance[] }>();
+    for (const inst of this.instances.values()) {
+      const cfg = inst.config;
+      if (!cfg?.repoPath || !cfg?.branchName) continue;
+      const key = `${cfg.repoPath}::${cfg.branchName}`;
+      let entry = byKey.get(key);
+      if (!entry) {
+        entry = { live: null, closed: [] };
+        byKey.set(key, entry);
+      }
+      if (inst.status === 'closed' || inst.status === 'completed' || inst.status === 'failed') {
+        entry.closed.push(inst);
+      } else if (!entry.live && inst.sessionId) {
+        // First non-terminal instance for this key is the lineage's current head.
+        entry.live = inst;
+      }
+    }
+
+    let totalTransferred = 0;
+    for (const { live, closed } of byKey.values()) {
+      if (!live || !live.sessionId || closed.length === 0) continue;
+      for (const old of closed) {
+        if (!old.sessionId || old.sessionId === live.sessionId) continue;
+        const n = databaseService.transferMcpCalls(old.sessionId, live.sessionId);
+        if (n > 0) {
+          totalTransferred += n;
+          console.log(`[AgentInstanceService] Backfilled ${n} mcp_calls row(s): ${old.sessionId} -> ${live.sessionId}`);
+        }
+      }
+    }
+    if (totalTransferred > 0) {
+      console.log(`[AgentInstanceService] mcp_calls backfill complete: ${totalTransferred} row(s) repatriated`);
+    }
+    return totalTransferred;
+  }
+
+  /**
    * Mark instances whose worktreePath no longer exists on disk as 'closed' and
    * save. Returns the number of instances reaped.
    *

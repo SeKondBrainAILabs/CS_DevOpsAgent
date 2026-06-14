@@ -332,6 +332,11 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // marked closed at startup and never restored.
   await agentInstance.repairOrphanWorktrees();
 
+  // Repatriate any `mcp_calls` stranded under previous-restart sessionIds. A
+  // builds-before-v2.6.58 transferSessionData omitted mcp_calls, so the MCP
+  // tab went blank after the first auto-restart. Idempotent.
+  agentInstance.backfillMcpCallsByLineage();
+
   // Re-register existing sessions loaded from electron-store (binder is in-memory only)
   agentInstance.registerExistingSessionsWithBinder();
 
