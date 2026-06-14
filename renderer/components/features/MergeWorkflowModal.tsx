@@ -261,6 +261,45 @@ export function MergeWorkflowModal({
     }
   };
 
+  // Auto-push the configured tag after a successful merge. Gives the user a
+  // 5-second window to edit or cancel — covers users who forget the explicit
+  // click without removing all manual control. Cancel state stops the timer
+  // but leaves the input editable so they can still fire it themselves.
+  const [autoPushCountdown, setAutoPushCountdown] = useState<number | null>(null);
+  const [autoPushCanceled, setAutoPushCanceled] = useState(false);
+  useEffect(() => {
+    if (
+      step !== 'complete' ||
+      !mergeActionPrefix ||
+      !actionVersionTag ||
+      actionState !== 'idle' ||
+      autoPushCanceled
+    ) {
+      setAutoPushCountdown(null);
+      return;
+    }
+    setAutoPushCountdown(5);
+    const tick = setInterval(() => {
+      setAutoPushCountdown((n) => {
+        if (n === null) return null;
+        if (n <= 1) {
+          clearInterval(tick);
+          // Defer the call so React state flush completes first.
+          setTimeout(() => void fireMergeAction(), 0);
+          return 0;
+        }
+        return n - 1;
+      });
+    }, 1000);
+    return () => clearInterval(tick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, mergeActionPrefix, actionVersionTag, actionState, autoPushCanceled]);
+
+  const cancelAutoPush = () => {
+    setAutoPushCanceled(true);
+    setAutoPushCountdown(null);
+  };
+
   const loadPreviewWithBranch = async (branch: string) => {
     setLoading(true);
     setError(null);
@@ -1071,22 +1110,36 @@ export function MergeWorkflowModal({
                         <input
                           type="text"
                           value={actionVersionTag}
-                          onChange={(e) => setActionVersionTag(e.target.value)}
+                          onChange={(e) => { setActionVersionTag(e.target.value); cancelAutoPush(); }}
                           disabled={actionState === 'firing'}
                           className="flex-1 px-2 py-1.5 rounded-[10px] bg-white border border-[rgba(0,0,0,0.10)] text-sm font-mono focus:outline-none focus:ring-2 focus:ring-kanvas-blue/50"
                           placeholder="SDDMini-KH/v3.23.41"
                         />
-                        <button
-                          type="button"
-                          disabled={actionState === 'firing' || !actionVersionTag.trim()}
-                          onClick={() => void fireMergeAction()}
-                          className="flex-shrink-0 px-3 py-1.5 bg-black text-white rounded-full text-xs font-medium hover:bg-black/90 disabled:opacity-50 transition-colors"
-                        >
-                          {actionState === 'firing' ? 'Pushing…' : 'Create & push tag'}
-                        </button>
+                        {autoPushCountdown !== null && autoPushCountdown > 0 ? (
+                          <button
+                            type="button"
+                            onClick={cancelAutoPush}
+                            className="flex-shrink-0 px-3 py-1.5 bg-white border border-[rgba(0,0,0,0.20)] text-text-primary rounded-full text-xs font-medium hover:bg-[#FAFAF7] transition-colors"
+                          >
+                            Cancel ({autoPushCountdown})
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={actionState === 'firing' || !actionVersionTag.trim()}
+                            onClick={() => void fireMergeAction()}
+                            className="flex-shrink-0 px-3 py-1.5 bg-black text-white rounded-full text-xs font-medium hover:bg-black/90 disabled:opacity-50 transition-colors"
+                          >
+                            {actionState === 'firing' ? 'Pushing…' : 'Create & push tag'}
+                          </button>
+                        )}
                       </div>
                       {actionError && <p className="text-xs text-red-600 mt-1.5">{actionError}</p>}
-                      <p className="text-[11px] text-text-secondary mt-1.5">Auto-incremented patch from the latest tag. Edit the version if needed.</p>
+                      <p className="text-[11px] text-text-secondary mt-1.5">
+                        {autoPushCountdown !== null && autoPushCountdown > 0
+                          ? `Auto-pushing in ${autoPushCountdown}s. Click Cancel or edit the version to stop.`
+                          : 'Auto-incremented patch from the latest tag. Edit the version if needed.'}
+                      </p>
                     </>
                   )}
                 </div>
