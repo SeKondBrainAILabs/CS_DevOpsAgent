@@ -127,7 +127,12 @@ export class McpServerService extends BaseService {
   // Track last activity per transport for stale session cleanup
   private lastActivity = new Map<string, number>();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
-  private static readonly SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+  // 2 hours. Was 30 min, which was too aggressive for long agent runs — the
+  // sweep purged active transports and clients with non-spec error handling
+  // (Codex specifically) couldn't recover without manual restart. The
+  // stateless fallback above is the safety net; this bump prevents triggering
+  // it during normal use.
+  private static readonly SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
   // MCP call log — in-memory cache backed by persistent database
   private mcpCallLog: McpCallLogEntry[] = [];
@@ -381,9 +386,22 @@ export class McpServerService extends BaseService {
       return;
     }
 
-    // Unknown or expired session — return a JSON-RPC error so the client can
-    // cleanly reinitialize rather than getting a deserialization error.
-    this.debugLog?.warn('McpServer', 'Expired/unknown session — client must reinitialize', { sessionId });
+    // Unknown or expired session. Some clients (notably Codex) cache the
+    // mcp-session-id across server restarts / idle-sweep purges and keep
+    // POSTing it instead of reinitializing on our 404. Fall back to the
+    // stateless path so the request still succeeds — the transport spins up
+    // a one-shot server + transport pair, processes the JSON-RPC body, and
+    // tears down. The client effectively gets the same answer it would have
+    // had with a fresh session, without needing to handle the error itself.
+    if (req.method === 'POST') {
+      this.debugLog?.warn('McpServer', 'Expired/unknown session — serving via stateless fallback', { sessionId });
+      await this.handleStatelessRpc(req, res);
+      return;
+    }
+    // Non-POST (e.g. GET / DELETE) with an unknown session — there's no
+    // stateless equivalent, so reply with the JSON-RPC error and let the
+    // client reinitialize on its next turn.
+    this.debugLog?.warn('McpServer', 'Expired/unknown session — non-POST cannot fallback', { sessionId, method: req.method });
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       jsonrpc: '2.0',
