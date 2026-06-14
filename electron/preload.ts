@@ -530,6 +530,13 @@ const api = {
 
     healthCheck: (): Promise<IpcResult<{ online: boolean; configured: boolean; error?: string }>> =>
       ipcRenderer.invoke(IPC.AI_HEALTH_CHECK),
+
+    refineSessionTask: (input: {
+      rawTask: string;
+      agentType: string;
+      repoName?: string;
+    }): Promise<IpcResult<{ persona: string; taskTitle: string; refinedTask: string }>> =>
+      ipcRenderer.invoke(IPC.AI_REFINE_SESSION_TASK, input),
   },
 
   // ==========================================================================

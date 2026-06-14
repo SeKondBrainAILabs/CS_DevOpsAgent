@@ -110,6 +110,8 @@ export const IPC = {
   AI_GET_CONFIG_SOURCES: 'ai:get-config-sources',
   AI_IS_CONFIGURED: 'ai:is-configured',
   AI_HEALTH_CHECK: 'ai:health-check',
+  // Refine a raw user task into a structured agent brief (picks persona, short title, structured rewrite).
+  AI_REFINE_SESSION_TASK: 'ai:refine-session-task',
   // Events (main → renderer)
   AI_STREAM_CHUNK: 'ai:stream:chunk',
   AI_STREAM_END: 'ai:stream:end',

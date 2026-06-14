@@ -187,6 +187,97 @@ export class AIService extends BaseService {
     return !!this.configService.getCredentialValue('groqApiKey');
   }
 
+  /**
+   * Refine a raw, free-form session task description into a high-quality
+   * agent brief. One Groq call produces:
+   *   - persona: which lens the rewrite was done through (product manager /
+   *     senior engineer / senior AI engineer)
+   *   - taskTitle: short 5-7 word label suitable for the session header
+   *   - refinedTask: structured brief (Goal / Context / Constraints /
+   *     Acceptance) with no boilerplate
+   *
+   * Heuristics-first persona pick happens inside the prompt. Falls back to a
+   * sensible default if Groq returns malformed JSON. Doesn't throw on missing
+   * key — returns an IpcResult error so the renderer can show a friendly
+   * "configure Groq" hint.
+   */
+  async refineSessionTask(input: {
+    rawTask: string;
+    agentType: string;
+    repoName?: string;
+  }): Promise<IpcResult<{ persona: string; taskTitle: string; refinedTask: string }>> {
+    return this.wrap(async () => {
+      if (!input.rawTask || !input.rawTask.trim()) {
+        throw new Error('Task is empty');
+      }
+      const client = this.getClient();
+      // Small, fast model — this is a short single-turn rewrite, no need for the
+      // 70B for it. Kimi-K2 is strong on coding-shape tasks and fits in cheap.
+      const modelId = GROQ_MODELS['kimi-k2'];
+
+      const systemPrompt = [
+        'You refine a user\'s raw task description for an AI coding agent.',
+        'You write as a senior product manager, senior engineer, or senior AI engineer — whichever fits best.',
+        'Persona choices (return exactly one of):',
+        '  - "product_manager": specs, designs, requirements, user flows, PRDs, scoping',
+        '  - "senior_engineer": implementation, refactoring, bug fixes, architecture, migrations, infra',
+        '  - "senior_ai_engineer": prompts, model selection, evaluation, RAG, multi-agent, fine-tuning, LLM ops',
+        '',
+        'Output STRICT JSON with this exact shape and nothing else:',
+        '{ "persona": "...", "taskTitle": "...", "refinedTask": "..." }',
+        '',
+        'Rules:',
+        '  - taskTitle: 5-7 words, imperative ("Add X", "Refactor Y"), no trailing period.',
+        '  - refinedTask: Markdown. Sections labeled exactly: **Goal**, **Context**, **Constraints**, **Acceptance**. Plain prose, terse, no preamble, no apologies, no "as a senior X" boilerplate.',
+        '  - Preserve every concrete detail the user gave (libraries, paths, branch names, file names, deadlines). Do not invent specs the user did not mention.',
+        '  - If a section has no real content, omit it. Empty sections are worse than missing ones.',
+      ].join('\n');
+
+      const userPrompt = [
+        `Agent runtime: ${input.agentType}`,
+        input.repoName ? `Repo: ${input.repoName}` : null,
+        '',
+        'Raw task:',
+        input.rawTask.trim(),
+      ].filter(Boolean).join('\n');
+
+      const response = await client.chat.completions.create({
+        model: modelId,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.3,
+        max_tokens: 2048,
+        response_format: { type: 'json_object' },
+      });
+
+      const raw = response.choices[0]?.message?.content || '';
+      type RefineShape = { persona?: unknown; taskTitle?: unknown; refinedTask?: unknown };
+      let parsed: RefineShape;
+      try {
+        parsed = JSON.parse(raw) as RefineShape;
+      } catch (err) {
+        throw new Error(`Refiner returned non-JSON: ${(err as Error).message}`);
+      }
+
+      // Validate + defensively fall back rather than throwing — a partial result
+      // is more useful than no result.
+      const persona =
+        parsed.persona === 'product_manager' || parsed.persona === 'senior_engineer' || parsed.persona === 'senior_ai_engineer'
+          ? parsed.persona
+          : 'senior_engineer';
+      const taskTitle = typeof parsed.taskTitle === 'string' && parsed.taskTitle.trim()
+        ? parsed.taskTitle.trim().replace(/[.\s]+$/, '')
+        : input.rawTask.trim().split(/[.!?\n]/)[0].slice(0, 60);
+      const refinedTask = typeof parsed.refinedTask === 'string' && parsed.refinedTask.trim()
+        ? parsed.refinedTask.trim()
+        : input.rawTask.trim();
+
+      return { persona, taskTitle, refinedTask };
+    }, 'AI_REFINE_FAILED');
+  }
+
   async healthCheck(): Promise<{ online: boolean; configured: boolean; error?: string }> {
     const configured = this.hasApiKey();
     if (!configured) return { online: false, configured: false, error: 'API key not configured' };

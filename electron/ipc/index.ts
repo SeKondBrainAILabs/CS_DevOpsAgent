@@ -263,6 +263,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return { success: true, data: services.ai.getAvailableModels() };
   });
 
+  ipcMain.handle(IPC.AI_REFINE_SESSION_TASK, async (_, input: { rawTask: string; agentType: string; repoName?: string }) => {
+    return services.ai.refineSessionTask(input);
+  });
+
   ipcMain.handle(IPC.AI_IS_CONFIGURED, async () => {
     return { success: true, data: services.ai.hasApiKey() };
   });

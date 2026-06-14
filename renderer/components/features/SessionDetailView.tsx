@@ -22,6 +22,33 @@ type DetailTab = 'prompt' | 'activity' | 'commits' | 'files' | 'contracts' | 'te
 const VIRTUALIZATION_LINE_THRESHOLD = 100;
 
 /**
+ * Short, header-safe label for a session card. A raw multi-sentence task
+ * description shouldn't be the page heading — it wraps and looks broken.
+ * Prefers an explicit short title if one was set (e.g. by the Refine-with-AI
+ * flow), otherwise derives from the task: first sentence (.!? or newline),
+ * trimmed to ~80 chars at a word boundary with an ellipsis. Falls back to
+ * branchName, then a generic label.
+ */
+function sessionHeaderTitle(session: SessionReport): string {
+  const explicit = (session as { taskTitle?: string }).taskTitle;
+  if (explicit && explicit.trim()) return explicit.trim();
+  const task = (session.task || '').trim();
+  if (task) {
+    // First sentence or first 80 chars, whichever ends sooner.
+    const firstBreak = task.search(/[.!?\n]/);
+    let head = firstBreak > 0 && firstBreak <= 80 ? task.slice(0, firstBreak) : task.slice(0, 80);
+    if (head.length < task.length) {
+      // Snap back to the last word boundary so we don't truncate mid-word.
+      const lastSpace = head.lastIndexOf(' ');
+      if (lastSpace > 30) head = head.slice(0, lastSpace);
+      head = head.replace(/[\s,;:]+$/, '') + '…';
+    }
+    return head;
+  }
+  return session.branchName || 'Session Details';
+}
+
+/**
  * VirtualizedDiff - Renders large diffs with react-window for performance
  * Falls back to normal rendering for small diffs (<100 lines)
  */
@@ -479,9 +506,12 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
           </button>
-          <div className="flex-1">
-            <h1 className="text-lg font-semibold text-text-primary">
-              {session.task || session.branchName || 'Session Details'}
+          <div className="flex-1 min-w-0">
+            <h1
+              className="text-lg font-semibold text-text-primary truncate"
+              title={session.task || session.branchName || ''}
+            >
+              {sessionHeaderTitle(session)}
             </h1>
             <div className="flex items-center gap-3 mt-1 text-sm text-text-secondary">
               <span className={statusColors[session.status] || 'text-gray-400'}>

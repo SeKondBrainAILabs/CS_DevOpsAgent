@@ -92,6 +92,49 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
   // Result
   const [createdInstance, setCreatedInstance] = useState<AgentInstance | null>(null);
 
+  // Refine-with-AI state
+  const [refining, setRefining] = useState(false);
+  const [refineError, setRefineError] = useState<string | null>(null);
+  const [refinedPersona, setRefinedPersona] = useState<string | null>(null);
+
+  const handleRefineTask = async () => {
+    setRefineError(null);
+    const raw = settings.taskDescription.trim();
+    if (!raw) {
+      setRefineError('Type a task first');
+      return;
+    }
+    if (!window.api?.ai?.refineSessionTask) {
+      setRefineError('Refine is not available in this build');
+      return;
+    }
+    setRefining(true);
+    try {
+      const repoName = repoPath ? repoPath.split('/').filter(Boolean).pop() : undefined;
+      const result = await window.api.ai.refineSessionTask({
+        rawTask: raw,
+        agentType: agentType || 'claude',
+        repoName,
+      });
+      if (result.success && result.data) {
+        setSettings(s => ({ ...s, taskDescription: result.data!.refinedTask }));
+        setRefinedPersona(result.data.persona);
+      } else {
+        setRefineError(result.error?.message || 'Refine failed');
+      }
+    } catch (err) {
+      setRefineError(err instanceof Error ? err.message : 'Refine failed');
+    } finally {
+      setRefining(false);
+    }
+  };
+
+  const personaLabel = (p: string): string =>
+    p === 'product_manager' ? 'Senior Product Manager'
+      : p === 'senior_ai_engineer' ? 'Senior AI Engineer'
+      : p === 'senior_engineer' ? 'Senior Engineer'
+      : p;
+
   // First-run setup
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
   const [featureOrgChoice, setFeatureOrgChoice] = useState<FeatureOrgStructure>('feature-folders');
@@ -745,10 +788,35 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
                 >
                   <textarea
                     value={settings.taskDescription}
-                    onChange={(e) => setSettings(s => ({ ...s, taskDescription: e.target.value }))}
-                    className="textarea h-20"
+                    onChange={(e) => {
+                      setSettings(s => ({ ...s, taskDescription: e.target.value }));
+                      if (refinedPersona) setRefinedPersona(null);
+                    }}
+                    className="textarea h-32"
                     placeholder="e.g. Resolve uncommitted changes: commit staged files, stash modified work, clean up repo state"
                   />
+                  <div className="flex items-center justify-between mt-2 gap-3">
+                    <div className="flex items-center gap-2 text-xs">
+                      {refinedPersona && (
+                        <span
+                          className="inline-flex items-center px-2 py-0.5 rounded-full bg-[rgba(0,0,0,0.05)] text-text-secondary"
+                          title="Persona used to refine the task"
+                        >
+                          {personaLabel(refinedPersona)}
+                        </span>
+                      )}
+                      {refineError && <span className="text-red-500">{refineError}</span>}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleRefineTask}
+                      disabled={refining || !settings.taskDescription.trim()}
+                      className="text-xs px-3 py-1.5 rounded-full bg-black text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[rgba(0,0,0,0.85)] transition-colors"
+                      title="Rewrite the task as a senior PM / engineer / AI engineer (auto-picked)"
+                    >
+                      {refining ? 'Refining…' : '✨ Refine with AI'}
+                    </button>
+                  </div>
                 </SettingCard>
 
                 {/* Branch Name */}
