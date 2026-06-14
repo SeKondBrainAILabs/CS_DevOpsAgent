@@ -182,6 +182,23 @@ const LOCK_FILES: string[] = [
   'pnpm-lock.yaml',
 ];
 
+/**
+ * KIT-managed bookkeeping files that frequently end up tracked in git history
+ * (predating the .gitignore entry, or committed by an agent's `git add -A`)
+ * and have ONLY session-identifier content — per-worktree repoPath, init
+ * timestamp, window-title session number. On a session-branch → main merge,
+ * the right value is always main's; the session-branch values exist to be
+ * local-only. We resolve to "ours" (the current branch we're merging INTO,
+ * which during a session-branch merge is main) without LLM involvement.
+ *
+ * Matched by relative path from repo root, not basename — the path matters
+ * because plain `settings.json` is generic and we only want the .vscode one.
+ */
+const KIT_BOOKKEEPING_FILES: string[] = [
+  '.S9N_KIT_DevOpsAgent/config.json',
+  '.vscode/settings.json',
+];
+
 /** File patterns for migration files — never auto-resolve */
 const MIGRATION_PATTERNS = [
   /\/migrations?\//i,
@@ -609,6 +626,22 @@ export class MergeConflictService extends BaseService {
         }
       }
 
+      // KIT-bookkeeping files: keep ours (the branch we're merging INTO).
+      // Session-branch values are local-only by design — repoPath, init
+      // timestamp, window-title session number — and shouldn't propagate.
+      if (KIT_BOOKKEEPING_FILES.includes(filePath)) {
+        console.log(`[MergeConflict] KIT bookkeeping file — keeping ours: ${filePath}`);
+        const oursContent = this.resolveKeepCurrent(content);
+        if (oursContent) {
+          this.debugLog?.info('MergeConflict', `Auto-resolved KIT bookkeeping to ours`, { filePath });
+          return {
+            file: filePath,
+            resolved: true,
+            content: oursContent,
+          };
+        }
+      }
+
       // Try deterministic resolution first (no LLM — safe even for protected files)
       const category = analysis?.conflictCategory || triage?.conflictCategory;
       if (category) {
@@ -958,6 +991,23 @@ export class MergeConflictService extends BaseService {
               language,
               originalContent: content,
               proposedContent: incomingContent,
+              status: 'approved',
+            });
+            resolvedByAI++;
+            continue;
+          }
+        }
+
+        // KIT bookkeeping: keep current (target-branch) version automatically.
+        if (KIT_BOOKKEEPING_FILES.includes(file)) {
+          const oursContent = this.resolveKeepCurrent(content);
+          if (oursContent) {
+            console.log(`[MergeConflict] KIT bookkeeping file — keeping ours: ${file}`);
+            previews.push({
+              file,
+              language,
+              originalContent: content,
+              proposedContent: oursContent,
               status: 'approved',
             });
             resolvedByAI++;
