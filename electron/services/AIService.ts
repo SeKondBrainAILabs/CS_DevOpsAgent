@@ -211,30 +211,56 @@ export class AIService extends BaseService {
         throw new Error('Task is empty');
       }
       const client = this.getClient();
-      // Use llama-3.3-70b-versatile — known-good on Groq, strong at JSON-mode
-      // single-turn rewrites. v2.6.57 hardcoded kimi-k2 whose Groq model ID
-      // has since changed (moonshotai/kimi-k2-instruct -> instruct-0905) and
-      // the registry below still carried the stale id, which 404'd. Hardcoding
-      // a single reliable model here keeps the Refine button working even if
-      // the registry drifts again.
-      const modelId = GROQ_MODELS['llama-3.3-70b'];
+      // openai/gpt-oss-120b — measurably stronger than llama-3.3-70b at the
+      // "expand a vague brief into a specific one" task we're doing here.
+      // Still on Groq, still sub-second.
+      const modelId = GROQ_MODELS['gpt-oss-120b'];
 
       const systemPrompt = [
-        'You refine a user\'s raw task description for an AI coding agent.',
-        'You write as a senior product manager, senior engineer, or senior AI engineer — whichever fits best.',
-        'Persona choices (return exactly one of):',
-        '  - "product_manager": specs, designs, requirements, user flows, PRDs, scoping',
-        '  - "senior_engineer": implementation, refactoring, bug fixes, architecture, migrations, infra',
-        '  - "senior_ai_engineer": prompts, model selection, evaluation, RAG, multi-agent, fine-tuning, LLM ops',
+        'You are refining a raw task description so an AI coding agent has a high-quality brief.',
+        '',
+        'Adopt one of these personas based on what the task is really about:',
+        '  - "product_manager": product / design / spec / scoping / UX / requirements',
+        '  - "senior_engineer": implementation / refactor / bug / migration / infra / testing',
+        '  - "senior_ai_engineer": prompts / model / eval / RAG / agent / LLM ops',
+        '',
+        'A senior version of each persona, given a vague brief, does this:',
+        '  1. Re-states the underlying user need in one line (the WHY, not the what).',
+        '  2. Lays out the first 3-5 concrete steps the agent will actually take.',
+        '  3. Defines "done" with verifiable criteria — never tautologies like "task is done when it is done".',
+        '  4. Calls out implicit assumptions, dependencies, and ambiguities so the human can correct them.',
         '',
         'Output STRICT JSON with this exact shape and nothing else:',
         '{ "persona": "...", "taskTitle": "...", "refinedTask": "..." }',
         '',
         'Rules:',
-        '  - taskTitle: 5-7 words, imperative ("Add X", "Refactor Y"), no trailing period.',
-        '  - refinedTask: Markdown. Sections labeled exactly: **Goal**, **Context**, **Constraints**, **Acceptance**. Plain prose, terse, no preamble, no apologies, no "as a senior X" boilerplate.',
-        '  - Preserve every concrete detail the user gave (libraries, paths, branch names, file names, deadlines). Do not invent specs the user did not mention.',
-        '  - If a section has no real content, omit it. Empty sections are worse than missing ones.',
+        '  - taskTitle: 5-7 words, imperative ("Review X and verify Y"), no trailing period.',
+        '  - refinedTask: Markdown. Use these section headers, in order:',
+        '      **Why** — the underlying need in one sentence.',
+        '      **Approach** — 3-5 concrete bullets, each starting with an action verb.',
+        '      **Definition of Done** — specific, verifiable, measurable. Reject tautologies.',
+        '      **Open questions / assumptions** — anything the user left implicit. State assumptions you\'re making so they can be corrected.',
+        '  - Preserve every concrete detail the user gave (libraries, paths, branch names, file names, deadlines).',
+        '  - It is OK and EXPECTED to make plausible assumptions to fill gaps — but STATE them in "Open questions / assumptions". A senior PM/engineer always surfaces their assumptions.',
+        '  - Avoid: tautology, paraphrasing the brief in different words, generic platitudes ("ensure quality", "make sure to test", "follow best practices").',
+        '  - No preamble. No "as a senior X" boilerplate. No apologies. Just the four sections.',
+        '',
+        'Worked example:',
+        'USER: "Make the login faster"',
+        'GOOD output (refinedTask):',
+        '**Why**',
+        'The current login flow is slow enough that users notice — likely hurting activation.',
+        '**Approach**',
+        '- Measure baseline TTFB and Time-to-Interactive for /login on prod.',
+        '- Profile to find the dominant cost (auth call, render, network, CSS).',
+        '- Apply the single fix that targets the dominant cost.',
+        '- Re-measure and capture before/after traces.',
+        '**Definition of Done**',
+        '/login Time-to-Interactive on prod is ≥30% faster than baseline, with traces saved as evidence.',
+        '**Open questions / assumptions**',
+        '- Assuming the bottleneck is server-side until profiling shows otherwise.',
+        '- Assuming "faster" means perceived latency, not just TTFB.',
+        '- Will not change visual design unless required by the fix.',
       ].join('\n');
 
       const userPrompt = [
@@ -251,7 +277,9 @@ export class AIService extends BaseService {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        temperature: 0.3,
+        // 0.3 produced safe-but-empty rewrites that just paraphrased the
+        // user. 0.6 buys enough room to expand without going off-task.
+        temperature: 0.6,
         max_tokens: 2048,
         response_format: { type: 'json_object' },
       });
