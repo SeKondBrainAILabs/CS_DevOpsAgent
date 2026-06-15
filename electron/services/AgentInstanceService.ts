@@ -1842,12 +1842,14 @@ ${DEVOPS_KIT_DIR}/
    */
   reapOrphanInstances(): number {
     let reaped = 0;
-    const reapedDetails: Array<{ id: string; sessionId: string; path: string }> = [];
+    const reapedDetails: Array<{ id: string; sessionId: string; reason: string; path: string }> = [];
     for (const instance of this.instances.values()) {
       if (instance.status === 'completed' || instance.status === 'failed' || instance.status === 'closed') continue;
 
       let allGone = false;
       let firstMissing: string | null = null;
+      let reason = 'worktree-missing';
+
       if (instance.multiRepoEntries && instance.multiRepoEntries.length > 0) {
         allGone = instance.multiRepoEntries.every(r => r.worktreePath && !existsSync(r.worktreePath));
         firstMissing = instance.multiRepoEntries.find(r => !existsSync(r.worktreePath))?.worktreePath || null;
@@ -1859,12 +1861,27 @@ ${DEVOPS_KIT_DIR}/
         }
       }
 
+      // Catch the disconnected-volume / moved-repo case the worktree check
+      // misses: worktreePath is unset (or both worktree and repo are gone),
+      // and the configured source repoPath dir doesn't exist on disk. The
+      // session can't be Sync'd / restarted / interacted with — git ops will
+      // ENOENT on every call. Reap it instead of leaving it stuck in waiting.
+      if (!allGone) {
+        const repo = instance.config?.repoPath;
+        if (repo && !existsSync(repo)) {
+          allGone = true;
+          firstMissing = repo;
+          reason = 'repo-missing';
+        }
+      }
+
       if (allGone) {
         instance.status = 'closed';
         reaped++;
         reapedDetails.push({
           id: instance.id,
           sessionId: instance.sessionId || '(none)',
+          reason,
           path: firstMissing || '(unknown)',
         });
       }
@@ -1873,7 +1890,7 @@ ${DEVOPS_KIT_DIR}/
       this.saveInstances();
       console.warn(
         `[AgentInstanceService] Reaped ${reaped} orphan instance(s) whose worktree was removed off-app and could not be repaired:\n` +
-          reapedDetails.map(d => `  - ${d.id} (${d.sessionId}) -> ${d.path}`).join('\n')
+          reapedDetails.map(d => `  - ${d.id} (${d.sessionId}) [${d.reason}] -> ${d.path}`).join('\n')
       );
     }
     return reaped;
