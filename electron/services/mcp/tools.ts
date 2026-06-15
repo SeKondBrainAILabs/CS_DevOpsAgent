@@ -206,6 +206,26 @@ export function registerTools(
       const start = Date.now();
       const sessionId = (args as any).session_id || 'unknown';
 
+      // First MCP call from an agent flips the instance status from 'waiting'
+      // (the post-create / post-restart default) to 'idle' so the
+      // "Waiting for agent to connect…" banner clears. Idempotent — only
+      // bumps when current status is exactly 'waiting'.
+      if (sessionId !== 'unknown' && deps.agentInstanceService?.listInstances) {
+        try {
+          const listed = deps.agentInstanceService.listInstances();
+          if (listed?.success && Array.isArray(listed.data)) {
+            for (const inst of listed.data) {
+              if (inst?.sessionId === sessionId && inst.status === 'waiting' && inst.id) {
+                deps.agentInstanceService.updateInstanceStatus?.(inst.id, 'idle');
+                break;
+              }
+            }
+          }
+        } catch {
+          // Diagnostics-only flip — never block a tool call on it.
+        }
+      }
+
       // Log state-changing tool calls to the activity feed so they're visible in KIT
       if (STATE_CHANGING_TOOLS.has(toolName) && sessionId !== 'unknown') {
         deps.activityService?.log(sessionId, 'git', `MCP › ${toolName}`, { source: 'mcp', toolName });
