@@ -211,9 +211,13 @@ export class AIService extends BaseService {
         throw new Error('Task is empty');
       }
       const client = this.getClient();
-      // Small, fast model — this is a short single-turn rewrite, no need for the
-      // 70B for it. Kimi-K2 is strong on coding-shape tasks and fits in cheap.
-      const modelId = GROQ_MODELS['kimi-k2'];
+      // Use llama-3.3-70b-versatile — known-good on Groq, strong at JSON-mode
+      // single-turn rewrites. v2.6.57 hardcoded kimi-k2 whose Groq model ID
+      // has since changed (moonshotai/kimi-k2-instruct -> instruct-0905) and
+      // the registry below still carried the stale id, which 404'd. Hardcoding
+      // a single reliable model here keeps the Refine button working even if
+      // the registry drifts again.
+      const modelId = GROQ_MODELS['llama-3.3-70b'];
 
       const systemPrompt = [
         'You refine a user\'s raw task description for an AI coding agent.',
