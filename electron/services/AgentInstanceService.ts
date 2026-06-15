@@ -1757,6 +1757,79 @@ ${DEVOPS_KIT_DIR}/
   }
 
   /**
+   * Detect "branch-gone orphans": the worktree directory still exists on disk,
+   * but its `.git` link points at a missing registry entry AND the source
+   * branch is gone from the source repo. This is the steady state after the
+   * source repo gets reinitialized externally (the registry wipe we saw on
+   * SA-Piggy-Bank) when the branch had also been deleted post-merge. Every
+   * KIT git op against the worktree fails with `fatal: not a git repository`
+   * — including Sync (rebase), which leaves the UI stuck.
+   *
+   * For each such instance, mark it `completed` (the typical reason a branch
+   * is gone is that it was merged + deleted) and save. Reads the per-worktree
+   * `.git` file to discover the registry path; uses `git rev-parse` to verify
+   * the branch's absence in the source repo. Idempotent.
+   */
+  async reapBrokenLinks(): Promise<number> {
+    let reaped = 0;
+    const reapedDetails: Array<{ id: string; sessionId: string; branch: string; path: string }> = [];
+
+    for (const instance of this.instances.values()) {
+      if (instance.status === 'completed' || instance.status === 'failed' || instance.status === 'closed') continue;
+      const wt = instance.worktreePath;
+      const repoPath = instance.config?.repoPath;
+      const branchName = instance.config?.branchName;
+      if (!wt || !repoPath || !branchName) continue;
+      if (!existsSync(wt)) continue; // handled by reapOrphanInstances
+
+      // Is the worktree's .git link broken?
+      const dotGitPath = join(wt, '.git');
+      if (!existsSync(dotGitPath)) continue; // not the kind of broken state we're after
+      let gitdir: string | null = null;
+      try {
+        const content = await readFile(dotGitPath, 'utf8');
+        const m = content.match(/^gitdir:\s*(.+)\s*$/m);
+        gitdir = m ? m[1].trim() : null;
+      } catch {
+        // unreadable — leave for the existing orphan path
+        continue;
+      }
+      if (!gitdir) continue;
+      if (existsSync(gitdir)) continue; // registry entry intact — nothing to do
+
+      // Registry gone. Is the source branch still around?
+      let branchExists = true;
+      try {
+        const r = await execaCmd('git', ['rev-parse', '--verify', `refs/heads/${branchName}`], { cwd: repoPath, reject: false });
+        branchExists = (r as { exitCode?: number }).exitCode === 0;
+      } catch {
+        branchExists = false;
+      }
+      if (branchExists) continue; // recoverable case — leave for repair/sync to surface
+
+      // Worktree dir exists, registry gone, branch gone. Almost always means
+      // "merged + branch deleted, then source .git wiped". Mark completed.
+      instance.status = 'completed';
+      reaped++;
+      reapedDetails.push({
+        id: instance.id,
+        sessionId: instance.sessionId || '(none)',
+        branch: branchName,
+        path: wt,
+      });
+    }
+
+    if (reaped > 0) {
+      this.saveInstances();
+      console.warn(
+        `[AgentInstanceService] Marked ${reaped} branch-gone orphan instance(s) as completed:\n` +
+          reapedDetails.map(d => `  - ${d.id} (${d.sessionId}) branch=${d.branch} path=${d.path}`).join('\n')
+      );
+    }
+    return reaped;
+  }
+
+  /**
    * Mark instances whose worktreePath no longer exists on disk as 'closed' and
    * save. Returns the number of instances reaped.
    *

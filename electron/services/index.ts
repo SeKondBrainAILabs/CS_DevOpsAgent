@@ -336,6 +336,13 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // marked closed at startup and never restored.
   await agentInstance.repairOrphanWorktrees();
 
+  // Catch the "branch-gone orphan" state: the worktree dir survived an
+  // external `.git` wipe but its registry entry is gone AND the source branch
+  // has been deleted (typically post-merge). Without this, Sync (rebase) and
+  // every other git op fails with `fatal: not a git repository` and the
+  // session is stuck in the UI. Marks those instances `completed`.
+  await agentInstance.reapBrokenLinks();
+
   // Repatriate any `mcp_calls` stranded under previous-restart sessionIds. A
   // builds-before-v2.6.58 transferSessionData omitted mcp_calls, so the MCP
   // tab went blank after the first auto-restart. Idempotent.
