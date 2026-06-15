@@ -1444,6 +1444,38 @@ ${DEVOPS_KIT_DIR}/
    * List all instances
    */
   /**
+   * Find a sibling session (same repoPath, different sessionId) that has had
+   * MCP activity in the last 30 minutes. Used by InstructionsModal to surface
+   * "Agent looks connected to a different session for this repo" hints when
+   * the current session is still waiting. Returns null when there's no
+   * active sibling — the modal then shows the generic gotcha hint instead.
+   */
+  findActiveSiblingInRepo(sessionId: string): { sessionId: string; branchName: string; lastActivity: string } | null {
+    let me: AgentInstance | undefined;
+    for (const inst of this.instances.values()) {
+      if (inst.sessionId === sessionId) { me = inst; break; }
+    }
+    if (!me?.config?.repoPath) return null;
+
+    let best: { sessionId: string; branchName: string; lastActivity: string; ms: number } | null = null;
+    const cutoffMs = Date.now() - 30 * 60 * 1000;
+    for (const inst of this.instances.values()) {
+      if (!inst.sessionId || inst.sessionId === sessionId) continue;
+      if (inst.config?.repoPath !== me.config.repoPath) continue;
+      if (inst.status === 'closed' || inst.status === 'completed' || inst.status === 'failed') continue;
+      const last = databaseService.lastMcpCallTime(inst.sessionId);
+      if (!last) continue;
+      const ms = new Date(last).getTime();
+      if (ms < cutoffMs) continue;
+      if (!best || ms > best.ms) {
+        best = { sessionId: inst.sessionId, branchName: inst.config?.branchName || '(unknown)', lastActivity: last, ms };
+      }
+    }
+    if (!best) return null;
+    return { sessionId: best.sessionId, branchName: best.branchName, lastActivity: best.lastActivity };
+  }
+
+  /**
    * Attempt to re-establish a missing worktree by running
    *   git worktree add --force <worktreePath> <branch>
    * from the source repo. Works when the SOURCE repo and BRANCH still exist —

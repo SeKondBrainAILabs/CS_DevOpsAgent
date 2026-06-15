@@ -660,6 +660,13 @@ const api = {
     get: (instanceId: string): Promise<IpcResult<AgentInstance | null>> =>
       ipcRenderer.invoke(IPC.INSTANCE_GET, instanceId),
 
+    findActiveSibling: (sessionId: string): Promise<IpcResult<{
+      sessionId: string;
+      branchName: string;
+      lastActivity: string;
+    } | null>> =>
+      ipcRenderer.invoke(IPC.INSTANCE_FIND_ACTIVE_SIBLING, sessionId),
+
     delete: (instanceId: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.INSTANCE_DELETE, instanceId),
 

@@ -1099,6 +1099,25 @@ export class DatabaseService extends BaseService {
   }
 
   /**
+   * Return the timestamp (ISO string) of the most recent `mcp_calls` row for
+   * `sessionId`, or `null` if there are none. Used by
+   * `findActiveSiblingInRepo` to decide whether a sibling session has shown
+   * activity recently enough to be worth pointing the user at.
+   */
+  lastMcpCallTime(sessionId: string): string | null {
+    if (!this.db) return null;
+    try {
+      const row = this.db
+        .prepare('SELECT MAX(timestamp) AS ts FROM mcp_calls WHERE session_id = ?')
+        .get(sessionId) as { ts: string | null } | undefined;
+      return row?.ts || null;
+    } catch (err) {
+      console.error('[DatabaseService] lastMcpCallTime failed:', err);
+      return null;
+    }
+  }
+
+  /**
    * Move every `mcp_calls` row whose `session_id` is `oldSessionId` over to
    * `newSessionId`. Returns the number of rows updated. Used by the startup
    * backfill (`backfillMcpCallsByLineage`) to repatriate calls that were

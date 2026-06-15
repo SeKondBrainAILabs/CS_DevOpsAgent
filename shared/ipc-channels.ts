@@ -163,6 +163,10 @@ export const IPC = {
   INSTANCE_DELETE: 'instance:delete',
   INSTANCE_DELETE_SESSION: 'instance:delete-session', // Delete by sessionId
   INSTANCE_DELETE_SAFETY_CHECK: 'instance:delete-safety-check', // Pre-delete safety info
+  // Find a sibling session (same repoPath, different sessionId) with recent MCP
+  // activity — used by InstructionsModal to surface the "agent connected to a
+  // different session for this repo" hint.
+  INSTANCE_FIND_ACTIVE_SIBLING: 'instance:find-active-sibling',
   INSTANCE_DELETE_WITH_CLEANUP: 'instance:delete-with-cleanup', // Delete with worktree/branch cleanup
   INSTANCE_RESTART: 'instance:restart',
   INSTANCE_GET_LAST_CHANGE: 'instance:get-last-change', // Real last-change time (activity/commit/file mtime)

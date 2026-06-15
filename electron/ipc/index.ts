@@ -432,6 +432,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.agentInstance.getInstance(instanceId);
   });
 
+  ipcMain.handle(IPC.INSTANCE_FIND_ACTIVE_SIBLING, async (_, sessionId: string) => {
+    return { success: true, data: services.agentInstance.findActiveSiblingInRepo(sessionId) };
+  });
+
   ipcMain.handle(IPC.INSTANCE_DELETE, async (_, instanceId: string) => {
     // Stop watcher before deleting
     await services.watcher.stop(instanceId).catch(() => {});
