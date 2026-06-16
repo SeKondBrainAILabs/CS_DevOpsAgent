@@ -140,6 +140,82 @@ export class MergeService extends BaseService {
   /**
    * Execute a git command (uses dynamic import for ESM-only execa)
    */
+  /**
+   * Replace KIT-bookkeeping files on the source branch with target's versions
+   * before the merge runs, so they can never produce conflicts. Only touches
+   * files whose blob actually differs between target and source — no-op
+   * commit when the files are already in sync. Uses `git fetch` + `git
+   * checkout origin/<target> -- <file>` (or local target ref if no remote).
+   *
+   * Safe by construction: only modifies KIT_BOOKKEEPING_FILES, which carry
+   * per-worktree identifiers that have no business propagating into shared
+   * branches. If any file in the list isn't tracked, it's silently skipped.
+   */
+  private async sanitizeKitBookkeepingForMerge(worktreePath: string, targetBranch: string): Promise<void> {
+    const KIT_BOOKKEEPING_FILES = [
+      '.S9N_KIT_DevOpsAgent/config.json',
+      '.vscode/settings.json',
+    ];
+    try {
+      // Make sure we have an up-to-date target ref to compare against. Best-
+      // effort — if fetch fails (offline, missing remote), fall back to the
+      // local target ref below.
+      await this.git(['fetch', 'origin', targetBranch], worktreePath).catch(() => {});
+
+      // Try origin/<target> first (most up-to-date), then local <target>.
+      let refToUse = `origin/${targetBranch}`;
+      const verifyRemote = await this.git(['rev-parse', '--verify', refToUse], worktreePath);
+      if (verifyRemote.exitCode !== 0) {
+        refToUse = targetBranch;
+        const verifyLocal = await this.git(['rev-parse', '--verify', refToUse], worktreePath);
+        if (verifyLocal.exitCode !== 0) return; // can't find target — bail out
+      }
+
+      const filesToReset: string[] = [];
+      for (const file of KIT_BOOKKEEPING_FILES) {
+        // Skip if the source branch doesn't track this file.
+        const lsSrc = await this.git(['ls-files', '--error-unmatch', file], worktreePath);
+        if (lsSrc.exitCode !== 0) continue;
+        // Skip if it's identical between source HEAD and target ref.
+        // `git diff --quiet` exits 0 if there's no diff, 1 if there is.
+        const diff = await this.git(['diff', '--quiet', refToUse, 'HEAD', '--', file], worktreePath);
+        if (diff.exitCode === 0) continue;
+        // Reset this file to target's version.
+        const checkout = await this.git(['checkout', refToUse, '--', file], worktreePath);
+        if (checkout.exitCode === 0) filesToReset.push(file);
+      }
+
+      if (filesToReset.length === 0) return;
+
+      // Commit on the source branch.
+      const addResult = await this.git(['add', '--', ...filesToReset], worktreePath);
+      if (addResult.exitCode !== 0) return;
+      await this.git(
+        [
+          'commit',
+          '-m',
+          `[KIT] reset session bookkeeping to ${targetBranch} before merge\n\n` +
+            `Files: ${filesToReset.join(', ')}`,
+          '--',
+          ...filesToReset,
+        ],
+        worktreePath
+      );
+
+      // Push the cleanup commit so the merge sees it on origin too. Best-effort.
+      const currentBranch = (await this.git(['branch', '--show-current'], worktreePath)).stdout.trim();
+      if (currentBranch) {
+        await this.git(['push', 'origin', currentBranch], worktreePath).catch(() => {});
+      }
+
+      console.log(
+        `[MergeService] Sanitized ${filesToReset.length} KIT bookkeeping file(s) on source before merge: ${filesToReset.join(', ')}`
+      );
+    } catch (err) {
+      console.warn('[MergeService] sanitizeKitBookkeepingForMerge non-fatal failure:', err);
+    }
+  }
+
   private async git(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     try {
       const execa = await getExeca();
@@ -597,6 +673,19 @@ export class MergeService extends BaseService {
       // Ensure .S9N_KIT_DevOpsAgent/ is in .gitignore of the target repo
       // This prevents agent artifacts from blocking merges
       await this.ensureAgentArtifactsIgnored(repoPath);
+
+      // Preemptively replace KIT-bookkeeping files on the source branch with
+      // the target's versions so they can't conflict during the merge. These
+      // files (.S9N_KIT_DevOpsAgent/config.json and .vscode/settings.json)
+      // carry per-worktree values — repoPath, init timestamp, window-title
+      // session number — and the right answer when merging into main is
+      // always "main's version wins". v2.6.64's MergeConflictService
+      // resolver only helped after the user clicked "Auto-Fix with AI" on
+      // the failure dialog; this runs BEFORE the merge attempt so the dialog
+      // never appears.
+      if (options.worktreePath) {
+        await this.sanitizeKitBookkeepingForMerge(options.worktreePath, targetBranch);
+      }
 
       // If the target branch is checked out in another worktree, route the
       // merge there instead of trying to `git checkout` it in the main repo
