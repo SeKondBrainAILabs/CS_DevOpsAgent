@@ -537,6 +537,26 @@ export interface WorktreeSafetyInfo {
   mergedIntoBranches: string[];  // which of ['main','development'] contain the HEAD
 }
 
+/**
+ * A session flagged as stale by the startup scan. A session is stale when its
+ * worktree has been idle >= STALE_WORKTREE_DAYS and is fully committed (no
+ * uncommitted/unstaged changes — those keep it active and visible in the
+ * workspace view instead). `safeToDelete` is true when there are also no
+ * unmerged commits, meaning removal cannot lose work; those are auto-removed.
+ * Sessions with unmerged commits are surfaced to the user for confirmation.
+ */
+export interface StaleSessionInfo {
+  sessionId: string;
+  repoPath: string;
+  repoName: string;
+  branchName: string;
+  worktreePath: string;
+  daysIdle: number;
+  unmergedCommitCount: number;   // committed-but-unmerged work that removal would orphan
+  mergedIntoBranches: string[];  // which of ['main','development'] already contain HEAD
+  safeToDelete: boolean;         // !hasUncommittedChanges && unmergedCommitCount === 0
+}
+
 // =============================================================================
 // IPC RESULT TYPES
 // =============================================================================
@@ -580,6 +600,23 @@ export interface AgentInstanceConfig {
   multiRepo?: MultiRepoConfig;
   // Custom agent: whether the agent supports MCP
   customMcpEnabled?: boolean;
+  // Optional: fire a GitHub Action when this session is merged (see MergeActionConfig).
+  mergeAction?: MergeActionConfig;
+}
+
+/**
+ * Configures a GitHub Action to fire when a session is merged. Currently the
+ * "tag-push" mechanism: KIT creates and pushes a version tag (e.g.
+ * "SDDMini-KH/v3.23.41") whose push triggers the workflow. The version is
+ * auto-incremented (patch) from the latest existing tag with the same prefix.
+ */
+export interface MergeActionConfig {
+  enabled: boolean;
+  type: 'tag-push';
+  /** Tag prefix up to and including the leading "v", e.g. "SDDMini-KH/v". */
+  tagPrefix: string;
+  /** How to bump the version from the latest tag. Patch only for now. */
+  versionBump: 'patch';
 }
 
 export interface AgentInstance {
@@ -593,6 +630,15 @@ export interface AgentInstance {
   worktreePath?: string; // Path to isolated worktree (local_deploy/{branchName})
   error?: string;
   multiRepoEntries?: RepoEntry[]; // Populated repos with worktree paths (multi-repo mode)
+  /**
+   * Ordered chain of sessionIds this instance has replaced via restart. The
+   * most recent predecessor is the last element; the oldest is first. Used by
+   * `backfillMcpCallsByLineage` to repatriate orphaned `mcp_calls` rows that
+   * would otherwise be invisible after the predecessor records are purged by
+   * `purgeInstancesOnBranch`. Empty/missing for instances created before
+   * v2.6.59 — no recovery is possible for those without lineage data.
+   */
+  predecessorSessionIds?: string[];
 }
 
 // =============================================================================

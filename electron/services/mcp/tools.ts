@@ -13,11 +13,32 @@
  */
 
 import { z } from 'zod';
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 import { join, basename, relative } from 'path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpSessionBinder } from './session-binder';
 import type { McpServiceDeps, McpCallLogEntry } from '../McpServerService';
+
+// Dynamic execa (ESM-only) for the worktree-divergence guards. Mirrors the
+// resolution fallbacks used in AgentInstanceService for bundler compatibility.
+let _execa: ((cmd: string, args: string[], options?: object) => Promise<{ stdout: string; stderr: string }>) | null = null;
+async function gitInWorktree(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
+  if (!_execa) {
+    const mod: any = await import('execa');
+    _execa = typeof mod.execa === 'function' ? mod.execa
+      : typeof mod.default === 'function' ? mod.default
+      : mod.default?.execa;
+    if (typeof _execa !== 'function') throw new Error('execa unavailable');
+  }
+  return _execa('git', args, { cwd, timeout: 10_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+}
+
+/** Shape of a worktree-divergence correction returned to the agent. */
+type Divergence = {
+  error: 'WRONG_WORKTREE' | 'DETACHED_HEAD' | 'WRONG_BRANCH';
+  instruction: string;
+  [k: string]: unknown;
+};
 
 /** Interface for the McpServerService to log calls */
 interface McpCallLogger {
@@ -40,35 +61,213 @@ export function registerTools(
   // Cast to any to avoid TS compiler OOM from complex zod+MCP generic inference
   const srv: any = server;
 
-  /** Wrap a tool handler to log timing and success/failure */
+  // Tools that change state — their calls are logged to the session activity feed
+  const STATE_CHANGING_TOOLS = new Set([
+    'kit_commit', 'kit_commit_all', 'kit_lock_file', 'kit_unlock_file', 'kit_request_review',
+  ]);
+
+  // ===========================================================================
+  // Worktree-divergence guards
+  //
+  // Coding agents are chaotic: they cd into sibling clones, switch branches, or
+  // detach HEAD. Because the commit tools always operate in the session's
+  // REGISTERED worktree (not wherever the agent happens to be), divergence
+  // silently produces empty/wrong-branch/orphaned commits. These guards make
+  // that impossible: mutating tools require the agent's cwd and we verify both
+  // the directory and the branch, returning a correction the agent reads.
+  // ===========================================================================
+
+  /** The branch the session's worktree SHOULD be on, from the instance record. */
+  function expectedBranchFor(sessionId: string): string | undefined {
+    try {
+      const listed = deps.agentInstanceService?.listInstances?.();
+      if (!listed?.success || !listed.data) return undefined;
+      const inst = listed.data.find((i: any) => i.sessionId === sessionId || i.id === sessionId);
+      return inst?.config?.branchName;
+    } catch { return undefined; }
+  }
+
+  /**
+   * Current branch of a worktree, TRI-STATE (see GitService.getCurrentBranch):
+   *   branch name → on that branch; 'HEAD' → detached; null → could not determine.
+   * We must distinguish "detached" from "unknown" so a failed check never produces
+   * a false detached warning/block.
+   */
+  async function currentBranchOf(worktreePath: string): Promise<string | null> {
+    // Prefer the injected git service (mockable in tests); fall back to direct git.
+    const dep = deps.gitService?.getCurrentBranchName;
+    if (typeof dep === 'function') {
+      try { return await dep(worktreePath); } catch { return null; }
+    }
+    try {
+      const { stdout } = await gitInWorktree(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath);
+      return stdout.trim() || null;
+    } catch { return null; }
+  }
+
+  function realpathSafe(p: string): string {
+    try { return realpathSync(p); } catch { return p.replace(/\/+$/, ''); }
+  }
+
+  /**
+   * Layers 1+2: verify the agent is physically in the session worktree (cwd) and
+   * that the worktree is on the expected branch. Returns a correction or null.
+   */
+  async function checkDivergence(
+    sessionId: string,
+    repo: string | undefined,
+    cwd: string,
+    opts: { requireBranch?: boolean } = {},
+  ): Promise<Divergence | null> {
+    const { requireBranch = true } = opts;
+    const expectedWorktree = binder.getWorktreePathForRepo(sessionId, repo);
+    if (!expectedWorktree) return null; // unknown session/repo handled by the caller
+
+    // Layer 1 — the agent's working directory must BE the worktree.
+    if (realpathSafe(cwd) !== realpathSafe(expectedWorktree)) {
+      return {
+        error: 'WRONG_WORKTREE',
+        expected_worktree: expectedWorktree,
+        your_cwd: cwd,
+        instruction: `You are not in this session's worktree. Any changes under "${cwd}" are NOT part of this session and will NOT be committed. Run:  cd "${expectedWorktree}"  then retry. Work ONLY inside that directory.`,
+      };
+    }
+
+    if (!requireBranch) return null;
+
+    // Layer 2 — the worktree must be on the session branch, not detached/switched.
+    // Tri-state: null = couldn't determine → FAIL OPEN (never block/scare on an
+    // inconclusive check); 'HEAD' = genuinely detached; else = the branch name.
+    const actualBranch = await currentBranchOf(expectedWorktree);
+    const expectedBranch = expectedBranchFor(sessionId);
+    if (actualBranch === null) {
+      return null; // can't tell — allow; the cwd check already confirmed the directory
+    }
+    if (actualBranch === 'HEAD') {
+      return {
+        error: 'DETACHED_HEAD',
+        expected_branch: expectedBranch ?? null,
+        instruction: `The worktree is in a DETACHED HEAD state — commits made now attach to no branch and can be lost. Run:  git checkout ${expectedBranch ?? '<session-branch>'}  before continuing.`,
+      };
+    }
+    // Only enforce the branch name for the primary repo; secondary repos in a
+    // multi-repo session may legitimately be on a differently-named branch.
+    if (!repo && expectedBranch && actualBranch !== expectedBranch) {
+      return {
+        error: 'WRONG_BRANCH',
+        expected_branch: expectedBranch,
+        your_branch: actualBranch,
+        instruction: `The worktree is on "${actualBranch}" but this session is "${expectedBranch}". Run:  git checkout ${expectedBranch}  before continuing so your work lands on the right branch.`,
+      };
+    }
+    return null;
+  }
+
+  /** Build the rejection tool-response for a divergence and log it. */
+  function divergenceResponse(sessionId: string, toolName: string, divergence: Divergence) {
+    deps.activityService?.log(sessionId, 'warning', `MCP rejected ${toolName} — ${divergence.error}`, { source: 'mcp', toolName, ...divergence });
+    deps.debugLog?.warn('McpTool', `Rejected ${toolName} — ${divergence.error}`, { sessionId, ...divergence });
+    return { content: [{ type: 'text', text: JSON.stringify(divergence, null, 2) }], isError: true };
+  }
+
+  // Layer 3: proactive drift directive, throttled, appended to EVERY response so
+  // the agent is nudged to correct even on read-only calls (before it tries to commit).
+  const driftCache = new Map<string, { at: number; directive: string | null }>();
+  const DRIFT_TTL_MS = 8000;
+  async function driftDirectiveFor(sessionId: string): Promise<string | null> {
+    if (!sessionId || sessionId === 'unknown') return null;
+    const cached = driftCache.get(sessionId);
+    if (cached && Date.now() - cached.at < DRIFT_TTL_MS) return cached.directive;
+    let directive: string | null = null;
+    try {
+      const worktree = binder.getWorktreePathForRepo(sessionId);
+      if (worktree && existsSync(worktree)) {
+        const actual = await currentBranchOf(worktree);
+        const expected = expectedBranchFor(sessionId);
+        // Tri-state: null = couldn't determine → stay SILENT (no false alarms).
+        // Only warn on a definitive detached HEAD or a definite branch mismatch.
+        if (actual === 'HEAD') {
+          directive = `⚠️ KIT: this session's worktree is in a DETACHED HEAD state. Run: git checkout ${expected ?? '<session-branch>'} before committing, or your work may be lost.`;
+        } else if (actual !== null && expected && actual !== expected) {
+          directive = `⚠️ KIT: this session's worktree is on "${actual}" but should be on "${expected}". Run: git checkout ${expected} before committing.`;
+        }
+      }
+    } catch { /* best-effort */ }
+    driftCache.set(sessionId, { at: Date.now(), directive });
+    return directive;
+  }
+
+  /** Wrap a tool handler to log timing, success/failure, and surface errors to the activity feed */
   function withCallLog<T extends Record<string, any>>(
     toolName: string,
     handler: (args: T) => Promise<any>
   ): (args: T) => Promise<any> {
-    if (!callLogger) return handler;
     return async (args: T) => {
       const start = Date.now();
       const sessionId = (args as any).session_id || 'unknown';
+
+      // First MCP call from an agent flips the instance status from 'waiting'
+      // (the post-create / post-restart default) to 'idle' so the
+      // "Waiting for agent to connect…" banner clears. Idempotent — only
+      // bumps when current status is exactly 'waiting'.
+      if (sessionId !== 'unknown' && deps.agentInstanceService?.listInstances) {
+        try {
+          const listed = deps.agentInstanceService.listInstances();
+          if (listed?.success && Array.isArray(listed.data)) {
+            for (const inst of listed.data) {
+              if (inst?.sessionId === sessionId && inst.status === 'waiting' && inst.id) {
+                deps.agentInstanceService.updateInstanceStatus?.(inst.id, 'idle');
+                break;
+              }
+            }
+          }
+        } catch {
+          // Diagnostics-only flip — never block a tool call on it.
+        }
+      }
+
+      // Log state-changing tool calls to the activity feed so they're visible in KIT
+      if (STATE_CHANGING_TOOLS.has(toolName) && sessionId !== 'unknown') {
+        deps.activityService?.log(sessionId, 'git', `MCP › ${toolName}`, { source: 'mcp', toolName });
+      }
+
       try {
         const result = await handler(args);
-        callLogger.addCallLogEntry({
+        callLogger?.addCallLogEntry({
           timestamp: new Date().toISOString(),
           toolName,
           sessionId,
           success: true,
           durationMs: Date.now() - start,
         });
+        // Layer 3: append a proactive drift warning so the agent is nudged to
+        // correct even on read-only calls. Skip when the call was itself a
+        // divergence rejection (it already carries the correction).
+        try {
+          if (result && !result.isError && Array.isArray(result.content)) {
+            const directive = await driftDirectiveFor(sessionId);
+            if (directive) result.content.push({ type: 'text', text: directive });
+          }
+        } catch { /* non-fatal */ }
         return result;
       } catch (err) {
-        callLogger.addCallLogEntry({
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        callLogger?.addCallLogEntry({
           timestamp: new Date().toISOString(),
           toolName,
           sessionId,
           success: false,
           durationMs: Date.now() - start,
-          error: err instanceof Error ? err.message : String(err),
+          error: errorMsg,
         });
-        deps.debugLog?.error('McpTool', `Tool call failed: ${toolName}`, { sessionId, error: err instanceof Error ? err.message : String(err) });
+        deps.debugLog?.error('McpTool', `Tool call failed: ${toolName}`, { sessionId, error: errorMsg });
+        // Always surface exceptions to the activity feed regardless of tool type
+        if (sessionId !== 'unknown') {
+          deps.activityService?.log(sessionId, 'error', `MCP error › ${toolName}: ${errorMsg}`, {
+            source: 'mcp',
+            toolName,
+          });
+        }
         throw err;
       }
     };
@@ -131,14 +330,19 @@ export function registerTools(
     {
       session_id: z.string().describe('The KIT session ID'),
       message: z.string().describe('Commit message (conventional commits format preferred)'),
+      cwd: z.string().describe('Your current shell working directory (run `pwd`). REQUIRED. The commit is rejected if this is not the session worktree, so your work is never silently committed to the wrong place.'),
       push: z.boolean().optional().default(false).describe('Push to remote after commit'),
       repo: z.string().optional().describe('Target repo name (multi-repo mode). Omit for primary repo.'),
     },
-    withCallLog('kit_commit', async ({ session_id, message, push, repo }) => {
+    withCallLog('kit_commit', async ({ session_id, message, cwd, push, repo }) => {
       const worktree = binder.getWorktreePathForRepo(session_id, repo);
       if (!worktree) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown session or repo', session_id, repo }) }] };
       }
+
+      // Guard: refuse if the agent is in the wrong directory or on the wrong branch.
+      const divergence = await checkDivergence(session_id, repo, cwd);
+      if (divergence) return divergenceResponse(session_id, 'kit_commit', divergence);
 
       if (!deps.gitService) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Git service not available' }) }] };
@@ -173,9 +377,9 @@ export function registerTools(
           }
         }
 
-        // 3. Link activity
+        // 3. Link activity — update the "MCP › kit_commit" entry with commit details
         if (deps.activityService) {
-          deps.activityService.log(session_id, 'git', `Committed: ${message}`, {
+          deps.activityService.log(session_id, 'git', `Committed [${shortHash}]: ${message}`, {
             commitHash: hash,
             shortHash,
             filesChanged,
@@ -184,14 +388,24 @@ export function registerTools(
           });
         }
 
-        // 4. Optional push
+        // 4. Optional push — capture failure reason so agent knows exactly what went wrong
         let pushed = false;
+        let pushError: string | undefined;
         if (push) {
           try {
             const pushResult = await deps.gitService.push(session_id, repo);
             pushed = pushResult.success === true;
-          } catch {
-            // Push failure is non-fatal
+            if (!pushed) {
+              pushError = pushResult.error?.message || 'Push returned failure';
+            }
+          } catch (err) {
+            pushError = err instanceof Error ? err.message : 'Push threw an error';
+          }
+          if (!pushed && pushError) {
+            deps.activityService?.log(session_id, 'warning',
+              `Push failed after commit [${shortHash}]: ${pushError}`,
+              { commitHash: hash, pushError, repo, source: 'mcp' }
+            );
           }
         }
 
@@ -201,7 +415,7 @@ export function registerTools(
         // 6. Post-commit contract check (fire-and-forget)
         triggerContractCheck(session_id, worktree, hash).catch(() => {});
 
-        const result = {
+        const result: Record<string, unknown> = {
           commitHash: hash,
           shortHash,
           message,
@@ -209,10 +423,13 @@ export function registerTools(
           pushed,
           repo: repo || undefined,
         };
+        // Always tell the agent why push failed — it needs this to decide next steps
+        if (pushError) result.pushError = pushError;
 
         return { content: [{ type: 'text', text: JSON.stringify(result) }] };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Commit failed';
+        deps.activityService?.log(session_id, 'error', `Commit failed: ${errorMsg}`, { source: 'mcp' });
         return { content: [{ type: 'text', text: JSON.stringify({ error: errorMsg }) }] };
       }
     })
@@ -227,13 +444,18 @@ export function registerTools(
     {
       session_id: z.string().describe('The KIT session ID'),
       message: z.string().describe('Commit message (conventional commits format preferred)'),
+      cwd: z.string().describe('Your current shell working directory (run `pwd`). REQUIRED — must be the session\'s primary worktree, or the call is rejected.'),
       push: z.boolean().optional().default(false).describe('Push to remote after each commit'),
     },
-    withCallLog('kit_commit_all', async ({ session_id, message, push }) => {
+    withCallLog('kit_commit_all', async ({ session_id, message, cwd, push }) => {
       const repos = binder.getReposForSession(session_id);
       if (repos.length === 0) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown session', session_id }) }] };
       }
+
+      // Guard: agent must be in the session's primary worktree, on the right branch.
+      const divergence = await checkDivergence(session_id, undefined, cwd);
+      if (divergence) return divergenceResponse(session_id, 'kit_commit_all', divergence);
 
       if (!deps.gitService) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Git service not available' }) }] };
@@ -277,21 +499,35 @@ export function registerTools(
             });
           }
 
-          // Optional push
+          // Optional push — capture failure reason
           let pushed = false;
+          let pushError: string | undefined;
           if (push) {
             try {
               const pushResult = await deps.gitService.push(session_id, repoName);
               pushed = pushResult.success === true;
-            } catch { /* non-fatal */ }
+              if (!pushed) pushError = pushResult.error?.message || 'Push returned failure';
+            } catch (err) {
+              pushError = err instanceof Error ? err.message : 'Push threw an error';
+            }
+            if (!pushed && pushError) {
+              deps.activityService?.log(session_id, 'warning',
+                `Push failed (${repo.repoName}): ${pushError}`,
+                { commitHash: hash, pushError, repo: repo.repoName, source: 'mcp' }
+              );
+            }
           }
 
           // Post-commit contract check
           triggerContractCheck(session_id, repo.worktreePath, hash).catch(() => {});
 
-          results.push({ repoName: repo.repoName, commitHash: hash, filesChanged, pushed });
+          const repoResult: Record<string, unknown> = { repoName: repo.repoName, commitHash: hash, filesChanged, pushed };
+          if (pushError) repoResult.pushError = pushError;
+          results.push(repoResult as any);
         } catch (err) {
-          results.push({ repoName: repo.repoName, error: err instanceof Error ? err.message : 'Failed' });
+          const errMsg = err instanceof Error ? err.message : 'Failed';
+          deps.activityService?.log(session_id, 'error', `Commit failed (${repo.repoName}): ${errMsg}`, { source: 'mcp' });
+          results.push({ repoName: repo.repoName, error: errMsg });
         }
       }
 
@@ -384,14 +620,19 @@ export function registerTools(
     {
       session_id: z.string().describe('The KIT session ID'),
       files: z.array(z.string()).describe('File paths to lock (relative to worktree)'),
+      cwd: z.string().describe('Your current shell working directory (run `pwd`). REQUIRED — must be the session worktree.'),
       reason: z.string().optional().describe('Reason for the lock'),
       repo: z.string().optional().describe('Target repo name (multi-repo mode). Omit for primary repo.'),
     },
-    withCallLog('kit_lock_file', async ({ session_id, files, reason, repo }) => {
+    withCallLog('kit_lock_file', async ({ session_id, files, cwd, reason, repo }) => {
       const worktree = binder.getWorktreePathForRepo(session_id, repo);
       if (!worktree) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown session or repo', session_id, repo }) }] };
       }
+
+      // Guard (directory only — locking files from the wrong dir is the failure to catch).
+      const divergence = await checkDivergence(session_id, repo, cwd, { requireBranch: false });
+      if (divergence) return divergenceResponse(session_id, 'kit_lock_file', divergence);
 
       if (!deps.lockService) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Lock service not available' }) }] };
@@ -405,6 +646,13 @@ export function registerTools(
           : [];
 
         if (conflicts.length > 0) {
+          const conflictSummary = conflicts.map((c: any) =>
+            `${c.file || c.filePath} (held by ${c.heldBy || c.agentType || 'unknown session'})`
+          ).join(', ');
+          deps.activityService?.log(session_id, 'warning',
+            `File lock conflict: ${conflictSummary}`,
+            { files, conflicts, source: 'mcp' }
+          );
           return {
             content: [{
               type: 'text',
@@ -472,9 +720,13 @@ export function registerTools(
           await deps.lockService.releaseFiles(session_id);
         }
 
+        const unlockedLabel = files ? files.join(', ') : 'all files';
+        deps.activityService?.log(session_id, 'git', `Unlocked: ${unlockedLabel}`, { files, source: 'mcp' });
         return { content: [{ type: 'text', text: JSON.stringify({ unlocked: true, files: files || 'all' }) }] };
       } catch (err) {
-        return { content: [{ type: 'text', text: JSON.stringify({ error: err instanceof Error ? err.message : 'Unlock failed' }) }] };
+        const errMsg = err instanceof Error ? err.message : 'Unlock failed';
+        deps.activityService?.log(session_id, 'error', `Unlock failed: ${errMsg}`, { source: 'mcp' });
+        return { content: [{ type: 'text', text: JSON.stringify({ error: errMsg }) }] };
       }
     })
   );
@@ -522,11 +774,16 @@ export function registerTools(
     {
       session_id: z.string().describe('The KIT session ID'),
       summary: z.string().describe('Summary of work completed and what to review'),
+      cwd: z.string().describe('Your current shell working directory (run `pwd`). REQUIRED — must be the session worktree, on the session branch.'),
     },
-    withCallLog('kit_request_review', async ({ session_id, summary }) => {
+    withCallLog('kit_request_review', async ({ session_id, summary, cwd }) => {
       if (!binder.getSession(session_id)) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown session', session_id }) }] };
       }
+
+      // Guard: reviewing implies the work is on the session branch in the worktree.
+      const divergence = await checkDivergence(session_id, undefined, cwd);
+      if (divergence) return divergenceResponse(session_id, 'kit_request_review', divergence);
 
       if (deps.activityService) {
         deps.activityService.log(session_id, 'info', `Review requested: ${summary}`, {

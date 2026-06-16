@@ -616,7 +616,10 @@ function SessionCard({
         worktreePath={session.worktreePath}
         sessionId={session.sessionId}
         onMergeComplete={() => {
-          setShowMergeModal(false);
+          // Intentionally NOT closing the modal here — the success ("complete")
+          // step needs to stay rendered so the user can interact with the
+          // GitHub Action / tag-push panel. Closing happens via onClose when
+          // they explicitly dismiss.
         }}
         onDeleteSession={() => {
           onDelete();

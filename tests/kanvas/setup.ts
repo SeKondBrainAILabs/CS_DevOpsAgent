@@ -66,6 +66,19 @@ const mockApi = {
     listWorktrees: createMockFn({ success: true, data: [] }),
     pruneWorktrees: createMockFn({ success: true }),
     removeWorktreeByPath: createMockFn({ success: true }),
+    getWorktreeSafetyInfo: createMockFn({
+      success: true,
+      data: {
+        worktreePath: '/test/worktree',
+        hasUncommittedChanges: false,
+        uncommittedFiles: [],
+        unmergedCommitCount: 0,
+        mergedIntoBranches: ['main'],
+      },
+    }),
+    analyzeStaleBranches: createMockFn({ success: true, data: [] }),
+    archiveBranch: createMockFn({ success: true, data: { archiveBranchName: 'archive/x' } }),
+    branches: createMockFn({ success: true, data: [] }),
   },
   instance: {
     create: createMockFn({ success: true, data: {} }),

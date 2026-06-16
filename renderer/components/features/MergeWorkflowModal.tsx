@@ -48,8 +48,10 @@ export function MergeWorkflowModal({
   onDeleteSession,
 }: MergeWorkflowModalProps): React.ReactElement | null {
   const [step, setStep] = useState<Step>('preview');
-  const [targetBranch, setTargetBranch] = useState(initialTargetBranch);
-  const [branches, setBranches] = useState<BranchInfo[]>([]);
+  const [targetBranch, setTargetBranch] = useState(initialTargetBranch.replace(/^origin\//, ''));
+  const [branches, setBranches] = useState<string[]>([]);       // primary branches only
+  const [allBranches, setAllBranches] = useState<string[]>([]);  // full list for advanced dialog
+  const [showAdvancedBranches, setShowAdvancedBranches] = useState(false);
   const [preview, setPreview] = useState<MergePreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,9 +73,14 @@ export function MergeWorkflowModal({
     });
   }, [repoPath, actualBranch, targetBranch, sessionId, worktreePath]);
   const branchMismatch = actualBranch !== sourceBranch;
+  // Same-branch merge is a no-op and git will reject it. This happens when the
+  // session worktree is checked out on the target branch itself (so the resolved
+  // active branch equals the target) instead of its own session branch.
+  const sameBranch = actualBranch.replace(/^origin\//, '') === targetBranch.replace(/^origin\//, '');
 
   // Merge options
-  const [deleteWorktree, setDeleteWorktree] = useState(true);
+  // Default OFF — worktree contains the agent's work; auto-deletion is too aggressive
+  const [deleteWorktree, setDeleteWorktree] = useState(false);
   const [deleteLocalBranch, setDeleteLocalBranch] = useState(false);
   const [deleteRemoteBranch, setDeleteRemoteBranch] = useState(false);
   const [deleteSession, setDeleteSession] = useState(true);
@@ -97,6 +104,15 @@ export function MergeWorkflowModal({
   // (see handleExecuteMerge). Stored sessionId gets deleted in handleClose.
   const pendingSessionDelete = useRef<string | null>(null);
   const [offline, setOffline] = useState(false);
+  // Uncommitted changes in the source worktree (prompt to commit before merging).
+  const [dirtyCount, setDirtyCount] = useState(0);
+  const [committingDirty, setCommittingDirty] = useState(false);
+
+  // GitHub Action on merge (tag-push) — read from the session's config.
+  const [mergeActionPrefix, setMergeActionPrefix] = useState<string | null>(null);
+  const [actionVersionTag, setActionVersionTag] = useState('');
+  const [actionState, setActionState] = useState<'idle' | 'firing' | 'fired' | 'error'>('idle');
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Wrap onClose so the deferred session delete fires after the user
   // acknowledges the success screen, rather than immediately on merge complete.
@@ -131,13 +147,20 @@ export function MergeWorkflowModal({
       setError(null);
       setMergeResult(null);
       setBranches([]);
+      setAllBranches([]);
+      setShowAdvancedBranches(false);
       setProgressLog([]);
       setActualBranch(sourceBranch);
+      setDirtyCount(0);
+      setMergeActionPrefix(null);
+      setActionVersionTag('');
+      setActionState('idle');
+      setActionError(null);
       return;
     }
 
-    // Sync target branch from prop each time modal opens — useState only sets initial value once
-    setTargetBranch(initialTargetBranch);
+    // Sync target branch from prop each time modal opens — strip any legacy 'origin/' prefix
+    setTargetBranch(initialTargetBranch.replace(/^origin\//, ''));
 
     const init = async () => {
       // Check AI connectivity
@@ -167,13 +190,43 @@ export function MergeWorkflowModal({
 
       setActualBranch(resolvedBranch);
 
-      // Step 2: Load branches list (filtering out the actual branch being merged)
-      if (window.api?.git?.branches && repoPath) {
-        const result = await window.api.git.branches(repoPath);
+      // Detect uncommitted changes in the source worktree so we can prompt to
+      // commit them before merging (otherwise that work isn't part of the merge).
+      try {
+        const safetyPath = worktreePath || repoPath;
+        const safety = await window.api?.git?.getWorktreeSafetyInfo?.(safetyPath);
+        setDirtyCount(safety?.success && safety.data?.hasUncommittedChanges ? (safety.data.uncommittedFiles?.length ?? 0) : 0);
+      } catch { setDirtyCount(0); }
+
+      // Read the session's GitHub-Action-on-merge config (tag-push), if any.
+      try {
+        if (sessionId) {
+          const inst = await window.api?.instance?.get?.(sessionId);
+          const ma = inst?.success ? inst.data?.config?.mergeAction : undefined;
+          setMergeActionPrefix(ma?.enabled && ma.type === 'tag-push' ? ma.tagPrefix : null);
+        }
+      } catch { setMergeActionPrefix(null); }
+
+      // Step 2: Load branches list — primaries only by default, full list for Advanced dialog.
+      // Use listBranchesForRepo (PATH-based): git.branches takes a sessionId and resolves
+      // the worktree from a registry only populated while the watcher runs, so it returned
+      // nothing for idle/restored sessions (and here repoPath was wrongly passed as sessionId).
+      if (window.api?.git?.listBranchesForRepo && repoPath) {
+        const result = await window.api.git.listBranchesForRepo(repoPath);
         if (result.success && result.data) {
-          setBranches(result.data.filter((b) =>
-            b.name !== resolvedBranch && b.name !== sourceBranch && !b.name.startsWith('session/')
-          ));
+          const PRIMARY = ['main', 'master', 'development', 'develop', 'dev'];
+          const isSessionBranch = (name: string) =>
+            name.startsWith('origin/') || name.startsWith('remotes/') ||
+            /^(codex|cursor|copilot|aider|warp|cline)-session-/.test(name);
+          const filtered = result.data
+            .filter(b => b.name !== resolvedBranch && b.name !== sourceBranch && !isSessionBranch(b.name))
+            .map(b => b.name);
+          const primaries = filtered.filter(b => PRIMARY.includes(b));
+          const currentTarget = initialTargetBranch.replace(/^origin\//, '');
+          // Default picker: primary branches only (+ current target if not already in list)
+          const primaryList = primaries.includes(currentTarget) ? primaries : [currentTarget, ...primaries];
+          setBranches(primaryList);
+          setAllBranches(filtered);
         }
       }
 
@@ -183,6 +236,69 @@ export function MergeWorkflowModal({
 
     init();
   }, [isOpen, sourceBranch, initialTargetBranch, repoPath, worktreePath]);
+
+  // When the merge completes and a tag-push action is configured, pre-compute the
+  // next version tag (patch bump) so the user can confirm/edit before firing.
+  useEffect(() => {
+    if (step === 'complete' && mergeActionPrefix && !actionVersionTag) {
+      window.api?.git?.nextVersionTag?.(repoPath, mergeActionPrefix).then((r) => {
+        if (r?.success && r.data) setActionVersionTag(r.data.next);
+      }).catch(() => {});
+    }
+  }, [step, mergeActionPrefix, repoPath, actionVersionTag]);
+
+  const fireMergeAction = async () => {
+    if (!actionVersionTag.trim()) return;
+    setActionState('firing');
+    setActionError(null);
+    try {
+      const r = await window.api?.git?.createAndPushTag?.(repoPath, actionVersionTag.trim());
+      if (r?.success) setActionState('fired');
+      else { setActionState('error'); setActionError(r?.error?.message || 'Failed to push tag'); }
+    } catch (e) {
+      setActionState('error');
+      setActionError(e instanceof Error ? e.message : 'Failed to push tag');
+    }
+  };
+
+  // Auto-push the configured tag after a successful merge. Gives the user a
+  // 5-second window to edit or cancel — covers users who forget the explicit
+  // click without removing all manual control. Cancel state stops the timer
+  // but leaves the input editable so they can still fire it themselves.
+  const [autoPushCountdown, setAutoPushCountdown] = useState<number | null>(null);
+  const [autoPushCanceled, setAutoPushCanceled] = useState(false);
+  useEffect(() => {
+    if (
+      step !== 'complete' ||
+      !mergeActionPrefix ||
+      !actionVersionTag ||
+      actionState !== 'idle' ||
+      autoPushCanceled
+    ) {
+      setAutoPushCountdown(null);
+      return;
+    }
+    setAutoPushCountdown(5);
+    const tick = setInterval(() => {
+      setAutoPushCountdown((n) => {
+        if (n === null) return null;
+        if (n <= 1) {
+          clearInterval(tick);
+          // Defer the call so React state flush completes first.
+          setTimeout(() => void fireMergeAction(), 0);
+          return 0;
+        }
+        return n - 1;
+      });
+    }, 1000);
+    return () => clearInterval(tick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, mergeActionPrefix, actionVersionTag, actionState, autoPushCanceled]);
+
+  const cancelAutoPush = () => {
+    setAutoPushCanceled(true);
+    setAutoPushCountdown(null);
+  };
 
   const loadPreviewWithBranch = async (branch: string) => {
     setLoading(true);
@@ -332,6 +448,19 @@ export function MergeWorkflowModal({
         }
 
         if (resolvable.length === 0) {
+          // If there were genuinely no conflict markers found, proceed directly to
+          // merge options — the worktree is already clean. "0 resolvable" only
+          // means "AI failed" when there were actual conflicts to begin with.
+          const totalConflicts = result.data.metrics?.totalConflicts ?? previews.length;
+          if (totalConflicts === 0) {
+            addProgress('No conflicts detected — proceeding to merge options.', 'done');
+            const previewResult = await window.api?.merge?.preview?.(repoPath, actualBranch, targetBranch);
+            if (previewResult?.success && previewResult.data) {
+              setPreview(previewResult.data);
+            }
+            setTimeout(() => setStep('options'), 1000);
+            return;
+          }
           setErrorWithLog('AI could not auto-resolve any files. Use manual fix.');
           setStep('error');
           return;
@@ -488,20 +617,46 @@ export function MergeWorkflowModal({
                 <code className="text-kanvas-blue">{actualBranch}</code>
                 <span>into</span>
                 {step === 'preview' && branches.length > 0 ? (
-                  <select
-                    value={targetBranch}
-                    onChange={(e) => setTargetBranch(e.target.value)}
-                    className="px-2 py-1 rounded-[14px] bg-surface-secondary border border-[rgba(0,0,0,0.10)] text-kanvas-blue text-sm font-mono focus:outline-none focus:ring-2 focus:ring-kanvas-blue/50"
-                  >
-                    {!branches.find(b => b.name === targetBranch) && (
-                      <option value={targetBranch}>{targetBranch}</option>
+                  <>
+                    <select
+                      value={targetBranch}
+                      onChange={(e) => {
+                        if (e.target.value === '__advanced__') {
+                          setShowAdvancedBranches(true);
+                        } else {
+                          setTargetBranch(e.target.value);
+                        }
+                      }}
+                      className="px-2 py-1 rounded-[14px] bg-surface-secondary border border-[rgba(0,0,0,0.10)] text-kanvas-blue text-sm font-mono focus:outline-none focus:ring-2 focus:ring-kanvas-blue/50"
+                    >
+                      {!branches.includes(targetBranch) && (
+                        <option value={targetBranch}>{targetBranch}</option>
+                      )}
+                      {branches.map((branch) => (
+                        <option key={branch} value={branch}>
+                          {branch}
+                        </option>
+                      ))}
+                      <option value="__advanced__">Advanced…</option>
+                    </select>
+                    {/* Advanced branch dialog */}
+                    {showAdvancedBranches && (
+                      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/20" onClick={() => setShowAdvancedBranches(false)}>
+                        <div className="bg-white rounded-[18px] border border-[rgba(0,0,0,0.10)] shadow-[0_8px_24px_rgba(0,0,0,0.12)] p-4 w-72 max-h-80 overflow-y-auto" onClick={e => e.stopPropagation()}>
+                          <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">All branches</p>
+                          {allBranches.map(branch => (
+                            <button
+                              key={branch}
+                              className="w-full text-left px-3 py-2 rounded-[10px] hover:bg-surface-secondary text-sm text-text-primary font-mono transition-colors"
+                              onClick={() => { setShowAdvancedBranches(false); setTargetBranch(branch); }}
+                            >
+                              {branch}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     )}
-                    {branches.map((branch) => (
-                      <option key={branch.name} value={branch.name}>
-                        {branch.name}
-                      </option>
-                    ))}
-                  </select>
+                  </>
                 ) : (
                   <code className="text-kanvas-blue">{targetBranch}</code>
                 )}
@@ -517,8 +672,18 @@ export function MergeWorkflowModal({
             </button>
           </div>
 
-          {/* Branch mismatch notice */}
-          {branchMismatch && (
+          {/* Same-branch notice — supersedes the auto-correct notice since it blocks the merge */}
+          {sameBranch ? (
+            <div className="mt-2 p-2 bg-amber-50 border border-amber-300 rounded-lg">
+              <p className="text-xs text-amber-800">
+                <span className="font-medium">Nothing to merge:</span>{' '}
+                this session's worktree is checked out on{' '}
+                <code className="bg-amber-100 px-1 rounded">{actualBranch}</code>, the same as the
+                target. Its commits are already on <code className="bg-amber-100 px-1 rounded">{targetBranch}</code>.{' '}
+                Pick a different target, or switch the worktree to its own session branch to keep the work separate.
+              </p>
+            </div>
+          ) : branchMismatch && (
             <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-lg">
               <p className="text-xs text-blue-700">
                 <span className="font-medium">Branch auto-corrected:</span>{' '}
@@ -535,6 +700,33 @@ export function MergeWorkflowModal({
               <p className="text-xs text-red-700">
                 <span className="font-medium">Not connected</span> — AI conflict resolution is unavailable. Clean merges will still work.
               </p>
+            </div>
+          )}
+
+          {/* Uncommitted-changes prompt — commit before merging so the work is included */}
+          {step === 'preview' && dirtyCount > 0 && (
+            <div className="mt-2 p-2.5 bg-amber-50 border border-amber-300 rounded-lg flex items-center justify-between gap-3">
+              <p className="text-xs text-amber-800">
+                <span className="font-medium">You have {dirtyCount} uncommitted change{dirtyCount === 1 ? '' : 's'}</span> in
+                {' '}<code className="bg-amber-100 px-1 rounded">{actualBranch}</code>. They won't be part of this merge unless you commit them first.
+              </p>
+              <button
+                type="button"
+                disabled={committingDirty}
+                onClick={async () => {
+                  setCommittingDirty(true);
+                  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+                  const r = await window.api?.git?.commitWorktree?.(worktreePath || repoPath, `WIP: pre-merge commit (${stamp})`);
+                  if (r?.success) {
+                    setDirtyCount(0);
+                    await loadPreview(); // refresh the preview to include the new commit
+                  }
+                  setCommittingDirty(false);
+                }}
+                className="flex-shrink-0 px-3 py-1.5 bg-amber-600 text-white rounded-full text-xs font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors"
+              >
+                {committingDirty ? 'Committing…' : 'Commit changes'}
+              </button>
             </div>
           )}
 
@@ -901,6 +1093,57 @@ export function MergeWorkflowModal({
                   <p className="text-xs text-yellow-600 mt-1">The merged version was kept for these files.</p>
                 </div>
               )}
+
+              {/* GitHub Action on merge (tag-push) */}
+              {mergeActionPrefix && (
+                <div className="mt-4 p-3 bg-[#FAFAF7] border border-[rgba(0,0,0,0.10)] rounded-[14px] text-left">
+                  {actionState === 'fired' ? (
+                    <p className="text-sm text-green-700 flex items-center gap-1.5">
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                      Pushed <code className="font-mono">{actionVersionTag}</code> — GitHub Action triggered.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-[10px] font-mono uppercase tracking-[0.14em] text-[rgba(0,0,0,0.45)]">GitHub Action</p>
+                      <p className="text-sm text-text-primary mt-0.5">Fire the workflow by pushing a version tag</p>
+                      <div className="flex items-center gap-2 mt-2">
+                        <input
+                          type="text"
+                          value={actionVersionTag}
+                          onChange={(e) => { setActionVersionTag(e.target.value); cancelAutoPush(); }}
+                          disabled={actionState === 'firing'}
+                          className="flex-1 px-2 py-1.5 rounded-[10px] bg-white border border-[rgba(0,0,0,0.10)] text-sm font-mono focus:outline-none focus:ring-2 focus:ring-kanvas-blue/50"
+                          placeholder="SDDMini-KH/v3.23.41"
+                        />
+                        {autoPushCountdown !== null && autoPushCountdown > 0 ? (
+                          <button
+                            type="button"
+                            onClick={cancelAutoPush}
+                            className="flex-shrink-0 px-3 py-1.5 bg-white border border-[rgba(0,0,0,0.20)] text-text-primary rounded-full text-xs font-medium hover:bg-[#FAFAF7] transition-colors"
+                          >
+                            Cancel ({autoPushCountdown})
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={actionState === 'firing' || !actionVersionTag.trim()}
+                            onClick={() => void fireMergeAction()}
+                            className="flex-shrink-0 px-3 py-1.5 bg-black text-white rounded-full text-xs font-medium hover:bg-black/90 disabled:opacity-50 transition-colors"
+                          >
+                            {actionState === 'firing' ? 'Pushing…' : 'Create & push tag'}
+                          </button>
+                        )}
+                      </div>
+                      {actionError && <p className="text-xs text-red-600 mt-1.5">{actionError}</p>}
+                      <p className="text-[11px] text-text-secondary mt-1.5">
+                        {autoPushCountdown !== null && autoPushCountdown > 0
+                          ? `Auto-pushing in ${autoPushCountdown}s. Click Cancel or edit the version to stop.`
+                          : 'Auto-incremented patch from the latest tag. Edit the version if needed.'}
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1003,9 +1246,9 @@ export function MergeWorkflowModal({
                   {/* Normal continue */}
                   <button
                     onClick={() => setStep('options')}
-                    disabled={!preview?.canMerge}
+                    disabled={!preview?.canMerge || sameBranch}
                     className={`px-4 py-2 rounded-full font-medium transition-colors ${
-                      preview?.canMerge
+                      preview?.canMerge && !sameBranch
                         ? 'bg-black text-white hover:bg-black/90'
                         : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                     }`}

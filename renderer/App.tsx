@@ -22,6 +22,7 @@ import { CreateAgentWizard } from './components/features/CreateAgentWizard';
 import { RepoDetailModal } from './components/features/RepoDetailModal';
 import { RebaseMergeErrorDialog } from './components/features/RebaseMergeErrorDialog';
 import { OnboardingModal } from './components/features/OnboardingModal';
+import { StaleSessionsDialog } from './components/features/StaleSessionsDialog';
 import { useAgentStore, selectAgentList, selectSessionById } from './store/agentStore';
 import { useUIStore } from './store/uiStore';
 import { useConflictStore } from './store/conflictStore';
@@ -70,6 +71,26 @@ export default function App(): React.ReactElement {
 
   // Track last rebase time per session
   const setLastRebaseTime = useAgentStore((state) => state.setLastRebaseTime);
+  const removeReportedSession = useAgentStore((state) => state.removeReportedSession);
+
+  // Startup stale-session scan results
+  const [staleSessions, setStaleSessions] = React.useState<import('../shared/types').StaleSessionInfo[]>([]);
+  const [autoRemovedCount, setAutoRemovedCount] = React.useState(0);
+
+  useEffect(() => {
+    // Risky stale sessions (unmerged commits) → prompt the user.
+    const unsubFound = window.api?.recovery?.onStaleSessionsFound?.((sessions) => {
+      if (sessions && sessions.length > 0) setStaleSessions(sessions);
+    });
+    // Safe stale sessions auto-removed by the main process → drop from the store + show a banner.
+    const unsubAuto = window.api?.recovery?.onStaleSessionsAutoRemoved?.((sessions) => {
+      if (sessions && sessions.length > 0) {
+        sessions.forEach((s) => removeReportedSession(s.sessionId));
+        setAutoRemovedCount((n) => n + sessions.length);
+      }
+    });
+    return () => { unsubFound?.(); unsubAuto?.(); };
+  }, [removeReportedSession]);
 
   useEffect(() => {
     const unsubStatus = window.api?.rebaseWatcher?.onStatusChanged?.((data) => {
@@ -96,7 +117,7 @@ export default function App(): React.ReactElement {
       showConflictDialog({
         sessionId: data.sessionId,
         repoPath: data.repoPath,
-        baseBranch: data.baseBranch,
+        baseBranch: (data.baseBranch || 'main').replace(/^origin\//, ''),
         currentBranch: data.currentBranch,
         conflictedFiles: data.conflictedFiles,
         errorMessage: data.errorMessage,
@@ -149,8 +170,6 @@ export default function App(): React.ReactElement {
     ? agents.find((a) => a.agentId === selectedAgentId)
     : null;
 
-  const removeReportedSession = useAgentStore((state) => state.removeReportedSession);
-
   // Handle session deletion
   const handleDeleteSession = async (sessionId: string): Promise<void> => {
     try {
@@ -172,7 +191,7 @@ export default function App(): React.ReactElement {
       const sessionData = session ? {
         repoPath: session.repoPath,
         branchName: session.branchName,
-        baseBranch: session.baseBranch,
+        baseBranch: (session.baseBranch || 'main').replace(/^origin\//, ''),
         worktreePath: session.worktreePath,
         agentType: session.agentType,
         task: session.task,
@@ -222,10 +241,14 @@ export default function App(): React.ReactElement {
     <DashboardCanvas agent={selectedAgent} />
   );
 
-  // When selecting a session, switch back to dashboard view
+  // When selecting a session, switch back to dashboard view. Also close the
+  // RepoDetailModal — selecting a session navigates away from the repo view,
+  // and otherwise the modal stays mounted at z-50 covering the new
+  // SessionDetailView.
   const handleSelectSession = (sessionId: string | null) => {
     if (sessionId) {
       setMainView('dashboard');
+      closeRepoDetail();
     }
     setSelectedSession(sessionId);
   };
@@ -274,6 +297,39 @@ export default function App(): React.ReactElement {
 
       {/* Rebase/Merge Error Dialog - shown when conflict is detected */}
       <RebaseMergeErrorDialog />
+
+      {/* Startup stale-session review (risky ones with unmerged commits) */}
+      {staleSessions.length > 0 && (
+        <StaleSessionsDialog
+          sessions={staleSessions}
+          onClose={() => setStaleSessions([])}
+          onRemoved={(ids) => {
+            ids.forEach((id) => removeReportedSession(id));
+            setStaleSessions((prev) => prev.filter((s) => !ids.includes(s.sessionId)));
+          }}
+        />
+      )}
+
+      {/* Toast: stale sessions auto-removed on startup */}
+      {autoRemovedCount > 0 && (
+        <div className="fixed bottom-4 right-4 z-50 bg-white border border-[rgba(0,0,0,0.10)] rounded-[14px] shadow-[0_4px_6px_rgba(0,0,0,0.08)] px-4 py-3 max-w-sm animate-slide-up">
+          <div className="flex items-start gap-3">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-500 mt-1.5 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm text-text-primary">
+                Cleaned up {autoRemovedCount} stale session{autoRemovedCount === 1 ? '' : 's'} with fully-merged work
+              </p>
+              <p className="text-xs text-text-secondary mt-0.5">Worktrees idle 14+ days, already merged into main/development.</p>
+            </div>
+            <button onClick={() => setAutoRemovedCount(0)} className="text-text-secondary hover:text-text-primary" title="Dismiss">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

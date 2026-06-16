@@ -122,6 +122,8 @@ export interface ConflictPreviewResult {
   metrics: RebaseMetrics;
   aborted?: boolean;
   abortReason?: string;
+  /** True when the rebase ran and succeeded with zero conflicts — not an error, branch is up to date */
+  rebaseSucceededCleanly?: boolean;
 }
 
 /** Result of applying approved resolutions */
@@ -179,6 +181,44 @@ const LOCK_FILES: string[] = [
   'yarn.lock',
   'pnpm-lock.yaml',
 ];
+
+/**
+ * KIT-managed bookkeeping files that frequently end up tracked in git history
+ * (predating the .gitignore entry, or committed by an agent's `git add -A`)
+ * and have ONLY session-identifier content — per-worktree repoPath, init
+ * timestamp, window-title session number. On a session-branch → main merge,
+ * the right value is always main's; the session-branch values exist to be
+ * local-only. We resolve to "ours" (the current branch we're merging INTO,
+ * which during a session-branch merge is main) without LLM involvement.
+ *
+ * Matched by relative path from repo root (via normalizeKitPath) — the path
+ * matters because plain `settings.json` is generic and we only want the
+ * .vscode one.
+ */
+const KIT_BOOKKEEPING_FILES: string[] = [
+  '.S9N_KIT_DevOpsAgent/config.json',
+  '.vscode/settings.json',
+];
+
+/**
+ * Normalize a path coming from `git diff --name-only` so equality checks
+ * against KIT_BOOKKEEPING_FILES survive quirks: leading `./`, trailing
+ * whitespace, embedded backslashes (Windows worktrees mounted on macOS),
+ * and POSIX-vs-OS separator drift. Lower-casing is NOT applied — git
+ * paths are case-sensitive on Linux; we trust whatever git emits.
+ */
+function normalizeKitPath(p: string): string {
+  return p
+    .trim()
+    .replace(/\\/g, '/')          // backslashes → forward
+    .replace(/^\.\//, '')         // strip leading ./
+    .replace(/\/+$/, '');         // strip trailing slashes
+}
+
+function isKitBookkeepingFile(p: string): boolean {
+  const n = normalizeKitPath(p);
+  return KIT_BOOKKEEPING_FILES.includes(n);
+}
 
 /** File patterns for migration files — never auto-resolve */
 const MIGRATION_PATTERNS = [
@@ -607,6 +647,22 @@ export class MergeConflictService extends BaseService {
         }
       }
 
+      // KIT-bookkeeping files: keep ours (the branch we're merging INTO).
+      // Session-branch values are local-only by design — repoPath, init
+      // timestamp, window-title session number — and shouldn't propagate.
+      if (isKitBookkeepingFile(filePath)) {
+        console.log(`[MergeConflict] KIT bookkeeping file — keeping ours: ${filePath}`);
+        const oursContent = this.resolveKeepCurrent(content);
+        if (oursContent) {
+          this.debugLog?.info('MergeConflict', `Auto-resolved KIT bookkeeping to ours`, { filePath });
+          return {
+            file: filePath,
+            resolved: true,
+            content: oursContent,
+          };
+        }
+      }
+
       // Try deterministic resolution first (no LLM — safe even for protected files)
       const category = analysis?.conflictCategory || triage?.conflictCategory;
       if (category) {
@@ -820,7 +876,20 @@ export class MergeConflictService extends BaseService {
     options?: { dryRun?: boolean }
   ): Promise<IpcResult<ConflictPreviewResult>> {
     return this.wrap(async () => {
+      // Strip any 'origin/' prefix stored in session data (legacy bug)
+      targetBranch = targetBranch.replace(/^origin\//, '');
       const startTime = Date.now();
+
+      // Abort any in-progress rebase before starting fresh — the conflict dialog
+      // may be opened while git is mid-rebase (detached HEAD), causing currentBranch
+      // to be empty and the new rebase to fail immediately. Always clean up first.
+      const inProgressCheck = await this.isRebaseInProgress(repoPath);
+      if (inProgressCheck.success && inProgressCheck.data) {
+        console.log(`[MergeConflict] Aborting in-progress rebase before generating previews`);
+        this.debugLog?.info('MergeConflict', 'Aborting in-progress rebase before preview', { repoPath });
+        try { await this.git(['rebase', '--abort'], repoPath); } catch { /* ignore */ }
+      }
+
       const currentBranch = await this.git(['branch', '--show-current'], repoPath);
       this.debugLog?.info('MergeConflict', `Generating resolution previews`, {
         repoPath, currentBranch, targetBranch, dryRun: options?.dryRun,
@@ -853,8 +922,9 @@ export class MergeConflictService extends BaseService {
       // Start rebase (may fail with conflicts)
       try {
         await this.git(['rebase', `origin/${targetBranch}`], repoPath);
-        // If no error, rebase succeeded without conflicts
+        // Rebase succeeded with zero conflicts — signal success, not an error
         metrics.totalLatencyMs = Date.now() - startTime;
+        this.debugLog?.info('MergeConflict', 'Rebase succeeded cleanly — no conflicts', { repoPath, currentBranch, targetBranch });
         return {
           repoPath,
           currentBranch,
@@ -865,6 +935,7 @@ export class MergeConflictService extends BaseService {
           failedToResolve: 0,
           skippedFiles: 0,
           metrics,
+          rebaseSucceededCleanly: true,
         };
       } catch {
         // Expected - rebase has conflicts, continue to generate previews
@@ -941,6 +1012,23 @@ export class MergeConflictService extends BaseService {
               language,
               originalContent: content,
               proposedContent: incomingContent,
+              status: 'approved',
+            });
+            resolvedByAI++;
+            continue;
+          }
+        }
+
+        // KIT bookkeeping: keep current (target-branch) version automatically.
+        if (isKitBookkeepingFile(file)) {
+          const oursContent = this.resolveKeepCurrent(content);
+          if (oursContent) {
+            console.log(`[MergeConflict] KIT bookkeeping file — keeping ours: ${file}`);
+            previews.push({
+              file,
+              language,
+              originalContent: content,
+              proposedContent: oursContent,
               status: 'approved',
             });
             resolvedByAI++;
@@ -1164,12 +1252,55 @@ export class MergeConflictService extends BaseService {
         }
       }
 
-      // If all approved files applied successfully, try to continue rebase
+      // If all approved files applied successfully, try to continue rebase.
+      // After `rebase --continue`, MORE conflicts may surface from a
+      // subsequent commit in the source branch's history. In particular,
+      // every agent commit that touches `.S9N_KIT_DevOpsAgent/config.json`
+      // or `.vscode/settings.json` produces the same class of bookkeeping
+      // conflict, and the resolver loop below auto-handles each round
+      // until either the rebase completes or a non-trivially-resolvable
+      // conflict appears.
       if (failed.length === 0 && applied.length > 0) {
-        try {
-          await this.git(['rebase', '--continue'], repoPath);
-        } catch {
-          // May have more conflicts - that's okay, user will see them
+        const MAX_AUTO_ROUNDS = 30; // safety stop in case of pathological history
+        for (let round = 0; round < MAX_AUTO_ROUNDS; round++) {
+          let continueErr: unknown = null;
+          try {
+            await this.git(['rebase', '--continue'], repoPath);
+          } catch (err) {
+            continueErr = err;
+          }
+          // Rebase done? We're out.
+          const stillRebasing = await this.isRebaseInProgress(repoPath);
+          if (!stillRebasing.success || !stillRebasing.data) break;
+          // Still in progress — try auto-resolving the new conflicts.
+          const moreConflicts = (await this.getConflictedFiles(repoPath)).data || [];
+          if (moreConflicts.length === 0) {
+            // Edge: rebase in progress but no Unmerged paths reported. Bail
+            // and surface the error rather than spinning.
+            if (continueErr) {
+              console.warn('[MergeConflict] rebase --continue failed with no conflicts reported:', continueErr);
+            }
+            break;
+          }
+          const trivial = moreConflicts.every(f => isKitBookkeepingFile(f) || LOCK_FILES.includes(path.basename(f)));
+          if (!trivial) break; // hand back to the UI/user via the post-loop block
+          // Resolve each trivial conflict deterministically and stage it.
+          let stagedAny = false;
+          for (const file of moreConflicts) {
+            const read = await this.readConflictedFile(repoPath, file);
+            if (!read.success || !read.data) continue;
+            const { content } = read.data;
+            const resolved = isKitBookkeepingFile(file)
+              ? this.resolveKeepCurrent(content)
+              : this.resolveKeepIncoming(content);
+            if (!resolved) continue;
+            const applyR = await this.applyResolution(repoPath, file, resolved);
+            if (applyR.success) {
+              applied.push(file);
+              stagedAny = true;
+            }
+          }
+          if (!stagedAny) break; // nothing to do — break out before infinite loop
         }
       }
 
@@ -1242,7 +1373,18 @@ export class MergeConflictService extends BaseService {
     maxRetries = 3
   ): Promise<IpcResult<RebaseWithResolutionResult>> {
     return this.wrap(async () => {
+      // Strip any 'origin/' prefix stored in session data (legacy bug)
+      targetBranch = targetBranch.replace(/^origin\//, '');
       const startTime = Date.now();
+
+      // Abort any in-progress rebase so we start clean (detached HEAD guard)
+      const inProgressCheck = await this.isRebaseInProgress(repoPath);
+      if (inProgressCheck.success && inProgressCheck.data) {
+        console.log(`[MergeConflict] Aborting in-progress rebase before rebaseWithResolution`);
+        this.debugLog?.info('MergeConflict', 'Aborting in-progress rebase before resolution', { repoPath });
+        try { await this.git(['rebase', '--abort'], repoPath); } catch { /* ignore */ }
+      }
+
       const currentBranch = await this.git(['branch', '--show-current'], repoPath);
       console.log(`[MergeConflict] Starting rebase of ${currentBranch} onto ${targetBranch}`);
 

@@ -50,6 +50,9 @@ export class WatcherService extends BaseService {
   private agentInstanceService: AgentInstanceService | null = null;
   private lockService: LockService | null = null;
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
+  // Periodic safety-net auto-commit timers (key = compound watcher key).
+  private periodicCommitTimers: Map<string, NodeJS.Timeout> = new Map();
+  private static readonly PERIODIC_COMMIT_MS = 5 * 60 * 1000; // commit WIP every 5 min when dirty
 
   // Phase 4: Analysis services for incremental analysis
   private astParser: ASTParserService | null = null;
@@ -232,11 +235,18 @@ export class WatcherService extends BaseService {
         return; // Already watching
       }
 
-      // Register the worktree with GitService so commits can work
-      // For worktrees, repoPath is the parent of local_deploy
-      const repoPath = worktreePath.includes('/local_deploy/')
-        ? worktreePath.split('/local_deploy/')[0]
-        : worktreePath;
+      // Register the worktree with GitService so commits can work. Derive the
+      // source repo path from the worktree path, handling both layouts:
+      //   - Legacy (≤ v2.6.53): <repo>/local_deploy/<branch>
+      //   - Current:            <repo_parent>/KIT-DevOps-<repo_name>/<branch>
+      let repoPath = worktreePath;
+      const legacyMatch = worktreePath.match(/^(.+)\/local_deploy\/[^/]+\/?$/);
+      const newMatch = worktreePath.match(/^(.+)\/KIT-DevOps-([^/]+)\/[^/]+\/?$/);
+      if (legacyMatch) {
+        repoPath = legacyMatch[1];
+      } else if (newMatch) {
+        repoPath = `${newMatch[1]}/${newMatch[2]}`;
+      }
       this.gitService.registerWorktree(sessionId, repoPath, worktreePath);
       console.log(`[WatcherService] Registered worktree for ${sessionId}: ${worktreePath} (repo: ${repoPath})`);
 
@@ -259,6 +269,7 @@ export class WatcherService extends BaseService {
         };
 
         this.watchers.set(sessionId, instance);
+        this.startPeriodicCommit(instance);
         this.workerBridge.startFileMonitor(sessionId, worktreePath, commitMsgFile, claudeCommitMsgFile);
         console.log(`[WatcherService] Delegated file monitoring to worker for ${sessionId}`);
         this.activityService.log(sessionId, 'success', `File watcher started (worker process) for ${worktreePath}`);
@@ -278,15 +289,26 @@ export class WatcherService extends BaseService {
           }
           // Ignore other dotfiles and common directories
           if (basename.startsWith('.')) return true;
+          // Nested worktree containers (`local_deploy`, `.worktrees`): recursing
+          // into a worktree that holds other sessions' worktrees produces a
+          // phantom-event storm → main-process memory runaway. Check segments
+          // RELATIVE to the watched root (substring would self-ignore the root,
+          // whose path contains '/local_deploy/').
+          const rel = path.relative(worktreePath, filePath);
+          if (rel) {
+            const segs = rel.split(path.sep);
+            if (segs.includes('local_deploy') || segs.includes('.worktrees')) return true;
+          }
           if (filePath.includes('node_modules')) return true;
           if (filePath.includes('.git')) return true;
-          if (filePath.includes('.worktrees')) return true;
           if (filePath.includes('/dist/')) return true;
           if (filePath.includes('/build/')) return true;
           return false;
         },
         persistent: true,
         ignoreInitial: true,
+        // Don't follow symlinks into sibling repos (unbounded cross-repo recursion).
+        followSymlinks: false,
         awaitWriteFinish: {
           stabilityThreshold: 1000,
           pollInterval: 500,
@@ -314,6 +336,7 @@ export class WatcherService extends BaseService {
       });
 
       this.watchers.set(sessionId, instance);
+      this.startPeriodicCommit(instance);
       console.log(`[WatcherService] Started watching ${worktreePath} for session ${sessionId}`);
       this.activityService.log(sessionId, 'success', `File watcher started for ${worktreePath}`);
       this.terminalLogService?.logSystem(`Watcher started: ${worktreePath}`, sessionId);
@@ -332,11 +355,26 @@ export class WatcherService extends BaseService {
       }
       this.watchers.delete(sessionId);
 
-      // Clear debounce timer
+      // Clear commit debounce timer
       const timer = this.debounceTimers.get(sessionId);
       if (timer) {
         clearTimeout(timer);
         this.debounceTimers.delete(sessionId);
+      }
+
+      // Clear periodic auto-commit timer
+      const periodic = this.periodicCommitTimers.get(sessionId);
+      if (periodic) {
+        clearInterval(periodic);
+        this.periodicCommitTimers.delete(sessionId);
+      }
+
+      // Clear analysis debounce timer — must also clear here (not just dispose())
+      // so that a pending analysis doesn't fire after the session is torn down
+      const analysisTimer = this.analysisDebounceTimers.get(sessionId);
+      if (analysisTimer) {
+        clearTimeout(analysisTimer);
+        this.analysisDebounceTimers.delete(sessionId);
       }
 
       // Release all locks for this session
@@ -405,6 +443,16 @@ export class WatcherService extends BaseService {
     return this.success(this.watchers.has(sessionId));
   }
 
+  /** Live resource counts for diagnostics (watchers + outstanding timers). */
+  debugCounts(): { watchers: number; debounce: number; periodic: number; analysis: number } {
+    return {
+      watchers: this.watchers.size,
+      debounce: this.debounceTimers.size,
+      periodic: this.periodicCommitTimers.size,
+      analysis: this.analysisDebounceTimers.size,
+    };
+  }
+
   private handleFileChange(
     instance: WatcherInstance,
     filePath: string,
@@ -417,6 +465,18 @@ export class WatcherService extends BaseService {
       : instance.sessionId;
     const sessionId = realSessionId;
     const relativePath = path.relative(instance.worktreePath, filePath);
+
+    // Hard guard: drop events under nested worktree containers. A worktree
+    // checkout can contain its own `local_deploy/` (or `.worktrees/`) holding
+    // OTHER sessions' worktrees — and via symlinks/submodules the tree can nest
+    // arbitrarily deep. Processing those produces a phantom-event storm (one
+    // session emitted 6,759 add events) → activity rows + locks + IPC + DB per
+    // event → main-process memory runaway. This is the authoritative filter:
+    // it cannot be bypassed by chokidar's (unreliable) directory pruning.
+    const segments = relativePath.split(path.sep);
+    if (segments.includes('local_deploy') || segments.includes('.worktrees')) {
+      return;
+    }
 
     // Emit file change event
     const event: FileChangeEvent = {
@@ -463,6 +523,64 @@ export class WatcherService extends BaseService {
 
     // Phase 4: Trigger incremental analysis for source files
     this.triggerIncrementalAnalysis(instance, filePath, type);
+  }
+
+  /**
+   * Safety-net periodic auto-commit. Agents don't always commit (and the prompt
+   * can't force them), so every PERIODIC_COMMIT_MS we commit any uncommitted work
+   * with a WIP message so nothing is lost. Skips when there's nothing to commit or
+   * when an agent-triggered commit is already in flight.
+   */
+  private startPeriodicCommit(instance: WatcherInstance): void {
+    const key = instance.sessionId;
+    const existing = this.periodicCommitTimers.get(key);
+    if (existing) clearInterval(existing);
+    const timer = setInterval(() => {
+      this.triggerPeriodicCommit(instance).catch((err) =>
+        console.warn(`[WatcherService] periodic commit failed for ${key}:`, err));
+    }, WatcherService.PERIODIC_COMMIT_MS);
+    this.periodicCommitTimers.set(key, timer);
+  }
+
+  private async triggerPeriodicCommit(instance: WatcherInstance): Promise<void> {
+    const sessionId = instance.sessionId.includes(':')
+      ? instance.sessionId.split(':')[0]
+      : instance.sessionId;
+
+    // Worktree must still exist.
+    if (!existsSync(instance.worktreePath)) return;
+    // Don't race an agent-triggered commit that's debouncing.
+    if (this.debounceTimers.has(sessionId)) return;
+
+    // Only commit when there's actually uncommitted work.
+    const status = await this.gitService.getStatus(sessionId).catch(() => null);
+    const changed = status?.data?.changes?.length || 0;
+    if (!status?.success || changed === 0) return;
+
+    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const baseMsg = `WIP: periodic auto-save (${stamp})`;
+    const commitMessage = instance.primaryRepoName
+      ? `[Upgrade From ${instance.primaryRepoName}] ${baseMsg}`
+      : baseMsg;
+
+    const result = await this.gitService.commit(sessionId, commitMessage, instance.repoName);
+    if (!result.success || !result.data) return;
+
+    const timestamp = new Date().toISOString();
+    this.activityService.log(sessionId, 'commit', `Periodic auto-save [${result.data.shortHash}] — ${changed} file(s)`);
+    this.emitToRenderer(IPC.COMMIT_COMPLETED, {
+      sessionId,
+      commitHash: result.data.hash,
+      message: baseMsg,
+      filesChanged: changed,
+      timestamp,
+      repoName: instance.repoName,
+    });
+    try {
+      databaseService.recordCommit(result.data.hash, sessionId, baseMsg, timestamp, { filesChanged: changed });
+      databaseService.recordSessionEvent(sessionId, 'commit', { message: baseMsg, filesChanged: changed }, result.data.hash);
+    } catch { /* non-fatal */ }
+    try { this.activityService.linkToCommit(sessionId, result.data.hash); } catch { /* non-fatal */ }
   }
 
   private async triggerCommit(instance: WatcherInstance, commitMsgFilePath?: string): Promise<void> {
@@ -625,8 +743,11 @@ export class WatcherService extends BaseService {
             try {
               const rebaseResult = await this.rebaseWatcher.forceCheck(sessionId);
               if (rebaseResult.success && rebaseResult.data?.hasChanges) {
-                console.log(`[WatcherService] Post-commit rebase: synced with remote (was ${rebaseResult.data.behindCount} commits behind)`);
-                this.terminalLogService?.log('info', `Post-commit rebase: synced with remote`, { sessionId, source: 'Watcher' });
+                const behindCount = rebaseResult.data.behindCount || '?';
+                const msg = `Rebased: synced with remote base branch (was ${behindCount} commit${behindCount !== 1 ? 's' : ''} behind)`;
+                console.log(`[WatcherService] Post-commit rebase: ${msg}`);
+                this.terminalLogService?.log('info', msg, { sessionId, source: 'Watcher' });
+                this.activityService.log(sessionId, 'git', msg);
                 rebased = true;
               } else if (rebaseResult.success) {
                 rebased = true; // Checked successfully, just nothing to rebase
@@ -641,12 +762,15 @@ export class WatcherService extends BaseService {
             const instResult = this.agentInstanceService.getInstance(sessionId);
             const inst = instResult?.data;
             const baseBranch = inst?.config?.baseBranch || 'main';
-            const repoPath = inst?.worktreePath || inst?.config?.repoPath || instance.worktreePath;
+            // Always use the ROOT repo path for fetch — fetching from a worktree path
+            // that no longer exists on disk causes ENOENT. The root repo is always present.
+            const repoPath = inst?.config?.repoPath || instance.worktreePath;
             if (repoPath) {
               await this.gitService.fetchRemote(repoPath);
               const checkResult = await this.gitService.checkRemoteChanges(repoPath, baseBranch);
               if (checkResult.success && checkResult.data && checkResult.data.behind > 0) {
-                console.log(`[WatcherService] Direct post-commit rebase: ${checkResult.data.behind} commits behind ${baseBranch}`);
+                const behind = checkResult.data.behind;
+                console.log(`[WatcherService] Direct post-commit rebase: ${behind} commits behind ${baseBranch}`);
                 // Use AI rebase through rebaseWatcher so conflicts are auto-resolved
                 const rebaseResult = this.rebaseWatcher
                   ? await this.rebaseWatcher.performRebaseForPath(sessionId, repoPath, baseBranch)
@@ -658,12 +782,16 @@ export class WatcherService extends BaseService {
                 if (rebaseResult.success) {
                   const incoming = (rebaseResult as { incomingCommits?: string[] }).incomingCommits;
                   const commitDetails = incoming && incoming.length > 0
-                    ? ` | Changes: ${incoming.join('; ')}`
+                    ? `: ${incoming.slice(0, 3).join('; ')}${incoming.length > 3 ? ` +${incoming.length - 3} more` : ''}`
                     : '';
-                  console.log(`[WatcherService] Direct post-commit rebase: synced with ${baseBranch} (${checkResult.data.behind} commits)${commitDetails}`);
-                  this.terminalLogService?.log('info', `Post-commit rebase: synced with ${baseBranch} (${checkResult.data.behind} commits integrated)${commitDetails}`, { sessionId, source: 'Watcher' });
+                  const msg = `Rebased onto ${baseBranch} (${behind} commit${behind !== 1 ? 's' : ''} integrated${commitDetails})`;
+                  console.log(`[WatcherService] Direct post-commit rebase: synced with ${baseBranch} (${behind} commits)`);
+                  this.terminalLogService?.log('info', msg, { sessionId, source: 'Watcher' });
+                  this.activityService.log(sessionId, 'git', msg);
                 } else {
+                  const errMsg = `Rebase onto ${baseBranch} failed after commit — manual sync may be needed`;
                   console.warn(`[WatcherService] Direct post-commit rebase failed:`, rebaseResult.message);
+                  this.activityService.log(sessionId, 'warning', errMsg, { detail: rebaseResult.message });
                 }
               }
             }
@@ -855,5 +983,11 @@ export class WatcherService extends BaseService {
       clearTimeout(timer);
     }
     this.analysisDebounceTimers.clear();
+
+    // Clear any lingering periodic auto-commit timers
+    for (const timer of this.periodicCommitTimers.values()) {
+      clearInterval(timer);
+    }
+    this.periodicCommitTimers.clear();
   }
 }

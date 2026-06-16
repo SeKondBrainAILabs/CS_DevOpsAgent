@@ -210,9 +210,19 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   merge.setRebaseWatcher(rebaseWatcher);
   merge.setAgentInstanceService(agentInstance);
   merge.setLockService(lock);
+  merge.setDebugLog(debugLog);
+  // Audit all worktree removals to the persistent debug log (with caller stack)
+  git.setDebugLog(debugLog);
 
   // Wire mergeConflict into rebaseWatcher so AI resolution is actually used
   rebaseWatcher.setMergeConflictService(mergeConflict);
+
+  // Wire activityService into rebaseWatcher so rebase events appear in session timeline
+  rebaseWatcher.setActivityService(activity);
+
+  // Same for MergeService — merge start/success/failure events show up in the
+  // session activity feed instead of only the debug log.
+  merge.setActivityService(activity);
 
   // Initialize Heartbeat service
   // For monitoring agent connection status
@@ -312,6 +322,31 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     mcpServer.sessionBinder.registerMultiRepoSession(sessionId, repos);
     console.log(`[Services] Multi-repo session ${sessionId} registered with MCP binder (${repos.length} repos)`);
   };
+
+  // One-time migration for sessions still living at <repo>/local_deploy/<branch>.
+  // Moves them to <repo_parent>/KIT-DevOps-<repo_name>/<branch> via `git worktree
+  // move`, regenerates each prompt so the user's "Copy Prompt" shows the new
+  // path. Idempotent — sessions already on the new layout are skipped.
+  await agentInstance.migrateLegacyWorktrees();
+
+  // Try to revive any instance whose worktree dir is missing — if the source
+  // repo + branch are still around, `git worktree add --force` brings it back.
+  // MUST run before registerExistingSessionsWithBinder, which internally reaps
+  // anything still missing as 'closed'. Otherwise a repairable session gets
+  // marked closed at startup and never restored.
+  await agentInstance.repairOrphanWorktrees();
+
+  // Catch the "branch-gone orphan" state: the worktree dir survived an
+  // external `.git` wipe but its registry entry is gone AND the source branch
+  // has been deleted (typically post-merge). Without this, Sync (rebase) and
+  // every other git op fails with `fatal: not a git repository` and the
+  // session is stuck in the UI. Marks those instances `completed`.
+  await agentInstance.reapBrokenLinks();
+
+  // Repatriate any `mcp_calls` stranded under previous-restart sessionIds. A
+  // builds-before-v2.6.58 transferSessionData omitted mcp_calls, so the MCP
+  // tab went blank after the first auto-restart. Idempotent.
+  agentInstance.backfillMcpCallsByLineage();
 
   // Re-register existing sessions loaded from electron-store (binder is in-memory only)
   agentInstance.registerExistingSessionsWithBinder();

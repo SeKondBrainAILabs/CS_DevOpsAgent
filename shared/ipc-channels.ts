@@ -110,6 +110,8 @@ export const IPC = {
   AI_GET_CONFIG_SOURCES: 'ai:get-config-sources',
   AI_IS_CONFIGURED: 'ai:is-configured',
   AI_HEALTH_CHECK: 'ai:health-check',
+  // Refine a raw user task into a structured agent brief (picks persona, short title, structured rewrite).
+  AI_REFINE_SESSION_TASK: 'ai:refine-session-task',
   // Events (main → renderer)
   AI_STREAM_CHUNK: 'ai:stream:chunk',
   AI_STREAM_END: 'ai:stream:end',
@@ -161,8 +163,13 @@ export const IPC = {
   INSTANCE_DELETE: 'instance:delete',
   INSTANCE_DELETE_SESSION: 'instance:delete-session', // Delete by sessionId
   INSTANCE_DELETE_SAFETY_CHECK: 'instance:delete-safety-check', // Pre-delete safety info
+  // Find a sibling session (same repoPath, different sessionId) with recent MCP
+  // activity — used by InstructionsModal to surface the "agent connected to a
+  // different session for this repo" hint.
+  INSTANCE_FIND_ACTIVE_SIBLING: 'instance:find-active-sibling',
   INSTANCE_DELETE_WITH_CLEANUP: 'instance:delete-with-cleanup', // Delete with worktree/branch cleanup
   INSTANCE_RESTART: 'instance:restart',
+  INSTANCE_GET_LAST_CHANGE: 'instance:get-last-change', // Real last-change time (activity/commit/file mtime)
   INSTANCE_CLEAR_ALL: 'instance:clear-all',
   INSTANCE_UPDATE_BASE_BRANCH: 'instance:update-base-branch',
   RECENT_REPOS_LIST: 'recent-repos:list',
@@ -184,6 +191,10 @@ export const IPC = {
   // Events
   INSTANCE_RECOVERED: 'instance:recovered',
   ORPHANED_SESSIONS_FOUND: 'recovery:orphaned-found',
+  // Stale-session startup scan: risky sessions to prompt about
+  STALE_SESSIONS_FOUND: 'recovery:stale-found',
+  // Stale-session startup scan: summary of sessions auto-removed (safe ones)
+  STALE_SESSIONS_AUTOREMOVED: 'recovery:stale-autoremoved',
 
   // ==========================================================================
   // REPO CLEANUP CHANNELS
@@ -200,9 +211,14 @@ export const IPC = {
   // GIT REBASE CHANNELS
   // ==========================================================================
   GIT_FETCH: 'git:fetch',
+  GIT_STASH_POP: 'git:stash-pop',
   GIT_CHECK_REMOTE: 'git:check-remote',
   GIT_REBASE: 'git:rebase',
   GIT_PERFORM_REBASE: 'git:perform-rebase',
+  GIT_COMMIT_WORKTREE: 'git:commit-worktree', // Path-based commit-all (pre-merge/rebase save)
+  GIT_DETECT_TAG_PREFIXES: 'git:detect-tag-prefixes', // Existing version-tag prefixes (wizard)
+  GIT_NEXT_VERSION_TAG: 'git:next-version-tag',       // Next version for a prefix
+  GIT_CREATE_PUSH_TAG: 'git:create-push-tag',         // Create + push a tag (fires the action)
   GIT_LIST_WORKTREES: 'git:list-worktrees',
   GIT_PRUNE_WORKTREES: 'git:prune-worktrees',
   GIT_REMOVE_WORKTREE_PATH: 'git:remove-worktree-path',
@@ -574,6 +590,7 @@ export const REQUEST_CHANNELS = [
   IPC.INSTANCE_DELETE_SAFETY_CHECK,
   IPC.INSTANCE_DELETE_WITH_CLEANUP,
   IPC.INSTANCE_RESTART,
+  IPC.INSTANCE_GET_LAST_CHANGE,
   IPC.RECENT_REPOS_LIST,
   IPC.RECENT_REPOS_ADD,
   IPC.RECENT_REPOS_REMOVE,
