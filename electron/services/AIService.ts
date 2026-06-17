@@ -14,7 +14,7 @@ import Groq from 'groq-sdk';
 // Available Groq models (kept for backward compatibility)
 export const GROQ_MODELS = {
   'llama-3.3-70b': 'llama-3.3-70b-versatile',
-  'kimi-k2': 'moonshotai/kimi-k2-instruct',
+  'kimi-k2': 'moonshotai/kimi-k2-instruct-0905',
   'gpt-oss-120b': 'openai/gpt-oss-120b',
   'gpt-oss-20b': 'openai/gpt-oss-20b',
   'qwen-qwq-32b': 'qwen-qwq-32b',
