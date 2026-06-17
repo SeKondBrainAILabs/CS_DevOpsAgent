@@ -94,6 +94,7 @@ export interface ResolutionResult {
   error?: string;
   analysis?: ConflictAnalysis;
   skippedReason?: string;  // Why the file was skipped (e.g., safety restriction)
+  proposedDeletion?: boolean;  // Resolution is to delete the file (modify/delete conflict resolved toward a deletion)
 }
 
 /** Preview of a proposed conflict resolution — user must approve before applying */
@@ -107,6 +108,7 @@ export interface ConflictResolutionPreview {
   status: 'pending' | 'approved' | 'rejected' | 'modified' | 'skipped';
   userModifiedContent?: string;  // If user edits the proposed resolution
   skippedReason?: string;        // Why auto-resolution was skipped
+  proposedDeletion?: boolean;    // Resolution is to delete the file (modify/delete conflict). When true, proposedContent is ignored.
 }
 
 /** Result of generating previews for all conflicts */
@@ -486,6 +488,99 @@ export class MergeConflictService extends BaseService {
   }
 
   /**
+   * Resolve a modify/delete conflict (one side deleted the file, the other
+   * modified it) toward OURS, and stage the result.
+   *
+   * These conflicts have NO `<<<<<<<` markers — the file is unmerged at the
+   * index level, not the content level — so the marker-based resolvers
+   * (resolveKeepCurrent / resolveKeepIncoming) silently return null for them.
+   * That is exactly how a bookkeeping file such as `.vscode/settings.json`
+   * (deleted on `main`, still modified on a session branch) could wedge the
+   * auto-fix loop forever: every round saw it as "unresolved", produced no
+   * resolution, and bailed out.
+   *
+   * We decide by inspecting OURS (HEAD): if HEAD still tracks the path we keep
+   * HEAD's version; otherwise we honor HEAD's deletion. Either way the path is
+   * staged so the merge/rebase can proceed. Returns true iff staged.
+   */
+  private async resolveModifyDeleteKeepOurs(repoPath: string, file: string): Promise<boolean> {
+    try {
+      let inHead = true;
+      try {
+        await this.git(['cat-file', '-e', `HEAD:${file}`], repoPath);
+      } catch {
+        inHead = false;
+      }
+      if (inHead) {
+        // OURS (HEAD) still has it → keep ours and stage it.
+        await this.git(['checkout', 'HEAD', '--', file], repoPath);
+        await this.git(['add', '--', file], repoPath);
+      } else {
+        // OURS deleted it → honor the deletion (drops the unmerged path).
+        await this.git(['rm', '-f', '--', file], repoPath);
+      }
+      this.debugLog?.info?.('MergeConflict', `Resolved modify/delete toward ours`, { file, keptInHead: inHead });
+      console.log(`[MergeConflict] Resolved modify/delete (${inHead ? 'kept ours' : 'honored deletion'}): ${file}`);
+      return true;
+    } catch (err) {
+      this.debugLog?.warn?.('MergeConflict', `resolveModifyDeleteKeepOurs failed`, { file, error: String(err) });
+      console.warn(`[MergeConflict] Could not resolve modify/delete for ${file}:`, err);
+      return false;
+    }
+  }
+
+  /**
+   * Return the porcelain XY status code (e.g. "DU", "UD", "UU") for a single
+   * path, or null if the path is clean / not reported. Used to distinguish a
+   * content conflict (UU/AA — has markers) from a modify/delete (DU/UD/DD — no
+   * markers) so the right resolution strategy is chosen.
+   */
+  private async getUnmergedStatusCode(repoPath: string, file: string): Promise<string | null> {
+    try {
+      const out = await this.git(['status', '--porcelain', '--', file], repoPath);
+      const firstLine = out.split('\n').find(Boolean);
+      if (!firstLine) return null;
+      return firstLine.slice(0, 2);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Read a file's content from OURS (HEAD) without trimming, preserving exact
+   * bytes (trailing newline etc.). Returns null if HEAD does not track it.
+   */
+  private async showFileAtHead(repoPath: string, file: string): Promise<string | null> {
+    try {
+      const execa = await getExeca();
+      const { stdout } = await execa('git', ['show', `HEAD:${file}`], { cwd: repoPath, stripFinalNewline: false });
+      return stdout;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Classify whether `file` is a modify/delete conflict (one side deleted, the
+   * other modified — no `<<<<<<<` markers) and, if so, how to resolve it toward
+   * OURS. Returns the deletion intent and ours' content (when ours keeps it) so
+   * callers can build either a ResolutionResult or a preview without mutating
+   * the index. Non-modify/delete conflicts return { isModifyDelete: false }.
+   */
+  private async classifyModifyDelete(
+    repoPath: string,
+    file: string
+  ): Promise<{ isModifyDelete: boolean; proposedDeletion: boolean; oursContent: string | null }> {
+    const xy = await this.getUnmergedStatusCode(repoPath, file);
+    if (xy !== 'DU' && xy !== 'UD' && xy !== 'DD') {
+      return { isModifyDelete: false, proposedDeletion: false, oursContent: null };
+    }
+    const oursContent = await this.showFileAtHead(repoPath, file);
+    // Ours (HEAD) still tracks it → keep ours' content; otherwise honor the deletion.
+    return { isModifyDelete: true, proposedDeletion: oursContent === null, oursContent };
+  }
+
+  /**
    * Try to resolve a conflict using deterministic templates based on category
    * Returns null if deterministic resolution is not possible
    */
@@ -610,6 +705,23 @@ export class MergeConflictService extends BaseService {
 
       const isProtected = this.isProtectedFile(filePath);
       const confidence = analysis?.confidence ?? triage?.confidence ?? 0.85;
+
+      // Modify/delete conflicts (one side deleted the file, the other modified
+      // it) have NO `<<<<<<<` markers, so the marker-based resolvers below would
+      // silently fail — and for an ours-deleted file readConflictedFile throws
+      // outright. For KIT bookkeeping files we resolve them deterministically
+      // toward ours: keep ours' content, or honor ours' deletion. (This is the
+      // `.vscode/settings.json` modify/delete that wedged the auto-fix loop.)
+      if (isKitBookkeepingFile(filePath)) {
+        const md = await this.classifyModifyDelete(repoPath, filePath);
+        if (md.isModifyDelete) {
+          this.debugLog?.info('MergeConflict', `Modify/delete bookkeeping conflict — resolving toward ours`, { filePath, proposedDeletion: md.proposedDeletion });
+          console.log(`[MergeConflict] Modify/delete bookkeeping — ${md.proposedDeletion ? 'deleting' : 'keeping ours'}: ${filePath}`);
+          return md.proposedDeletion
+            ? { file: filePath, resolved: true, proposedDeletion: true }
+            : { file: filePath, resolved: true, content: md.oursContent ?? undefined };
+        }
+      }
 
       // Read the file first so we can attempt deterministic resolution before any blocks
       const fileResult = await this.readConflictedFile(repoPath, filePath);
@@ -987,6 +1099,25 @@ export class MergeConflictService extends BaseService {
       for (const file of conflictedFiles) {
         const fileResult = await this.readConflictedFile(repoPath, file);
         if (!fileResult.success || !fileResult.data) {
+          // A read failure usually means a modify/delete where ours deleted the
+          // file (no worktree copy). For bookkeeping files, that's resolvable —
+          // honor the deletion rather than surfacing it as a manual conflict.
+          if (isKitBookkeepingFile(file)) {
+            const md = await this.classifyModifyDelete(repoPath, file);
+            if (md.isModifyDelete) {
+              console.log(`[MergeConflict] KIT bookkeeping modify/delete (no worktree copy) — ${md.proposedDeletion ? 'deleting' : 'keeping ours'}: ${file}`);
+              previews.push({
+                file,
+                language: 'text',
+                originalContent: '',
+                proposedContent: md.proposedDeletion ? '' : (md.oursContent ?? ''),
+                proposedDeletion: md.proposedDeletion,
+                status: 'approved',
+              });
+              resolvedByAI++;
+              continue;
+            }
+          }
           previews.push({
             file,
             language: 'text',
@@ -1021,6 +1152,22 @@ export class MergeConflictService extends BaseService {
 
         // KIT bookkeeping: keep current (target-branch) version automatically.
         if (isKitBookkeepingFile(file)) {
+          // Marker-less modify/delete (one side deleted the file) → resolve
+          // structurally toward ours; resolveKeepCurrent can't touch these.
+          const md = await this.classifyModifyDelete(repoPath, file);
+          if (md.isModifyDelete) {
+            console.log(`[MergeConflict] KIT bookkeeping modify/delete — ${md.proposedDeletion ? 'deleting' : 'keeping ours'}: ${file}`);
+            previews.push({
+              file,
+              language,
+              originalContent: content,
+              proposedContent: md.proposedDeletion ? '' : (md.oursContent ?? content),
+              proposedDeletion: md.proposedDeletion,
+              status: 'approved',
+            });
+            resolvedByAI++;
+            continue;
+          }
           const oursContent = this.resolveKeepCurrent(content);
           if (oursContent) {
             console.log(`[MergeConflict] KIT bookkeeping file — keeping ours: ${file}`);
@@ -1233,6 +1380,20 @@ export class MergeConflictService extends BaseService {
           continue;
         }
 
+        // Modify/delete resolved toward a deletion — honor it (git rm) rather
+        // than writing content. The user hasn't edited a deletion, so skip the
+        // marker/content checks below.
+        if (preview.proposedDeletion) {
+          try {
+            await this.git(['rm', '-f', '--', preview.file], repoPath);
+            applied.push(preview.file);
+          } catch (rmErr) {
+            console.error(`[MergeConflict] Failed to delete ${preview.file}:`, rmErr);
+            failed.push(preview.file);
+          }
+          continue;
+        }
+
         // Use user-modified content if provided, otherwise use AI proposed content
         const contentToApply = preview.userModifiedContent || preview.proposedContent;
 
@@ -1287,15 +1448,28 @@ export class MergeConflictService extends BaseService {
           // Resolve each trivial conflict deterministically and stage it.
           let stagedAny = false;
           for (const file of moreConflicts) {
-            const read = await this.readConflictedFile(repoPath, file);
-            if (!read.success || !read.data) continue;
-            const { content } = read.data;
-            const resolved = isKitBookkeepingFile(file)
-              ? this.resolveKeepCurrent(content)
-              : this.resolveKeepIncoming(content);
-            if (!resolved) continue;
-            const applyR = await this.applyResolution(repoPath, file, resolved);
-            if (applyR.success) {
+            let staged = false;
+            const read = await this.readConflictedFile(repoPath, file).catch(() => null);
+            const content = read && read.success && read.data ? read.data.content : null;
+
+            if (content && this.hasConflictMarkers(content)) {
+              // Content conflict — resolve via the conflict markers.
+              const resolved = isKitBookkeepingFile(file)
+                ? this.resolveKeepCurrent(content)
+                : this.resolveKeepIncoming(content);
+              if (resolved) {
+                const applyR = await this.applyResolution(repoPath, file, resolved);
+                if (applyR.success) staged = true;
+              }
+            } else {
+              // Unmerged but NO `<<<<<<<` markers → modify/delete conflict.
+              // The marker-based resolvers can't touch these (that was the
+              // `.vscode/settings.json` wedge). Resolve toward ours — every
+              // file here is already known-trivial (bookkeeping or lock).
+              staged = await this.resolveModifyDeleteKeepOurs(repoPath, file);
+            }
+
+            if (staged) {
               applied.push(file);
               stagedAny = true;
             }
@@ -1529,6 +1703,16 @@ export class MergeConflictService extends BaseService {
               metrics.skipped++;
               conflictsFailed++;
               allResolved = false;
+            } else if (resolution.data.resolved && resolution.data.proposedDeletion) {
+              // Modify/delete resolved toward a deletion — honor it (git rm).
+              try {
+                await this.git(['rm', '-f', '--', file], repoPath);
+                conflictsResolved++;
+              } catch (rmErr) {
+                console.warn(`[MergeConflict] Failed to delete ${file} during resolution:`, rmErr);
+                conflictsFailed++;
+                allResolved = false;
+              }
             } else if (resolution.data.resolved && resolution.data.content) {
               // Apply the resolution
               const applyResult = await this.applyResolution(
