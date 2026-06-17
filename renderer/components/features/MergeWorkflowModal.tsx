@@ -114,6 +114,15 @@ export function MergeWorkflowModal({
   // sweep the modal forward, making the prompt look like it "disappears too
   // quickly".
   const [dirtyDecision, setDirtyDecision] = useState<'pending' | 'committed' | 'ignored'>('committed');
+  // After auto-fix successfully resolves all conflicts the source branch is
+  // already rebased onto target (per applyApprovedResolutions' loop in
+  // v2.6.73), so the merge should now succeed as a fast-forward. Setting this
+  // flag in the auto-fix success block makes a useEffect below execute the
+  // merge automatically instead of leaving the user staring at an "Execute
+  // Merge" button. handleExecuteMerge is declared later in the component, so
+  // we go through this flag rather than calling it directly from inside the
+  // useCallback'd handleAutoFix.
+  const [pendingAutoMerge, setPendingAutoMerge] = useState(false);
   const [committingDirty, setCommittingDirty] = useState(false);
 
   // GitHub Action on merge (tag-push) — read from the session's config.
@@ -495,7 +504,7 @@ export function MergeWorkflowModal({
             await window.api?.conflict?.deleteBackup?.(conflictPath, sessionId);
           }
 
-          addProgress('All conflicts resolved! Proceeding to merge options...', 'done');
+          addProgress('All conflicts resolved! Executing merge…', 'done');
 
           // Reload preview against the primary repo (merge happens there, not in the worktree)
           const previewResult = await window.api?.merge?.preview?.(repoPath, actualBranch, targetBranch);
@@ -503,7 +512,12 @@ export function MergeWorkflowModal({
             setPreview(previewResult.data);
           }
 
-          setTimeout(() => setStep('options'), 1500);
+          // Skip the 'options' confirmation step and run the merge directly —
+          // the rebase has already linearized source onto target, so the
+          // merge will be a clean fast-forward. The useEffect below picks
+          // this up and calls handleExecuteMerge.
+          setStep('options');
+          setPendingAutoMerge(true);
         } else {
           updateLastProgress('error');
           addProgress('Some resolutions could not be applied. Try manual resolution.', 'error');
@@ -616,6 +630,20 @@ export function MergeWorkflowModal({
       setStep('error');
     }
   };
+
+  // After auto-fix sets pendingAutoMerge=true, this effect kicks the merge.
+  // Gated on step==='options' so it doesn't fire mid-resolution; the small
+  // delay gives the preview reload time to land first.
+  useEffect(() => {
+    if (pendingAutoMerge && step === 'options' && !loading) {
+      const timer = setTimeout(() => {
+        setPendingAutoMerge(false);
+        void handleExecuteMerge();
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [pendingAutoMerge, step, loading]);
 
   if (!isOpen) return null;
 

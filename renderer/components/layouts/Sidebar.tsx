@@ -419,17 +419,30 @@ function RepoSessionGroup({
 
       {isExpanded && (
         <div className="border-t border-border divide-y divide-border">
-          {sessions.map((session) => (
-            <SessionCard
-              key={session.sessionId}
-              session={session}
-              isSelected={selectedSessionId === session.sessionId}
-              onClick={() => onSelectSession(
-                selectedSessionId === session.sessionId ? null : session.sessionId
-              )}
-              onDelete={() => onDeleteSession(session.sessionId)}
-            />
-          ))}
+          {[...sessions]
+            // Sort sessions by last edit (`updated` desc) so the list is
+            // predictable: most recently edited at the top. The repos
+            // themselves stay alphabetical (sorted upstream) so the tree
+            // doesn't jump around as activity comes in — only sessions
+            // within their group reorder, and only by last-edit time.
+            // Stable fallback: sessionId, then branchName.
+            .sort((a, b) => {
+              const aT = a.updated ? new Date(a.updated).getTime() : 0;
+              const bT = b.updated ? new Date(b.updated).getTime() : 0;
+              if (bT !== aT) return bT - aT;
+              return (a.sessionId || a.branchName || '').localeCompare(b.sessionId || b.branchName || '');
+            })
+            .map((session) => (
+              <SessionCard
+                key={session.sessionId}
+                session={session}
+                isSelected={selectedSessionId === session.sessionId}
+                onClick={() => onSelectSession(
+                  selectedSessionId === session.sessionId ? null : session.sessionId
+                )}
+                onDelete={() => onDeleteSession(session.sessionId)}
+              />
+            ))}
         </div>
       )}
     </div>
