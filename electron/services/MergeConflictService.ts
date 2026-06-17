@@ -636,9 +636,11 @@ export class MergeConflictService extends BaseService {
 
       const promptKey = currentBranch ? 'analyze_with_context' : 'analyze_conflict';
 
-      // Route to appropriate model based on triage complexity
-      const modelOverride: GroqModelKey | undefined =
-        triage?.complexity === 'simple' ? 'llama-3.1-8b' : undefined;  // undefined = use mode default
+      // Route to appropriate model based on triage complexity.
+      // Complex conflicts get gpt-oss-120b — open-weight OpenAI model, measurably
+      // stronger on code merges than the mode default (llama-3.3-70b after kimi-k2 404 fallback).
+      const modelOverride: GroqModelKey =
+        triage?.complexity === 'simple' ? 'llama-3.1-8b' : 'gpt-oss-120b';
 
       const result = await this.aiService.sendWithMode({
         modeId: 'merge_conflict_resolver',
@@ -827,7 +829,7 @@ export class MergeConflictService extends BaseService {
 
       // Route to appropriate model
       const isSimple = triage?.complexity === 'simple' || analysis?.complexity === 'simple';
-      const modelOverride: GroqModelKey | undefined = isSimple ? 'llama-3.1-8b' : undefined;
+      const modelOverride: GroqModelKey = isSimple ? 'llama-3.1-8b' : 'gpt-oss-120b';
 
       let result;
 
