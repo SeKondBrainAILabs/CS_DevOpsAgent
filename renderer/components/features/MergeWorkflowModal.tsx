@@ -106,6 +106,14 @@ export function MergeWorkflowModal({
   const [offline, setOffline] = useState(false);
   // Uncommitted changes in the source worktree (prompt to commit before merging).
   const [dirtyCount, setDirtyCount] = useState(0);
+  // Whether the user has explicitly decided what to do about uncommitted changes.
+  // 'pending' (the default whenever dirtyCount becomes >0) blocks the auto-stash
+  // and auto-fix effects so the banner stays visible until the user clicks
+  // either "Commit and merge" or "Merge without committing". Without this gate
+  // the amber prompt would appear for a frame and then the auto-actions would
+  // sweep the modal forward, making the prompt look like it "disappears too
+  // quickly".
+  const [dirtyDecision, setDirtyDecision] = useState<'pending' | 'committed' | 'ignored'>('committed');
   const [committingDirty, setCommittingDirty] = useState(false);
 
   // GitHub Action on merge (tag-push) — read from the session's config.
@@ -192,11 +200,16 @@ export function MergeWorkflowModal({
 
       // Detect uncommitted changes in the source worktree so we can prompt to
       // commit them before merging (otherwise that work isn't part of the merge).
+      // Whenever uncommitted changes appear, reset the decision back to
+      // 'pending' so the user has to actively choose again — they may have
+      // edited files between previews.
       try {
         const safetyPath = worktreePath || repoPath;
         const safety = await window.api?.git?.getWorktreeSafetyInfo?.(safetyPath);
-        setDirtyCount(safety?.success && safety.data?.hasUncommittedChanges ? (safety.data.uncommittedFiles?.length ?? 0) : 0);
-      } catch { setDirtyCount(0); }
+        const count = safety?.success && safety.data?.hasUncommittedChanges ? (safety.data.uncommittedFiles?.length ?? 0) : 0;
+        setDirtyCount(count);
+        setDirtyDecision(count > 0 ? 'pending' : 'committed');
+      } catch { setDirtyCount(0); setDirtyDecision('committed'); }
 
       // Read the session's GitHub-Action-on-merge config (tag-push), if any.
       try {
@@ -519,32 +532,38 @@ export function MergeWorkflowModal({
     }
   }, [isOpen]);
 
-  // Auto-stash untracked blocking files (e.g. .DS_Store) so merge proceeds autonomously
+  // Auto-stash untracked blocking files (e.g. .DS_Store) so merge proceeds autonomously.
+  // Gated on dirtyDecision !== 'pending' so the uncommitted-changes banner doesn't
+  // get swept away by the auto-stash before the user can react.
   useEffect(() => {
     if (
       preview?.untrackedBlockingFiles?.length &&
       step === 'preview' &&
       !loading &&
-      !autoStashTriggered.current
+      !autoStashTriggered.current &&
+      dirtyDecision !== 'pending'
     ) {
       autoStashTriggered.current = true;
       handleStashAndRetry();
     }
-  }, [preview, step, loading, handleStashAndRetry]);
+  }, [preview, step, loading, dirtyDecision, handleStashAndRetry]);
 
-  // Auto-trigger AI fix when conflicts detected and no untracked blockers
+  // Auto-trigger AI fix when conflicts detected and no untracked blockers.
+  // Same gate as the auto-stash above — the user gets to decide what to do
+  // about uncommitted changes before the modal sweeps onward.
   useEffect(() => {
     if (
       preview?.hasConflicts &&
       !preview.untrackedBlockingFiles?.length &&
       step === 'preview' &&
       !loading &&
-      !autoFixTriggered.current
+      !autoFixTriggered.current &&
+      dirtyDecision !== 'pending'
     ) {
       autoFixTriggered.current = true;
       handleAutoFix();
     }
-  }, [preview, step, loading, handleAutoFix]);
+  }, [preview, step, loading, dirtyDecision, handleAutoFix]);
 
   const handleExecuteMerge = async () => {
     setStep('executing');
@@ -703,30 +722,45 @@ export function MergeWorkflowModal({
             </div>
           )}
 
-          {/* Uncommitted-changes prompt — commit before merging so the work is included */}
-          {step === 'preview' && dirtyCount > 0 && (
-            <div className="mt-2 p-2.5 bg-amber-50 border border-amber-300 rounded-lg flex items-center justify-between gap-3">
-              <p className="text-xs text-amber-800">
-                <span className="font-medium">You have {dirtyCount} uncommitted change{dirtyCount === 1 ? '' : 's'}</span> in
-                {' '}<code className="bg-amber-100 px-1 rounded">{actualBranch}</code>. They won't be part of this merge unless you commit them first.
+          {/* Uncommitted-changes prompt — binary decision the user MUST make
+              before the modal's auto-stash / auto-fix effects can sweep
+              forward. Stays visible until they pick a side. */}
+          {step === 'preview' && dirtyCount > 0 && dirtyDecision === 'pending' && (
+            <div className="mt-2 p-3 bg-amber-50 border-2 border-amber-400 rounded-lg space-y-2">
+              <p className="text-sm text-amber-900">
+                <span className="font-semibold">{dirtyCount} uncommitted change{dirtyCount === 1 ? '' : 's'}</span> in
+                {' '}<code className="bg-amber-100 px-1 rounded">{actualBranch}</code>. These changes won't be part of the merge unless you commit them first.
               </p>
-              <button
-                type="button"
-                disabled={committingDirty}
-                onClick={async () => {
-                  setCommittingDirty(true);
-                  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
-                  const r = await window.api?.git?.commitWorktree?.(worktreePath || repoPath, `WIP: pre-merge commit (${stamp})`);
-                  if (r?.success) {
-                    setDirtyCount(0);
-                    await loadPreview(); // refresh the preview to include the new commit
-                  }
-                  setCommittingDirty(false);
-                }}
-                className="flex-shrink-0 px-3 py-1.5 bg-amber-600 text-white rounded-full text-xs font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors"
-              >
-                {committingDirty ? 'Committing…' : 'Commit changes'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={committingDirty}
+                  onClick={async () => {
+                    setCommittingDirty(true);
+                    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+                    const r = await window.api?.git?.commitWorktree?.(worktreePath || repoPath, `WIP: pre-merge commit (${stamp})`);
+                    if (r?.success) {
+                      setDirtyCount(0);
+                      setDirtyDecision('committed');
+                      await loadPreview(); // refresh the preview to include the new commit
+                    } else {
+                      // Don't lock the user out if the commit failed — leave the decision pending.
+                    }
+                    setCommittingDirty(false);
+                  }}
+                  className="flex-shrink-0 px-3 py-1.5 bg-amber-700 text-white rounded-full text-xs font-medium hover:bg-amber-800 disabled:opacity-50 transition-colors"
+                >
+                  {committingDirty ? 'Committing…' : `Commit & merge (${dirtyCount} file${dirtyCount === 1 ? '' : 's'})`}
+                </button>
+                <button
+                  type="button"
+                  disabled={committingDirty}
+                  onClick={() => setDirtyDecision('ignored')}
+                  className="flex-shrink-0 px-3 py-1.5 bg-white border border-amber-400 text-amber-900 rounded-full text-xs font-medium hover:bg-amber-50 disabled:opacity-50 transition-colors"
+                >
+                  Merge without committing
+                </button>
+              </div>
             </div>
           )}
 
