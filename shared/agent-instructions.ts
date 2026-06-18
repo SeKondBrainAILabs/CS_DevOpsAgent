@@ -76,12 +76,22 @@ You should have these MCP tools available:
 **⚠️ These are MCP protocol tools, NOT bash commands. Do NOT try to run them in a terminal.**
 **If you do NOT see these tools in your available tools list, the MCP connection failed — use the FALLBACK instructions in each section below.**
 ` : ''}
-## MANDATORY FIRST RESPONSE
-Before doing ANY other work, you MUST respond with:
+## MANDATORY FIRST RESPONSE${vars.mcpUrl ? `
+🛑 **Step 0 — REGISTER YOUR CONNECTION (do this FIRST, before pwd, before anything else):**
+Call the MCP tool \`kit_log_activity\` with:
+\`\`\`
+session_id="${vars.sessionId}"
+type="session"
+message="Session connected — starting setup"
+\`\`\`
+This is REQUIRED. The KIT dashboard shows "Waiting for agent to connect…" until this call lands. Seeing the tool in your list is NOT enough — you must invoke it. If the call fails (tool not available / 404), the MCP connection is broken — use the fallbacks below and tell the user.
+` : ''}
+Then respond with:
 ✓ Current directory: [output of pwd]
 ✓ Houserules read: [yes/no - if yes, summarize key rules]
 ✓ File locks checked: [yes/no]${vars.mcpUrl ? `
-✓ MCP tools available: [yes/no — confirm you see: kit_commit, kit_commit_all, kit_get_session_info, kit_log_activity, kit_lock_file, kit_unlock_file, kit_get_commit_history, kit_request_review]` : ''}
+✓ MCP tools available: [yes/no — confirm you see: kit_commit, kit_commit_all, kit_get_session_info, kit_log_activity, kit_lock_file, kit_unlock_file, kit_get_commit_history, kit_request_review]
+✓ kit_log_activity registration call succeeded: [yes/no — required from Step 0 above]` : ''}
 
 ## 1. SETUP (run first)
 \`\`\`bash
@@ -301,6 +311,8 @@ This session has a KIT MCP server.
 Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
 
 **⚠️ These are MCP protocol tools — NOT bash commands. Do not run them in a terminal.**
+
+🛑 **REGISTER FIRST**: Before any setup steps, call the MCP tool \`kit_log_activity\` with \`session_id="${vars.sessionId}"\`, \`type="session"\`, \`message="Session connected — starting setup"\`. The KIT dashboard stays on "Waiting for agent to connect…" until this lands. Seeing the tool listed is not enough — you must invoke it.
 ` : ''}
 ## 1. SETUP (run first)
 \`\`\`bash
