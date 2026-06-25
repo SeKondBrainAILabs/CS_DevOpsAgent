@@ -500,6 +500,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.agentInstance.updateBaseBranch(sessionId, newBaseBranch);
   });
 
+  ipcMain.handle(IPC.INSTANCE_REPAIR_STALE_REBASE, async (_, instanceId: string) => {
+    return services.agentInstance.repairStaleRebase(instanceId);
+  });
+
   ipcMain.handle(IPC.RECENT_REPOS_LIST, async () => {
     return services.agentInstance.getRecentRepos();
   });

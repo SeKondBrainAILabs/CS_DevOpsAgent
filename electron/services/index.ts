@@ -343,6 +343,12 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // session is stuck in the UI. Marks those instances `completed`.
   await agentInstance.reapBrokenLinks();
 
+  // Detect interrupted rebases (rebase-merge or rebase-apply dir older than
+  // 6h) and flag the instance so the UI can surface "Abort + back up" before
+  // the agent walks in confused by a parked HEAD. Idempotent; clears the
+  // flag when the rebase state is gone.
+  await agentInstance.detectStaleRebases();
+
   // Repatriate any `mcp_calls` stranded under previous-restart sessionIds. A
   // builds-before-v2.6.58 transferSessionData omitted mcp_calls, so the MCP
   // tab went blank after the first auto-restart. Idempotent.

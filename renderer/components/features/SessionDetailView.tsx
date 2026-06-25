@@ -143,6 +143,8 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
   const [showAdvancedBranches, setShowAdvancedBranches] = useState(false);
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [aiHealth, setAiHealth] = useState<{ online: boolean; configured: boolean; error?: string } | null>(null);
+  const [rebaseRepairBusy, setRebaseRepairBusy] = useState(false);
+  const [rebaseRepairResult, setRebaseRepairResult] = useState<{ ok: boolean; message: string } | null>(null);
   const showConflictDialog = useConflictStore((state) => state.showDialog);
 
   useEffect(() => {
@@ -492,6 +494,60 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
               : `Not connected — unable to reach AI service. ${aiHealth.error || 'Check your internet connection.'}`
             }
           </span>
+        </div>
+      )}
+
+      {/* Stale rebase banner — flagged by AgentInstanceService.detectStaleRebases */}
+      {instance?.staleRebase && (
+        <div className="px-4 py-3 bg-amber-50 border-b border-amber-200 flex items-start gap-3 text-sm text-amber-900">
+          <svg className="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M5.07 19h13.86a2 2 0 001.74-3L13.74 4a2 2 0 00-3.48 0L3.33 16a2 2 0 001.74 3z" />
+          </svg>
+          <div className="flex-1 min-w-0">
+            <div className="font-medium">
+              Stale rebase detected ({instance.staleRebase.kind}, {Math.round(instance.staleRebase.ageMinutes / 60)}h old)
+            </div>
+            <div className="text-xs mt-1 opacity-90">
+              An interrupted rebase is parked in this worktree — HEAD likely points at a historical snapshot, so files may look reverted.
+              Abort &amp; back up to restore the pre-rebase tip. Both HEAD and ORIG_HEAD are saved to <code>backup/*</code> branches before abort.
+            </div>
+            {rebaseRepairResult && (
+              <div className={`text-xs mt-1.5 ${rebaseRepairResult.ok ? 'text-green-700' : 'text-red-700'}`}>
+                {rebaseRepairResult.message}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={async () => {
+              if (!instance?.id || rebaseRepairBusy) return;
+              setRebaseRepairBusy(true);
+              setRebaseRepairResult(null);
+              try {
+                const r = await window.api.instance.repairStaleRebase(instance.id);
+                if (r.success && r.data) {
+                  setRebaseRepairResult({
+                    ok: true,
+                    message: `Aborted. HEAD now at ${r.data.landedAt}. Backups: ${r.data.backupBranches.join(', ') || '(none)'}`,
+                  });
+                  // Refresh instance so banner clears
+                  const list = await window.api.instance.list();
+                  if (list.success && list.data) {
+                    setInstance(list.data.find(i => i.sessionId === session.sessionId) || null);
+                  }
+                } else {
+                  setRebaseRepairResult({ ok: false, message: r.error?.message || 'Repair failed' });
+                }
+              } catch (e) {
+                setRebaseRepairResult({ ok: false, message: e instanceof Error ? e.message : String(e) });
+              } finally {
+                setRebaseRepairBusy(false);
+              }
+            }}
+            disabled={rebaseRepairBusy}
+            className="flex-shrink-0 px-3 py-1.5 rounded-md bg-amber-600 text-white text-xs font-medium hover:bg-amber-700 disabled:opacity-50"
+          >
+            {rebaseRepairBusy ? 'Aborting…' : 'Abort + back up'}
+          </button>
         </div>
       )}
 

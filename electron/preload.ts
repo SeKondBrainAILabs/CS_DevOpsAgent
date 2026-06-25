@@ -711,6 +711,9 @@ const api = {
     updateBaseBranch: (sessionId: string, newBaseBranch: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.INSTANCE_UPDATE_BASE_BRANCH, sessionId, newBaseBranch),
 
+    repairStaleRebase: (instanceId: string): Promise<IpcResult<{ backupBranches: string[]; landedAt: string }>> =>
+      ipcRenderer.invoke(IPC.INSTANCE_REPAIR_STALE_REBASE, instanceId),
+
     getRecentRepos: (): Promise<IpcResult<RecentRepo[]>> =>
       ipcRenderer.invoke(IPC.RECENT_REPOS_LIST),
 

@@ -639,6 +639,20 @@ export interface AgentInstance {
    * v2.6.59 — no recovery is possible for those without lineage data.
    */
   predecessorSessionIds?: string[];
+  /**
+   * Set by `detectStaleRebases` startup scan when the worktree's gitdir has a
+   * `rebase-merge` or `rebase-apply` directory older than the stale threshold
+   * (default 6h). Cleared automatically when the gitdir no longer has rebase
+   * state. Renderer surfaces this as a banner with an "Abort + back up" button
+   * wired to the `INSTANCE_REPAIR_STALE_REBASE` IPC handler.
+   */
+  staleRebase?: {
+    detectedAt: string;     // when the scan flagged it
+    startedAt: string;      // mtime of rebase-merge/apply dir
+    kind: 'merge' | 'apply';
+    ageMinutes: number;     // age at detection time
+    gitDir: string;         // absolute path to the rebase-* dir, for repair
+  };
 }
 
 // =============================================================================

@@ -172,6 +172,10 @@ export const IPC = {
   INSTANCE_GET_LAST_CHANGE: 'instance:get-last-change', // Real last-change time (activity/commit/file mtime)
   INSTANCE_CLEAR_ALL: 'instance:clear-all',
   INSTANCE_UPDATE_BASE_BRANCH: 'instance:update-base-branch',
+  // Abort an interrupted rebase in the instance's worktree after backing up
+  // HEAD + ORIG_HEAD to backup/<sessionId>-* branches. Used by the stale-rebase
+  // banner; safe to call even if `staleRebase` was already cleared.
+  INSTANCE_REPAIR_STALE_REBASE: 'instance:repair-stale-rebase',
   RECENT_REPOS_LIST: 'recent-repos:list',
   RECENT_REPOS_ADD: 'recent-repos:add',
   RECENT_REPOS_REMOVE: 'recent-repos:remove',

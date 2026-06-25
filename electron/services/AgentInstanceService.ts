@@ -1862,6 +1862,179 @@ ${DEVOPS_KIT_DIR}/
   }
 
   /**
+   * Detect interrupted rebases in every live worktree and flag the instance.
+   *
+   * Why: when a rebase is left mid-flight (agent quit, machine slept, Kanvas
+   * auto-save committed during the pause), `HEAD` ends up parked at a
+   * historical snapshot. The next agent that walks in sees "files reverted"
+   * and gets paranoid — exactly the failure mode you hit on
+   * codex-session-20260527-citw. Surfacing it as an instance-level flag lets
+   * the UI show a banner with "Abort + back up" rather than relying on the
+   * agent to diagnose git plumbing on its own.
+   *
+   * For each non-terminal instance we resolve the worktree's gitdir via
+   * `git rev-parse --git-dir` and look for `rebase-merge` or `rebase-apply`.
+   * Anything older than STALE_REBASE_MINUTES (6h) gets flagged; younger ones
+   * we leave alone — could be an in-flight rebase the agent is mid-way
+   * through. Idempotent: a subsequent scan that finds no rebase state clears
+   * the flag.
+   */
+  async detectStaleRebases(): Promise<number> {
+    const STALE_REBASE_MINUTES = 360; // 6h — anything younger is plausibly active
+    const { statSync } = await import('fs');
+    let flagged = 0;
+    let cleared = 0;
+    let saveNeeded = false;
+
+    const inspect = async (wt: string): Promise<AgentInstance['staleRebase'] | null> => {
+      if (!existsSync(wt)) return null;
+      let gitDirRel: string;
+      try {
+        const r = await execaCmd('git', ['rev-parse', '--git-dir'], { cwd: wt });
+        gitDirRel = r.stdout.trim();
+      } catch {
+        return null;
+      }
+      const absGitDir = gitDirRel.startsWith('/') ? gitDirRel : join(wt, gitDirRel);
+      for (const kind of ['merge', 'apply'] as const) {
+        const dir = join(absGitDir, `rebase-${kind}`);
+        if (!existsSync(dir)) continue;
+        try {
+          const s = statSync(dir);
+          const ageMs = Date.now() - s.mtimeMs;
+          const ageMinutes = Math.round(ageMs / 60_000);
+          if (ageMinutes < STALE_REBASE_MINUTES) return null;
+          return {
+            detectedAt: new Date().toISOString(),
+            startedAt: new Date(s.mtimeMs).toISOString(),
+            kind,
+            ageMinutes,
+            gitDir: dir,
+          };
+        } catch {
+          // unreadable — skip rather than guess
+        }
+      }
+      return null;
+    };
+
+    for (const instance of this.instances.values()) {
+      if (instance.status === 'completed' || instance.status === 'failed' || instance.status === 'closed') continue;
+
+      let detected: AgentInstance['staleRebase'] | null = null;
+      const wts = instance.multiRepoEntries && instance.multiRepoEntries.length > 0
+        ? instance.multiRepoEntries.map(r => r.worktreePath).filter((p): p is string => !!p)
+        : (instance.worktreePath ? [instance.worktreePath] : []);
+      for (const wt of wts) {
+        detected = await inspect(wt);
+        if (detected) break; // first hit per instance is enough — UI will deep-link
+      }
+
+      if (detected && !instance.staleRebase) {
+        instance.staleRebase = detected;
+        flagged++;
+        saveNeeded = true;
+        const ageHours = Math.round(detected.ageMinutes / 60);
+        console.warn(
+          `[AgentInstanceService] Stale rebase flagged on ${instance.id} (${instance.sessionId || 'no-session'}): ${detected.kind}, ${ageHours}h old`
+        );
+      } else if (!detected && instance.staleRebase) {
+        delete instance.staleRebase;
+        cleared++;
+        saveNeeded = true;
+      }
+    }
+
+    if (saveNeeded) this.saveInstances();
+    if (flagged + cleared > 0) {
+      console.log(`[AgentInstanceService] Stale-rebase scan: ${flagged} flagged, ${cleared} cleared`);
+    }
+    return flagged;
+  }
+
+  /**
+   * One-click rebase repair: back up the current tip + pre-rebase tip to
+   * `backup/<sessionId>-pre-abort-HEAD` and `backup/<sessionId>-pre-rebase-tip`,
+   * then `git rebase --abort`. Clears the `staleRebase` flag on success.
+   * Returns the backup branch names so the UI can quote them in a toast.
+   *
+   * Safe by design: only runs when the gitdir genuinely has rebase state,
+   * never deletes data (the floating commits remain in reflog for 90 days
+   * after abort, the explicit backup branches survive even past that).
+   */
+  async repairStaleRebase(instanceId: string): Promise<IpcResult<{
+    backupBranches: string[];
+    landedAt: string;
+  }>> {
+    const instance = this.instances.get(instanceId);
+    if (!instance) return { success: false, error: { code: 'NOT_FOUND', message: `Instance ${instanceId} not found` } };
+
+    const wt = instance.multiRepoEntries?.[0]?.worktreePath || instance.worktreePath;
+    if (!wt || !existsSync(wt)) {
+      return { success: false, error: { code: 'NO_WORKTREE', message: 'Worktree path missing or gone' } };
+    }
+
+    // Verify there's actually rebase state — refuse to act otherwise so a
+    // stale flag can't trigger a destructive `--abort` on a clean tree.
+    let gitDirRel: string;
+    try {
+      const r = await execaCmd('git', ['rev-parse', '--git-dir'], { cwd: wt });
+      gitDirRel = r.stdout.trim();
+    } catch (err) {
+      return { success: false, error: { code: 'GIT_FAIL', message: `git rev-parse failed: ${err instanceof Error ? err.message : String(err)}` } };
+    }
+    const absGitDir = gitDirRel.startsWith('/') ? gitDirRel : join(wt, gitDirRel);
+    const hasRebase = existsSync(join(absGitDir, 'rebase-merge')) || existsSync(join(absGitDir, 'rebase-apply'));
+    if (!hasRebase) {
+      // Stale flag, no real state — just clear and exit cleanly.
+      delete instance.staleRebase;
+      this.saveInstances();
+      return { success: true, data: { backupBranches: [], landedAt: 'no-op (no rebase state)' } };
+    }
+
+    const tag = (instance.sessionId || instanceId).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const headBackup = `backup/${tag}-pre-abort-HEAD`;
+    const origBackup = `backup/${tag}-pre-rebase-tip`;
+    const made: string[] = [];
+
+    // Capture HEAD (whatever weird mid-rebase state it's in) and ORIG_HEAD
+    // (the pre-rebase branch tip). Both are recoverable from reflog too, but
+    // explicit branches survive reflog expiry and are easier to inspect.
+    try {
+      const headSha = (await execaCmd('git', ['rev-parse', 'HEAD'], { cwd: wt })).stdout.trim();
+      if (headSha) {
+        await execaCmd('git', ['branch', '-f', headBackup, headSha], { cwd: wt });
+        made.push(headBackup);
+      }
+    } catch {
+      // best-effort — don't block abort on backup failure (reflog still has it)
+    }
+    try {
+      const origSha = (await execaCmd('git', ['rev-parse', 'ORIG_HEAD'], { cwd: wt })).stdout.trim();
+      if (origSha) {
+        await execaCmd('git', ['branch', '-f', origBackup, origSha], { cwd: wt });
+        made.push(origBackup);
+      }
+    } catch {
+      // ORIG_HEAD may be missing in some rebase states — that's fine
+    }
+
+    // Actually abort
+    try {
+      await execaCmd('git', ['rebase', '--abort'], { cwd: wt });
+    } catch (err) {
+      return { success: false, error: { code: 'ABORT_FAIL', message: `git rebase --abort failed: ${err instanceof Error ? err.message : String(err)}` } };
+    }
+
+    delete instance.staleRebase;
+    this.saveInstances();
+
+    const landedSha = (await execaCmd('git', ['rev-parse', '--short', 'HEAD'], { cwd: wt }).catch(() => ({ stdout: 'unknown' }))).stdout.trim();
+    console.log(`[AgentInstanceService] Aborted stale rebase on ${instance.id} (${instance.sessionId || 'no-session'}); backups: ${made.join(', ') || 'none'}; HEAD now at ${landedSha}`);
+    return { success: true, data: { backupBranches: made, landedAt: landedSha } };
+  }
+
+  /**
    * Mark instances whose worktreePath no longer exists on disk as 'closed' and
    * save. Returns the number of instances reaped.
    *
