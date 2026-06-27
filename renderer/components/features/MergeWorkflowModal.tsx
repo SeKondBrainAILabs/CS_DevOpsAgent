@@ -221,11 +221,27 @@ export function MergeWorkflowModal({
       } catch { setDirtyCount(0); setDirtyDecision('committed'); }
 
       // Read the session's GitHub-Action-on-merge config (tag-push), if any.
+      // Falls back to repo-level detectTagPrefixes when the session has no
+      // mergeAction — covers sessions created with the toggle off AND sessions
+      // restarted through the cold path that drops config. Without the fallback
+      // the tag step silently vanishes for most sessions and users assume
+      // tag-push is broken.
       try {
         if (sessionId) {
           const inst = await window.api?.instance?.get?.(sessionId);
           const ma = inst?.success ? inst.data?.config?.mergeAction : undefined;
-          setMergeActionPrefix(ma?.enabled && ma.type === 'tag-push' ? ma.tagPrefix : null);
+          if (ma?.enabled && ma.type === 'tag-push') {
+            setMergeActionPrefix(ma.tagPrefix);
+          } else if (repoPath) {
+            const detected = await window.api?.git?.detectTagPrefixes?.(repoPath);
+            if (detected?.success && detected.data && detected.data[0]) {
+              setMergeActionPrefix(detected.data[0].prefix);
+            } else {
+              setMergeActionPrefix(null);
+            }
+          } else {
+            setMergeActionPrefix(null);
+          }
         }
       } catch { setMergeActionPrefix(null); }
 

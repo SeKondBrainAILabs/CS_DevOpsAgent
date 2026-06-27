@@ -860,17 +860,39 @@ export class MergeService extends BaseService {
         }
       }
 
-      // Pull latest changes — check result to avoid merging on a dirty state
-      const pullResult = await this.git(['pull', 'origin', targetBranch], mergeWorkdir);
-      if (pullResult.exitCode !== 0) {
-        console.error(`[MergeService] Pull failed:`, pullResult.stderr);
-        // Restore original branch — no merge has been started so no merge --abort needed
+      // Sync target with origin via fetch + fast-forward-only.
+      // Plain `git pull` inherits the user's pull.rebase/pull.ff config — if
+      // unset, git 2.27+ refuses with a "Need to specify how to reconcile
+      // divergent branches" wall of text. Worse, with pull.rebase=true it
+      // would silently rebase the user's local target onto origin, which can
+      // lose unpushed work. fetch + --ff-only is the safe path: it advances
+      // the target when behind, no-ops when up-to-date, fails cleanly with
+      // an actionable message when truly diverged.
+      const fetchResult = await this.git(['fetch', 'origin', targetBranch], mergeWorkdir);
+      if (fetchResult.exitCode !== 0) {
+        console.error(`[MergeService] Fetch failed:`, fetchResult.stderr);
         if (currentBranch !== targetBranch) {
           await this.git(['checkout', currentBranch], mergeWorkdir);
         }
         return {
           success: false,
-          message: `Failed to pull latest ${targetBranch}: ${pullResult.stderr || 'unknown error'}. Please try again.`,
+          message: `Failed to fetch latest ${targetBranch}: ${fetchResult.stderr || 'unknown error'}. Please try again.`,
+        };
+      }
+      const ffResult = await this.git(['merge', '--ff-only', `origin/${targetBranch}`], mergeWorkdir);
+      if (ffResult.exitCode !== 0) {
+        const isDiverged =
+          /not possible to fast-forward/i.test(ffResult.stderr) ||
+          /diverged|divergent/i.test(ffResult.stderr);
+        console.error(`[MergeService] Fast-forward failed:`, ffResult.stderr);
+        if (currentBranch !== targetBranch) {
+          await this.git(['checkout', currentBranch], mergeWorkdir);
+        }
+        return {
+          success: false,
+          message: isDiverged
+            ? `Local '${targetBranch}' has diverged from origin/${targetBranch} — local commits exist that aren't on the remote. Resolve manually (rebase your local '${targetBranch}' onto origin/${targetBranch}, or reset it if the local commits aren't needed) before retrying the merge.`
+            : `Failed to update ${targetBranch} from origin: ${ffResult.stderr || 'unknown error'}. Please try again.`,
         };
       }
 

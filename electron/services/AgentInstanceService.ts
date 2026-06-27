@@ -2577,24 +2577,42 @@ ${DEVOPS_KIT_DIR}/
         }
       }
 
-      // If no instance found but we have session data, create a temporary config
+      // If no instance found but we have session data, create a temporary config.
+      // Try to inherit from any closed/historical instance that ever ran on this
+      // (repoPath, branchName) pair — that's where mergeAction, multiRepo,
+      // customMcpEnabled etc. live. Cherry-picking only the sessionData fields
+      // (as the original code did) silently stripped tag-push config on every
+      // cold-path restart, which is why most users saw "tags suddenly broken".
       if (!targetInstance && sessionData) {
         console.log(`[AgentInstanceService] No instance found for ${sessionId}, creating from session data`);
         this.terminalLogService?.info(`No stored instance found, using session data`, sessionId, 'Restart');
 
-        // Create config from session data
+        // Scan the in-memory map for a recent instance on the same (repo, branch)
+        // whose config we can carry forward. Most recent wins.
+        let inheritedConfig: AgentInstanceConfig | undefined;
+        for (const inst of this.instances.values()) {
+          if (inst.config?.repoPath === sessionData.repoPath &&
+              inst.config?.branchName === sessionData.branchName) {
+            inheritedConfig = inst.config;
+            break;
+          }
+        }
+
         const config: AgentInstanceConfig = {
+          // Inherit everything first (mergeAction, multiRepo, customMcpEnabled, etc.)…
+          ...(inheritedConfig || {}),
+          // …then override with the live session-data values we trust more.
           repoPath: sessionData.repoPath,
-          agentType: sessionData.agentType || 'claude',
-          taskDescription: sessionData.task || 'Restarted session',
+          agentType: sessionData.agentType || inheritedConfig?.agentType || 'claude',
+          taskDescription: sessionData.task || inheritedConfig?.taskDescription || 'Restarted session',
           branchName: sessionData.branchName,
-          baseBranch: (sessionData.baseBranch || 'main').replace(/^origin\//, ''),
-          useWorktree: !!sessionData.worktreePath,
-          autoCommit: true,
-          commitInterval: 30000,
-          rebaseFrequency: 'never',
-          systemPrompt: '',
-          contextPreservation: '',
+          baseBranch: (sessionData.baseBranch || inheritedConfig?.baseBranch || 'main').replace(/^origin\//, ''),
+          useWorktree: !!sessionData.worktreePath || (inheritedConfig?.useWorktree ?? false),
+          autoCommit: inheritedConfig?.autoCommit ?? true,
+          commitInterval: inheritedConfig?.commitInterval ?? 30000,
+          rebaseFrequency: inheritedConfig?.rebaseFrequency ?? 'never',
+          systemPrompt: inheritedConfig?.systemPrompt ?? '',
+          contextPreservation: inheritedConfig?.contextPreservation ?? '',
         };
 
         // Purge any lingering instance on this branch so restart can't duplicate it.

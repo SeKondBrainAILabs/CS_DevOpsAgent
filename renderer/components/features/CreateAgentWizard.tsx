@@ -214,11 +214,20 @@ export function CreateAgentWizard({ onClose, initialRepoPath, initialTask }: Cre
           // detached-HEAD/"HEAD" sentinel. Fall back to a primary that actually exists.
           setSettings((s) => ({ ...s, baseBranch: pickDefaultBaseBranch(validationResult.data!) }));
           // Detect existing version-tag prefixes (for the GitHub-Action-on-merge picker).
+          // If the repo has a versioned-tag convention, default the toggle ON —
+          // KIT was treating tag-push as opt-in and most users assumed the absence
+          // of the tag UI at merge meant tags broke. A repo that already tags
+          // releases obviously wants its workflow fired on merge.
           window.api?.git?.detectTagPrefixes?.(initialRepoPath).then((r) => {
             if (!cancelled && r?.success && r.data) {
               setTagPrefixes(r.data);
-              // Pre-fill the most common prefix so the action is one toggle away.
-              if (r.data[0]) setSettings((s) => ({ ...s, mergeActionTagPrefix: s.mergeActionTagPrefix || r.data![0].prefix }));
+              if (r.data[0]) {
+                setSettings((s) => ({
+                  ...s,
+                  mergeActionTagPrefix: s.mergeActionTagPrefix || r.data![0].prefix,
+                  mergeActionEnabled: s.mergeActionEnabled || true,
+                }));
+              }
             }
           }).catch(() => {});
         }
