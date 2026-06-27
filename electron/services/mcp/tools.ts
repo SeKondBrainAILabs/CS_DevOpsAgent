@@ -40,6 +40,25 @@ type Divergence = {
   [k: string]: unknown;
 };
 
+/** Verdict from preCommitSanityCheck. block=true → return error to agent. */
+type SanityGateResult = {
+  block: boolean;
+  reason?: string;
+  details?: Record<string, unknown>;
+  /** Set when we snapshotted the worktree before refusing — so the agent's
+   *  work isn't lost while they fix the issue. */
+  snapshotRef?: string;
+  retryGuidance?: string;
+};
+
+/** Files we know how to syntax-check quickly. Anything else is skipped. */
+const PARSE_CHECKABLE = /\.(py|js|mjs|cjs|jsx|ts|tsx)$/i;
+/** Single-file shrink threshold that requires force=true. */
+const SHRINK_PCT_THRESHOLD = 0.5;
+/** Below this line count the shrink check is skipped — tiny files routinely
+ *  shrink during refactors and would create false positives. */
+const SHRINK_MIN_LINES = 300;
+
 /** Interface for the McpServerService to log calls */
 interface McpCallLogger {
   addCallLogEntry(entry: McpCallLogEntry): void;
@@ -65,6 +84,159 @@ export function registerTools(
   const STATE_CHANGING_TOOLS = new Set([
     'kit_commit', 'kit_commit_all', 'kit_lock_file', 'kit_unlock_file', 'kit_request_review',
   ]);
+
+  // ===========================================================================
+  // Pre-commit sanity gate
+  //
+  // Why this exists: KIT pushed a 1120-line truncation of ai_chat_service.py
+  // straight to Kemory main in June 2026 because nothing along the path
+  // — agent, watcher, kit_commit, merge — noticed the file went 1497 → 378.
+  // Pre-commit hooks would have caught it, but worktree gitdirs don't
+  // inherit the project's `.pre-commit-config.yaml` so they never ran.
+  // This gate is the KIT-side defense in depth: a syntax parse on every
+  // changed file + a diff-size sanity check that forces the agent to
+  // confirm any 50%+ shrink on a non-trivial file. Snapshots the work
+  // before refusing so retries can't lose data.
+  // ===========================================================================
+  async function preCommitSanityCheck(
+    worktreePath: string,
+    sessionId: string,
+    force: boolean
+  ): Promise<SanityGateResult> {
+    // 1. Inventory the changed files via porcelain. `XY <path>` where the
+    //    second char is the worktree-vs-index status; `??` = untracked.
+    let porcelain = '';
+    try {
+      const r = await gitInWorktree(['status', '--porcelain', '-z'], worktreePath);
+      porcelain = r.stdout;
+    } catch {
+      // If we can't read status, don't block — let gitService.commit surface
+      // the real error rather than mask it with a sanity-gate failure.
+      return { block: false };
+    }
+
+    // Porcelain -z separator: every record ends in NUL. Rename records carry
+    // an extra NUL-separated old-path; we keep only the new path.
+    const records = porcelain.split('\0').filter(Boolean);
+    const changedPaths: { path: string; deleted: boolean; untracked: boolean }[] = [];
+    for (let i = 0; i < records.length; i++) {
+      const rec = records[i];
+      if (rec.length < 3) continue;
+      const xy = rec.slice(0, 2);
+      const rest = rec.slice(3);
+      const isRename = xy[0] === 'R' || xy[0] === 'C';
+      const path = isRename ? rest : rest; // -z renames put old path in next record; we skip the old
+      if (isRename) i++; // consume the old-path record
+      const deleted = xy.includes('D');
+      const untracked = xy === '??';
+      changedPaths.push({ path, deleted, untracked });
+    }
+
+    // 2. Parser gate — never bypassable. A failing parse means the file on
+    //    disk is broken; force=true can't pretend otherwise.
+    const parseFailures: Array<{ file: string; error: string }> = [];
+    for (const { path: rel, deleted } of changedPaths) {
+      if (deleted) continue;
+      if (!PARSE_CHECKABLE.test(rel)) continue;
+      const abs = join(worktreePath, rel);
+      if (!existsSync(abs)) continue;
+      const ext = rel.toLowerCase().split('.').pop() || '';
+      let cmd: { bin: string; args: string[] } | null = null;
+      if (ext === 'py') {
+        cmd = { bin: 'python3', args: ['-c', `import ast,sys\nast.parse(open(sys.argv[1]).read())`, abs] };
+      } else if (ext === 'js' || ext === 'mjs' || ext === 'cjs') {
+        cmd = { bin: 'node', args: ['--check', abs] };
+      }
+      // .ts/.tsx/.jsx: skipped — tsc is too heavy as a per-commit gate and
+      // node --check rejects all TS syntax. Future work: optional swc/esbuild
+      // syntactic check if available in the worktree.
+      if (!cmd) continue;
+      try {
+        if (!_execa) {
+          const mod: any = await import('execa');
+          _execa = typeof mod.execa === 'function' ? mod.execa
+            : typeof mod.default === 'function' ? mod.default
+            : mod.default?.execa;
+        }
+        await _execa!(cmd.bin, cmd.args, { cwd: worktreePath, timeout: 5_000 });
+      } catch (err: any) {
+        const stderr = (err?.stderr || err?.message || '').toString();
+        parseFailures.push({ file: rel, error: stderr.split('\n').slice(0, 4).join('\n') });
+      }
+    }
+
+    if (parseFailures.length > 0) {
+      // Snapshot before refusing so the agent's work survives until they fix it.
+      let snapshotRef: string | undefined;
+      try {
+        const snap = await deps.gitService?.createSnapshot(worktreePath, sessionId);
+        if (snap?.success && snap.data) snapshotRef = snap.data.refName;
+      } catch { /* best-effort */ }
+      return {
+        block: true,
+        reason: `Parse error in ${parseFailures.length} file(s) — commit refused. Re-read the file(s), fix the syntax, then retry. force=true does NOT bypass parser errors.`,
+        details: { parseFailures },
+        snapshotRef,
+        retryGuidance: 'Open each flagged file, locate the syntax error, fix it, then call kit_commit again (no force needed once the parse passes).',
+      };
+    }
+
+    // 3. Diff-size gate — bypassable with force=true.
+    if (!force) {
+      const shrinkFlags: Array<{ file: string; beforeLines: number; afterLines: number; shrinkPct: number }> = [];
+      for (const { path: rel, deleted, untracked } of changedPaths) {
+        if (deleted || untracked) continue; // shrink is only meaningful for modifications
+        const abs = join(worktreePath, rel);
+        if (!existsSync(abs)) continue;
+        let beforeLines = 0;
+        let afterLines = 0;
+        try {
+          const before = await gitInWorktree(['show', `HEAD:${rel}`], worktreePath);
+          beforeLines = before.stdout.split('\n').length;
+        } catch {
+          continue; // new file or untracked at HEAD — no shrink possible
+        }
+        try {
+          const after = await gitInWorktree(['cat-file', '-p', `:0:${rel}`], worktreePath).catch(async () => {
+            // not staged yet — read working tree
+            const fs = await import('fs/promises');
+            return { stdout: await fs.readFile(abs, 'utf8'), stderr: '' };
+          });
+          afterLines = after.stdout.split('\n').length;
+        } catch {
+          continue;
+        }
+        if (beforeLines < SHRINK_MIN_LINES) continue;
+        const shrink = (beforeLines - afterLines) / beforeLines;
+        if (shrink >= SHRINK_PCT_THRESHOLD) {
+          shrinkFlags.push({
+            file: rel,
+            beforeLines,
+            afterLines,
+            shrinkPct: Math.round(shrink * 100),
+          });
+        }
+      }
+
+      if (shrinkFlags.length > 0) {
+        let snapshotRef: string | undefined;
+        try {
+          const snap = await deps.gitService?.createSnapshot(worktreePath, sessionId);
+          if (snap?.success && snap.data) snapshotRef = snap.data.refName;
+        } catch { /* best-effort */ }
+        const summary = shrinkFlags.map(f => `${f.file} (${f.beforeLines}→${f.afterLines} lines, -${f.shrinkPct}%)`).join('; ');
+        return {
+          block: true,
+          reason: `Suspicious shrink in ${shrinkFlags.length} file(s): ${summary}. Re-read the file(s) to confirm the change is intentional, then retry with force=true if it is.`,
+          details: { shrinkFlags },
+          snapshotRef,
+          retryGuidance: 'If the shrink is wrong (accidental truncation), discard the on-disk file and reapply your changes. If intentional, call kit_commit again with force=true.',
+        };
+      }
+    }
+
+    return { block: false };
+  }
 
   // ===========================================================================
   // Worktree-divergence guards
@@ -333,8 +505,9 @@ export function registerTools(
       cwd: z.string().describe('Your current shell working directory (run `pwd`). REQUIRED. The commit is rejected if this is not the session worktree, so your work is never silently committed to the wrong place.'),
       push: z.boolean().optional().default(false).describe('Push to remote after commit'),
       repo: z.string().optional().describe('Target repo name (multi-repo mode). Omit for primary repo.'),
+      force: z.boolean().optional().default(false).describe('Bypass the pre-commit sanity gate (diff-size warning + parser check). Set to true ONLY after re-reading any flagged file and confirming the change is intentional. Parser errors block even with force=true — they always mean the on-disk file is broken.'),
     },
-    withCallLog('kit_commit', async ({ session_id, message, cwd, push, repo }) => {
+    withCallLog('kit_commit', async ({ session_id, message, cwd, push, repo, force }) => {
       const worktree = binder.getWorktreePathForRepo(session_id, repo);
       if (!worktree) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown session or repo', session_id, repo }) }] };
@@ -346,6 +519,21 @@ export function registerTools(
 
       if (!deps.gitService) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Git service not available' }) }] };
+      }
+
+      // Pre-commit sanity gate — catches the f7f05bb-class truncation that
+      // pushed a 378-line broken ai_chat_service.py straight to Kemory main
+      // because nothing in the path noticed the file went from 1497 → 378.
+      const gate = await preCommitSanityCheck(worktree, session_id, !!force);
+      if (gate.block) {
+        deps.activityService?.log(session_id, 'warning', `Commit blocked by sanity gate: ${gate.reason}`, { source: 'mcp', toolName: 'kit_commit' });
+        return { content: [{ type: 'text', text: JSON.stringify({
+          error: 'Commit refused by sanity gate',
+          reason: gate.reason,
+          details: gate.details,
+          snapshot: gate.snapshotRef,
+          retry: gate.retryGuidance,
+        }) }] };
       }
 
       try {
@@ -446,8 +634,9 @@ export function registerTools(
       message: z.string().describe('Commit message (conventional commits format preferred)'),
       cwd: z.string().describe('Your current shell working directory (run `pwd`). REQUIRED — must be the session\'s primary worktree, or the call is rejected.'),
       push: z.boolean().optional().default(false).describe('Push to remote after each commit'),
+      force: z.boolean().optional().default(false).describe('Bypass the pre-commit sanity gate (diff-size warning) for ALL repos in this multi-repo commit. Parser errors still block even with force=true.'),
     },
-    withCallLog('kit_commit_all', async ({ session_id, message, cwd, push }) => {
+    withCallLog('kit_commit_all', async ({ session_id, message, cwd, push, force }) => {
       const repos = binder.getReposForSession(session_id);
       if (repos.length === 0) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown session', session_id }) }] };
@@ -459,6 +648,26 @@ export function registerTools(
 
       if (!deps.gitService) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Git service not available' }) }] };
+      }
+
+      // Sanity gate per repo. If ANY repo blocks, refuse the whole multi-repo
+      // commit — a partial commit across a multi-repo session leaves the
+      // ecosystem in a worse state than one with no commits at all.
+      const blockedRepos: Array<{ repoName: string; reason: string; details: unknown; snapshot?: string }> = [];
+      for (const r of repos) {
+        const wt = binder.getWorktreePathForRepo(session_id, r.repoName);
+        if (!wt) continue;
+        const gate = await preCommitSanityCheck(wt, session_id, !!force);
+        if (gate.block) {
+          blockedRepos.push({ repoName: r.repoName, reason: gate.reason || 'sanity gate', details: gate.details, snapshot: gate.snapshotRef });
+        }
+      }
+      if (blockedRepos.length > 0) {
+        deps.activityService?.log(session_id, 'warning', `kit_commit_all blocked by sanity gate (${blockedRepos.length} repo(s))`, { source: 'mcp', toolName: 'kit_commit_all' });
+        return { content: [{ type: 'text', text: JSON.stringify({
+          error: 'Commit refused by sanity gate in one or more repos — no repos committed.',
+          blockedRepos,
+        }) }] };
       }
 
       const results: Array<{ repoName: string; commitHash?: string; filesChanged?: number; pushed?: boolean; error?: string }> = [];

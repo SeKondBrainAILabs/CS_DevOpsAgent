@@ -901,6 +901,17 @@ ${DEVOPS_KIT_DIR}/
       // C6: link the main repo's .env into the worktree so the agent inherits env vars.
       await this.linkEnvIntoWorktree(config.repoPath, worktreeDir);
 
+      // Propagate the source repo's pre-commit hook to the worktree's gitdir so
+      // every KIT-initiated commit fires the project's existing hygiene. Worktree
+      // gitdirs have their OWN .git/hooks directory — if the project uses the
+      // `pre-commit` framework or husky, the hook is only installed in the
+      // SOURCE repo's gitdir by default. This is the gap that let Kemory's
+      // truncated ai_chat_service.py reach origin/main: kit_commit / merge auto-
+      // commits ran `git commit` in a worktree gitdir with no pre-commit hook
+      // physically present, so the project's parser/format/EOF checks silently
+      // didn't run. Best-effort — failure here doesn't block worktree creation.
+      await this.installPreCommitHookIntoWorktree(config.repoPath, worktreeDir);
+
       return worktreeDir;
     } catch (error) {
       console.warn(`[AgentInstanceService] Could not create worktree: ${error}`);
@@ -956,6 +967,66 @@ ${DEVOPS_KIT_DIR}/
       }
     } catch (err) {
       console.warn(`[AgentInstanceService] Could not link .env into worktree: ${err}`);
+    }
+  }
+
+  /**
+   * Copy the source repo's pre-commit hook script (if any) into the worktree's
+   * gitdir/hooks/ so KIT-initiated commits run the same checks. Worktrees have
+   * isolated `.git/hooks/` directories at `<source>/.git/worktrees/<wt>/hooks/`,
+   * so a hook installed by `pre-commit install` or `husky install` in the
+   * source repo only fires for commits made from the source's working tree —
+   * KIT-managed worktrees silently skip it. This is the gap that let Kemory's
+   * 1119-line truncation reach origin/main.
+   *
+   * Strategy: copy `<source>/.git/hooks/pre-commit` (the executable that
+   * `pre-commit install` / husky write) verbatim into the worktree's
+   * hooks dir. The script itself dispatches to `.pre-commit-config.yaml` or
+   * `.husky/pre-commit` so we don't need to know which tool is in use.
+   *
+   * Idempotent — if a hook is already present in the worktree gitdir we
+   * leave it alone (the user may have hand-customized it). Failure here is
+   * non-fatal: worktree creation still succeeds, the agent just doesn't get
+   * the hook safety net.
+   */
+  private async installPreCommitHookIntoWorktree(repoPath: string, worktreePath: string): Promise<void> {
+    try {
+      // Resolve the worktree's gitdir via `git rev-parse --git-dir` from
+      // inside the worktree — far more reliable than reconstructing the path
+      // from the basename (legacy `local_deploy/` worktrees don't match).
+      const gitDirRes = await execaCmd('git', ['rev-parse', '--git-dir'], { cwd: worktreePath });
+      const rawGitDir = gitDirRes.stdout.trim();
+      const wtGitDir = rawGitDir.startsWith('/') ? rawGitDir : join(worktreePath, rawGitDir);
+      const wtHooksDir = join(wtGitDir, 'hooks');
+      const wtPreCommit = join(wtHooksDir, 'pre-commit');
+
+      if (existsSync(wtPreCommit)) {
+        console.log(`[AgentInstanceService] Worktree pre-commit hook already present: ${wtPreCommit}`);
+        return;
+      }
+
+      // Source hook lives at <source>/.git/hooks/pre-commit after pre-commit or
+      // husky has been installed. If it doesn't exist, the project has no
+      // hooks configured and there's nothing to propagate.
+      const sourceGitDirRes = await execaCmd('git', ['rev-parse', '--git-common-dir'], { cwd: repoPath });
+      const rawSourceGitDir = sourceGitDirRes.stdout.trim();
+      const sourceGitDir = rawSourceGitDir.startsWith('/') ? rawSourceGitDir : join(repoPath, rawSourceGitDir);
+      const sourcePreCommit = join(sourceGitDir, 'hooks', 'pre-commit');
+
+      if (!existsSync(sourcePreCommit)) {
+        console.log(`[AgentInstanceService] No source pre-commit hook to install (${sourcePreCommit} missing)`);
+        return;
+      }
+
+      await mkdir(wtHooksDir, { recursive: true });
+      const fs = await import('fs/promises');
+      const contents = await fs.readFile(sourcePreCommit);
+      await fs.writeFile(wtPreCommit, contents, { mode: 0o755 });
+      console.log(`[AgentInstanceService] Installed pre-commit hook into worktree: ${wtPreCommit}`);
+    } catch (err) {
+      // Hook install failure is never fatal — the worktree should still come
+      // up. The KIT-side parser/diff gate provides defense-in-depth.
+      console.warn(`[AgentInstanceService] Could not install pre-commit hook into worktree: ${err}`);
     }
   }
 
@@ -1524,6 +1595,11 @@ ${DEVOPS_KIT_DIR}/
       await mkdir(dirname(worktreePath), { recursive: true });
       await execaCmd('git', ['worktree', 'add', '--force', worktreePath, branchName], { cwd: repoPath });
       console.log(`[AgentInstanceService] Repaired worktree at ${worktreePath} (branch ${branchName})`);
+      // Also re-install the project's pre-commit hook into the freshly
+      // materialized worktree gitdir. `git worktree add --force` doesn't
+      // copy hooks; without this, the repaired worktree commits with no
+      // project hook firing — same hole as the original create path.
+      await this.installPreCommitHookIntoWorktree(repoPath, worktreePath);
       return true;
     } catch (err) {
       console.warn(`[AgentInstanceService] Could not repair worktree at ${worktreePath}: ${err}`);

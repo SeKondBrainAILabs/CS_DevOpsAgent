@@ -526,23 +526,32 @@ export class WatcherService extends BaseService {
   }
 
   /**
-   * Safety-net periodic auto-commit. Agents don't always commit (and the prompt
-   * can't force them), so every PERIODIC_COMMIT_MS we commit any uncommitted work
-   * with a WIP message so nothing is lost. Skips when there's nothing to commit or
-   * when an agent-triggered commit is already in flight.
+   * Periodic safety-net snapshot. Replaces the old WIP periodic auto-commit
+   * (which polluted history AND, fatally, let truncated/broken files reach
+   * origin/main — see the Kemory ai_chat_service.py case in 2026-06).
+   *
+   * Every PERIODIC_COMMIT_MS we pin the worktree state (tracked + untracked)
+   * to `refs/kit-autosave/<sessionId>` via `git stash create` + `update-ref`.
+   * HEAD, the index, and `git log` are untouched. The pinned ref is reachable
+   * for crash recovery — `git diff refs/kit-autosave/<sessionId>` shows what
+   * the worktree looked like at last snapshot — without ever creating a
+   * commit, and so without ever bypassing pre-commit hooks or risking a push.
+   *
+   * Real commits stay agent-driven via `kit_commit` (which is gated by the
+   * parser + diff-size checks added alongside this change).
    */
   private startPeriodicCommit(instance: WatcherInstance): void {
     const key = instance.sessionId;
     const existing = this.periodicCommitTimers.get(key);
     if (existing) clearInterval(existing);
     const timer = setInterval(() => {
-      this.triggerPeriodicCommit(instance).catch((err) =>
-        console.warn(`[WatcherService] periodic commit failed for ${key}:`, err));
+      this.triggerPeriodicSnapshot(instance).catch((err) =>
+        console.warn(`[WatcherService] periodic snapshot failed for ${key}:`, err));
     }, WatcherService.PERIODIC_COMMIT_MS);
     this.periodicCommitTimers.set(key, timer);
   }
 
-  private async triggerPeriodicCommit(instance: WatcherInstance): Promise<void> {
+  private async triggerPeriodicSnapshot(instance: WatcherInstance): Promise<void> {
     const sessionId = instance.sessionId.includes(':')
       ? instance.sessionId.split(':')[0]
       : instance.sessionId;
@@ -552,35 +561,21 @@ export class WatcherService extends BaseService {
     // Don't race an agent-triggered commit that's debouncing.
     if (this.debounceTimers.has(sessionId)) return;
 
-    // Only commit when there's actually uncommitted work.
+    // Only snapshot when there's actually uncommitted work.
     const status = await this.gitService.getStatus(sessionId).catch(() => null);
     const changed = status?.data?.changes?.length || 0;
     if (!status?.success || changed === 0) return;
 
-    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
-    const baseMsg = `WIP: periodic auto-save (${stamp})`;
-    const commitMessage = instance.primaryRepoName
-      ? `[Upgrade From ${instance.primaryRepoName}] ${baseMsg}`
-      : baseMsg;
+    const snap = await this.gitService.createSnapshot(instance.worktreePath, sessionId);
+    if (!snap.success || !snap.data) return;
 
-    const result = await this.gitService.commit(sessionId, commitMessage, instance.repoName);
-    if (!result.success || !result.data) return;
-
-    const timestamp = new Date().toISOString();
-    this.activityService.log(sessionId, 'commit', `Periodic auto-save [${result.data.shortHash}] — ${changed} file(s)`);
-    this.emitToRenderer(IPC.COMMIT_COMPLETED, {
+    // Info-level activity log so the user can see snapshots happening without
+    // noise — kept quieter than the old 'commit' line.
+    this.activityService.log(
       sessionId,
-      commitHash: result.data.hash,
-      message: baseMsg,
-      filesChanged: changed,
-      timestamp,
-      repoName: instance.repoName,
-    });
-    try {
-      databaseService.recordCommit(result.data.hash, sessionId, baseMsg, timestamp, { filesChanged: changed });
-      databaseService.recordSessionEvent(sessionId, 'commit', { message: baseMsg, filesChanged: changed }, result.data.hash);
-    } catch { /* non-fatal */ }
-    try { this.activityService.linkToCommit(sessionId, result.data.hash); } catch { /* non-fatal */ }
+      'snapshot',
+      `Crash-safety snapshot saved (${changed} file${changed === 1 ? '' : 's'}) — recover via git checkout ${snap.data.refName}`
+    );
   }
 
   private async triggerCommit(instance: WatcherInstance, commitMsgFilePath?: string): Promise<void> {
