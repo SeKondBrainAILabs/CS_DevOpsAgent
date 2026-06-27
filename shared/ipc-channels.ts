@@ -70,6 +70,10 @@ export const IPC = {
   REPO_GET_WORKTREE_MODE: 'repo:get-worktree-mode',
   REPO_SET_WORKTREE_MODE: 'repo:set-worktree-mode',
   REPO_GET_ACTIVE_SESSION_COUNT: 'repo:get-active-session-count',
+  /** Truly-running session count (agent attached). Distinct from
+   * REPO_GET_ACTIVE_SESSION_COUNT which is lifecycle-broad (includes
+   * `waiting`) for the Single-Session Mode guard. */
+  REPO_GET_RUNNING_SESSION_COUNT: 'repo:get-running-session-count',
 
   // Workspaces (Epic A — multi-workspace, multi-repo discovery)
   WORKSPACE_LIST: 'workspace:list',
@@ -552,6 +556,7 @@ export const REQUEST_CHANNELS = [
   IPC.REPO_GET_WORKTREE_MODE,
   IPC.REPO_SET_WORKTREE_MODE,
   IPC.REPO_GET_ACTIVE_SESSION_COUNT,
+  IPC.REPO_GET_RUNNING_SESSION_COUNT,
   IPC.WORKSPACE_LIST,
   IPC.WORKSPACE_GET,
   IPC.WORKSPACE_ADD,

@@ -70,7 +70,7 @@ function generateAgentPrompt(agentType: AgentType, vars: InstructionVars): strin
 }
 import { generateSecondaryBranchName } from '../../shared/types';
 import { evaluateSingleSessionGuard } from '../../shared/single-session-guard';
-import { isActiveInstance } from '../../shared/instance-status';
+import { isActiveInstance, isRunningInstance } from '../../shared/instance-status';
 import { planEnvSymlink } from '../../shared/env-symlink-plan';
 import { symlink, lstat } from 'fs/promises';
 import type { TerminalLogService } from './TerminalLogService';
@@ -179,10 +179,29 @@ export class AgentInstanceService extends BaseService {
   }
 
   /**
-   * IPC-friendly count of active sessions for a repo.
+   * IPC-friendly count of lifecycle-active sessions for a repo.
+   * Used by the Single-Session Mode guard (a `waiting` session has claimed
+   * the slot and a second one would conflict) — must include statuses the
+   * user-facing "running" badge excludes.
    */
   getActiveSessionCountForRepo(repoPath: string): IpcResult<number> {
     return { success: true, data: this.getActiveSessionsForRepo(repoPath).length };
+  }
+
+  /**
+   * Count of truly-running sessions (an agent is attached and working) for a
+   * repo. Distinct from `getActiveSessionCountForRepo` which includes
+   * `waiting`/`pending`/`initializing` — the broader set the SSM guard needs.
+   * The repo card surfaces THIS number as "N active" because users read it
+   * as "N agents actually working", not "N session records on disk".
+   * Without this distinction, agent_memory_vault showed "6 active" when 5
+   * of those were waiting-but-never-connected and only 1 had a live agent.
+   */
+  getRunningSessionCountForRepo(repoPath: string): IpcResult<number> {
+    const runningCount = Array.from(this.instances.values()).filter(
+      (inst) => inst.config.repoPath === repoPath && isRunningInstance(inst)
+    ).length;
+    return { success: true, data: runningCount };
   }
 
   constructor() {

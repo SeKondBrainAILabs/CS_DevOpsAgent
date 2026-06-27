@@ -401,6 +401,9 @@ const api = {
 
     getActiveSessionCount: (repoPath: string): Promise<IpcResult<number>> =>
       ipcRenderer.invoke(IPC.REPO_GET_ACTIVE_SESSION_COUNT, repoPath),
+
+    getRunningSessionCount: (repoPath: string): Promise<IpcResult<number>> =>
+      ipcRenderer.invoke(IPC.REPO_GET_RUNNING_SESSION_COUNT, repoPath),
   },
 
   // ==========================================================================

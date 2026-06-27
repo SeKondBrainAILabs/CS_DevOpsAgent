@@ -217,6 +217,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.agentInstance.getActiveSessionCountForRepo(repoPath);
   });
 
+  ipcMain.handle(IPC.REPO_GET_RUNNING_SESSION_COUNT, async (_, repoPath: string) => {
+    return services.agentInstance.getRunningSessionCountForRepo(repoPath);
+  });
+
   // Workspaces (Epic A / story A1)
   ipcMain.handle(IPC.WORKSPACE_LIST, async () => services.workspace.list());
   ipcMain.handle(IPC.WORKSPACE_GET, async (_, id: string) => services.workspace.get(id));
