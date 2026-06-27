@@ -448,18 +448,27 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return await services.agentInstance.deleteSessionById(sessionId, repoPath);
   });
 
-  ipcMain.handle(IPC.INSTANCE_DELETE_SAFETY_CHECK, async (_, sessionId: string) => {
-    return services.agentInstance.getDeleteSafetyInfo(sessionId);
+  ipcMain.handle(IPC.INSTANCE_DELETE_SAFETY_CHECK, async (
+    _,
+    sessionId: string,
+    hints?: { repoPath?: string; branchName?: string }
+  ) => {
+    return services.agentInstance.getDeleteSafetyInfo(sessionId, hints);
   });
 
-  ipcMain.handle(IPC.INSTANCE_DELETE_WITH_CLEANUP, async (_, sessionId: string, options: {
-    deleteWorktree?: boolean;
-    deleteLocalBranch?: boolean;
-    deleteRemoteBranch?: boolean;
-  }) => {
+  ipcMain.handle(IPC.INSTANCE_DELETE_WITH_CLEANUP, async (
+    _,
+    sessionId: string,
+    options: {
+      deleteWorktree?: boolean;
+      deleteLocalBranch?: boolean;
+      deleteRemoteBranch?: boolean;
+    },
+    hints?: { repoPath?: string; branchName?: string; worktreePath?: string }
+  ) => {
     // Stop watcher before deleting
     await services.watcher.stop(sessionId).catch(() => {});
-    return await services.agentInstance.deleteInstanceWithCleanup(sessionId, options);
+    return await services.agentInstance.deleteInstanceWithCleanup(sessionId, options, hints);
   });
 
   ipcMain.handle(IPC.INSTANCE_RESTART, async (_, sessionId: string, sessionData?: {

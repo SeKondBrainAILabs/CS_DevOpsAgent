@@ -2166,7 +2166,40 @@ ${DEVOPS_KIT_DIR}/
    * Pre-delete safety check: returns info about worktree, uncommitted changes,
    * unpushed commits, and remote branch existence so the UI can show warnings.
    */
-  async getDeleteSafetyInfo(sessionId: string): Promise<IpcResult<{
+  /**
+   * Resolve a sessionId to an instance, falling back to (repoPath, branchName)
+   * when the in-memory map doesn't have a direct sessionId match. Required
+   * because SessionReports loaded from disk often carry sessionIds from an
+   * earlier lifecycle (pre-restart, pre-purge) that no longer exist in the
+   * live map. Without this fallback, every Delete on such a session returns
+   * "Session not found" and the user has to do filesystem surgery manually.
+   *
+   * Returns the matched instance (and its in-memory id) or null. Callers
+   * still need their own NOT_FOUND branch for the truly-orphaned case where
+   * even the (repo, branch) lookup misses — that's the "ghost delete" path.
+   */
+  private resolveInstanceForDelete(
+    sessionId: string,
+    hints?: { repoPath?: string; branchName?: string }
+  ): { id: string; instance: AgentInstance } | null {
+    for (const [id, inst] of this.instances) {
+      if (inst.sessionId === sessionId) return { id, instance: inst };
+    }
+    if (hints?.repoPath && hints?.branchName) {
+      for (const [id, inst] of this.instances) {
+        if (inst.config?.repoPath === hints.repoPath &&
+            inst.config?.branchName === hints.branchName) {
+          return { id, instance: inst };
+        }
+      }
+    }
+    return null;
+  }
+
+  async getDeleteSafetyInfo(
+    sessionId: string,
+    hints?: { repoPath?: string; branchName?: string }
+  ): Promise<IpcResult<{
     hasWorktree: boolean;
     worktreePath: string | null;
     hasUncommittedChanges: boolean;
@@ -2175,23 +2208,29 @@ ${DEVOPS_KIT_DIR}/
     branchName: string;
     repoPath: string;
   }>> {
-    // Find instance by sessionId
-    let instance: AgentInstance | undefined;
-    for (const inst of this.instances.values()) {
-      if (inst.sessionId === sessionId) {
-        instance = inst;
-        break;
-      }
-    }
+    // Resolve via sessionId first, fall back to (repoPath, branchName) hints
+    // so a stale sessionId on a SessionReport doesn't block delete.
+    const resolved = this.resolveInstanceForDelete(sessionId, hints);
+    let repoPath: string;
+    let branchName: string;
+    let worktreePath: string | null;
 
-    if (!instance) {
-      return { success: false, error: { code: 'NOT_FOUND', message: 'Session not found' } };
+    if (resolved) {
+      repoPath = resolved.instance.config.repoPath;
+      branchName = resolved.instance.config.branchName;
+      worktreePath = resolved.instance.worktreePath && resolved.instance.worktreePath !== repoPath
+        ? resolved.instance.worktreePath : null;
+    } else if (hints?.repoPath && hints?.branchName) {
+      // Ghost-mode safety check: no in-memory instance, but we know which
+      // (repo, branch) this session refers to. We can still do all the git
+      // checks against the user-provided paths. Worktree path is unknown
+      // here — the cleanup call will derive it from the worktree registry.
+      repoPath = hints.repoPath;
+      branchName = hints.branchName;
+      worktreePath = null;
+    } else {
+      return { success: false, error: { code: 'NOT_FOUND', message: 'Session not found and no (repoPath, branchName) hint provided. Re-open the session list and try again.' } };
     }
-
-    const repoPath = instance.config.repoPath;
-    const branchName = instance.config.branchName;
-    const worktreePath = instance.worktreePath && instance.worktreePath !== repoPath
-      ? instance.worktreePath : null;
 
     let hasUncommittedChanges = false;
     let unpushedCommitCount = 0;
@@ -2236,27 +2275,39 @@ ${DEVOPS_KIT_DIR}/
    */
   async deleteInstanceWithCleanup(
     sessionId: string,
-    options: { deleteWorktree?: boolean; deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean }
+    options: { deleteWorktree?: boolean; deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean },
+    hints?: { repoPath?: string; branchName?: string; worktreePath?: string }
   ): Promise<IpcResult<void>> {
-    // Find instance by sessionId
+    // Resolve via sessionId, then (repo, branch) hints, then ghost-mode if
+    // even hints alone are enough to do filesystem cleanup. The "Session not
+    // found" hardstop here was the user-visible bug: stale SessionReports
+    // carry sessionIds that no longer match the live map, and the only way
+    // out was manual git surgery.
+    const resolved = this.resolveInstanceForDelete(sessionId, hints);
+
     let instanceId: string | undefined;
-    let instance: AgentInstance | undefined;
-    for (const [id, inst] of this.instances) {
-      if (inst.sessionId === sessionId) {
-        instanceId = id;
-        instance = inst;
-        break;
-      }
-    }
+    let repoPath: string;
+    let branchName: string;
+    let worktreePath: string | null;
 
-    if (!instance || !instanceId) {
-      return { success: false, error: { code: 'NOT_FOUND', message: 'Session not found' } };
+    if (resolved) {
+      instanceId = resolved.id;
+      repoPath = resolved.instance.config.repoPath;
+      branchName = resolved.instance.config.branchName;
+      worktreePath = resolved.instance.worktreePath && resolved.instance.worktreePath !== repoPath
+        ? resolved.instance.worktreePath : null;
+    } else if (hints?.repoPath && hints?.branchName) {
+      // Ghost-mode delete: no in-memory instance, but the UI knows the
+      // (repo, branch) — just clean what's on disk. instanceId stays
+      // undefined; we'll skip the deleteInstance() bookkeeping call at the
+      // end since there's nothing to delete from electron-store.
+      repoPath = hints.repoPath;
+      branchName = hints.branchName;
+      worktreePath = hints.worktreePath || null;
+      console.log(`[AgentInstanceService] Ghost-mode delete for ${sessionId} (no in-memory instance) — operating on ${repoPath} branch ${branchName}`);
+    } else {
+      return { success: false, error: { code: 'NOT_FOUND', message: 'Session not found and no (repoPath, branchName) hint provided.' } };
     }
-
-    const repoPath = instance.config.repoPath;
-    const branchName = instance.config.branchName;
-    const worktreePath = instance.worktreePath && instance.worktreePath !== repoPath
-      ? instance.worktreePath : null;
 
     // 1. Remove worktree first (must happen before branch delete)
     if (options.deleteWorktree && worktreePath) {
@@ -2291,8 +2342,22 @@ ${DEVOPS_KIT_DIR}/
       }
     }
 
-    // 4. Delete the instance itself (files, state, etc.)
-    return this.deleteInstance(instanceId);
+    // 4. Delete the instance itself (files, state, etc.) — only if we had
+    // an in-memory instance. Ghost-mode delete already finished the on-disk
+    // cleanup above and has nothing to remove from electron-store.
+    if (instanceId) {
+      return this.deleteInstance(instanceId);
+    }
+
+    // Ghost-mode: still attempt to delete session files on disk by sessionId,
+    // since SessionReports come from those files and the user will keep
+    // seeing the entry in the list until they're gone.
+    try {
+      await this.deleteSessionFilesFromDiskBySessionId(sessionId, repoPath);
+    } catch (err) {
+      console.warn(`[AgentInstanceService] Ghost-mode delete: failed to clean session files: ${err}`);
+    }
+    return { success: true, data: undefined };
   }
 
   /**

@@ -673,7 +673,7 @@ const api = {
     deleteSession: (sessionId: string, repoPath?: string): Promise<IpcResult<void>> =>
       ipcRenderer.invoke(IPC.INSTANCE_DELETE_SESSION, sessionId, repoPath),
 
-    deleteSafetyCheck: (sessionId: string): Promise<IpcResult<{
+    deleteSafetyCheck: (sessionId: string, hints?: { repoPath?: string; branchName?: string }): Promise<IpcResult<{
       hasWorktree: boolean;
       worktreePath: string | null;
       hasUncommittedChanges: boolean;
@@ -682,14 +682,18 @@ const api = {
       branchName: string;
       repoPath: string;
     }>> =>
-      ipcRenderer.invoke(IPC.INSTANCE_DELETE_SAFETY_CHECK, sessionId),
+      ipcRenderer.invoke(IPC.INSTANCE_DELETE_SAFETY_CHECK, sessionId, hints),
 
-    deleteWithCleanup: (sessionId: string, options: {
-      deleteWorktree?: boolean;
-      deleteLocalBranch?: boolean;
-      deleteRemoteBranch?: boolean;
-    }): Promise<IpcResult<void>> =>
-      ipcRenderer.invoke(IPC.INSTANCE_DELETE_WITH_CLEANUP, sessionId, options),
+    deleteWithCleanup: (
+      sessionId: string,
+      options: {
+        deleteWorktree?: boolean;
+        deleteLocalBranch?: boolean;
+        deleteRemoteBranch?: boolean;
+      },
+      hints?: { repoPath?: string; branchName?: string; worktreePath?: string }
+    ): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke(IPC.INSTANCE_DELETE_WITH_CLEANUP, sessionId, options, hints),
 
     restart: (sessionId: string, sessionData?: {
       repoPath: string;
