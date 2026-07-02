@@ -50,9 +50,21 @@ export class WatcherService extends BaseService {
   private agentInstanceService: AgentInstanceService | null = null;
   private lockService: LockService | null = null;
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
-  // Periodic safety-net auto-commit timers (key = compound watcher key).
+  // Periodic safety-net snapshot timers (key = compound watcher key).
   private periodicCommitTimers: Map<string, NodeJS.Timeout> = new Map();
-  private static readonly PERIODIC_COMMIT_MS = 5 * 60 * 1000; // commit WIP every 5 min when dirty
+  private static readonly PERIODIC_COMMIT_MS = 5 * 60 * 1000; // snapshot every 5 min when dirty
+  // Idle-end detection state. When an agent makes a burst of writes and then
+  // goes quiet, that's a natural checkpoint — we log it to the activity feed
+  // and (in the future) can nudge the agent to commit.
+  private writeHistory: Map<string, number[]> = new Map(); // sessionId → recent timestamps
+  private lastIdleEndAt: Map<string, number> = new Map();  // sessionId → last idle-end tick
+  private idleEndTimer: NodeJS.Timeout | null = null;
+  private static readonly IDLE_END_TICK_MS = 60 * 1000;
+  private static readonly IDLE_END_QUIET_MS = 5 * 60 * 1000;
+  private static readonly IDLE_END_BURST_WINDOW_MS = 30 * 60 * 1000;
+  private static readonly IDLE_END_MIN_WRITES = 3;
+  /** Don't emit two idle-end notifications for the same session within 15 min. */
+  private static readonly IDLE_END_COOLDOWN_MS = 15 * 60 * 1000;
 
   // Phase 4: Analysis services for incremental analysis
   private astParser: ASTParserService | null = null;
@@ -270,6 +282,7 @@ export class WatcherService extends BaseService {
 
         this.watchers.set(sessionId, instance);
         this.startPeriodicCommit(instance);
+        this.startIdleEndTimer();
         this.workerBridge.startFileMonitor(sessionId, worktreePath, commitMsgFile, claudeCommitMsgFile);
         console.log(`[WatcherService] Delegated file monitoring to worker for ${sessionId}`);
         this.activityService.log(sessionId, 'success', `File watcher started (worker process) for ${worktreePath}`);
@@ -478,6 +491,18 @@ export class WatcherService extends BaseService {
       return;
     }
 
+    // Track for idle-end detection. Only 'change' / 'add' count as real work;
+    // 'unlink' can be part of a burst too so include it. Bounded — we cap at
+    // 100 entries per session and drop anything older than the burst window.
+    if (type === 'change' || type === 'add' || type === 'unlink') {
+      const now = Date.now();
+      const cutoff = now - WatcherService.IDLE_END_BURST_WINDOW_MS;
+      const hist = (this.writeHistory.get(sessionId) || []).filter(t => t > cutoff);
+      hist.push(now);
+      if (hist.length > 100) hist.splice(0, hist.length - 100);
+      this.writeHistory.set(sessionId, hist);
+    }
+
     // Emit file change event
     const event: FileChangeEvent = {
       sessionId,
@@ -549,6 +574,66 @@ export class WatcherService extends BaseService {
         console.warn(`[WatcherService] periodic snapshot failed for ${key}:`, err));
     }, WatcherService.PERIODIC_COMMIT_MS);
     this.periodicCommitTimers.set(key, timer);
+  }
+
+  /**
+   * Periodic idle-end evaluator. Runs on a single shared timer (not per-session)
+   * so we don't multiply timer overhead by session count. For each active
+   * watcher, checks: was there a burst of writes AND has the agent been quiet
+   * for IDLE_END_QUIET_MS? If yes, and not on cooldown, emit an activity feed
+   * entry AND fire an extra snapshot pinned to `refs/kit-idle-end/<sessionId>`
+   * so the burst-end state is separately recoverable from the rolling
+   * kit-autosave ref (which the next periodic snapshot would overwrite).
+   *
+   * Deliberately does NOT auto-commit. Real commits stay agent-driven via
+   * kit_commit (which enforces the parser + diff-size gates). Auto-committing
+   * on burst-end would tempt a broken snapshot into `git log`.
+   */
+  private startIdleEndTimer(): void {
+    if (this.idleEndTimer) return;
+    this.idleEndTimer = setInterval(() => {
+      this.evaluateIdleEnd().catch(err => console.warn('[WatcherService] idle-end eval failed:', err));
+    }, WatcherService.IDLE_END_TICK_MS);
+  }
+
+  private async evaluateIdleEnd(): Promise<void> {
+    const now = Date.now();
+    // Distinct sessionIds first (a session may have multiple compound watchers
+    // in multi-repo mode; we only nudge once per session).
+    const sessionsSeen = new Set<string>();
+    for (const [key, instance] of this.watchers) {
+      const sessionId = key.includes(':') ? key.split(':')[0] : key;
+      if (sessionsSeen.has(sessionId)) continue;
+      sessionsSeen.add(sessionId);
+
+      const hist = this.writeHistory.get(sessionId);
+      if (!hist || hist.length < WatcherService.IDLE_END_MIN_WRITES) continue;
+      const lastWrite = hist[hist.length - 1];
+      if (now - lastWrite < WatcherService.IDLE_END_QUIET_MS) continue; // still active
+      const lastNudge = this.lastIdleEndAt.get(sessionId) || 0;
+      if (now - lastNudge < WatcherService.IDLE_END_COOLDOWN_MS) continue; // cooldown
+
+      // Idle-end confirmed. Pin an extra snapshot to a dedicated ref namespace
+      // so the burst-end state doesn't get overwritten by the next periodic
+      // kit-autosave snapshot.
+      try {
+        const snap = await this.gitService.createSnapshot(instance.worktreePath, `${sessionId}-idle-end`);
+        this.lastIdleEndAt.set(sessionId, now);
+        this.writeHistory.set(sessionId, []); // reset burst so we don't re-fire immediately
+        const nWrites = hist.length;
+        const quietMin = Math.round((now - lastWrite) / 60_000);
+        const refHint = snap.success && snap.data ? snap.data.refName : null;
+        this.activityService.log(
+          sessionId,
+          'snapshot',
+          `Idle-end detected — ${nWrites} write(s) in the last burst, quiet ${quietMin} min. ` +
+          (refHint ? `Burst-end snapshot: git checkout ${refHint}. ` : '') +
+          `Consider calling kit_commit to lock in progress.`
+        );
+      } catch (err) {
+        console.warn(`[WatcherService] idle-end snapshot failed for ${sessionId}:`, err);
+      }
+    }
   }
 
   private async triggerPeriodicSnapshot(instance: WatcherInstance): Promise<void> {

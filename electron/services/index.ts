@@ -349,6 +349,10 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // flag when the rebase state is gone.
   await agentInstance.detectStaleRebases();
 
+  // Prune crash-safety snapshot refs (refs/kit-autosave/*) older than 7d.
+  // Snapshots are pure recovery aids and accumulate unboundedly without GC.
+  await agentInstance.gcOldSnapshots();
+
   // Repatriate any `mcp_calls` stranded under previous-restart sessionIds. A
   // builds-before-v2.6.58 transferSessionData omitted mcp_calls, so the MCP
   // tab went blank after the first auto-restart. Idempotent.

@@ -59,6 +59,86 @@ const SHRINK_PCT_THRESHOLD = 0.5;
  *  shrink during refactors and would create false positives. */
 const SHRINK_MIN_LINES = 300;
 
+/**
+ * Cheap structural sanity check for TS/TSX/JSX (and anything else parser-check
+ * can't handle). Not a real parser — catches the truncation/conflict-marker
+ * class of breakage that KIT itself introduced (f7f05bb, Kanvas auto-merge
+ * mangles) at ~1ms per file. Returns null when the file looks structurally
+ * sound; a short error string when it's obviously broken.
+ *
+ * Checks:
+ *   - No leftover conflict markers (<<<<<<< / ======= / >>>>>>> at line start)
+ *   - Balanced brackets and parens, respecting strings and comments
+ *   - No unterminated single-quoted / double-quoted / template string at EOF
+ *
+ * Deliberately conservative — we'd rather miss a subtle bug than false-positive
+ * on legitimate code. Balanced-braces on a small file can be wrong (macros,
+ * dedented strings) so keep this to modest false-positive risk.
+ */
+function structuralSanityCheck(content: string): string | null {
+  // 1. Leftover merge-conflict markers
+  const lines = content.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (l.startsWith('<<<<<<<') || l.startsWith('=======') && lines[i].length === 7 || l.startsWith('>>>>>>>')) {
+      // Skip the '=======' one — it collides too often with divider comments.
+      // Only fire on <<<<<<< / >>>>>>> which are unambiguous.
+      if (l.startsWith('<<<<<<<') || l.startsWith('>>>>>>>')) {
+        return `unresolved conflict marker at line ${i + 1}: ${l.slice(0, 40)}`;
+      }
+    }
+  }
+
+  // 2. Bracket balance + string-terminator tracking. Single-pass character
+  //    machine that respects //, /* */, ' ', " ", and template literals.
+  let depthBrace = 0, depthParen = 0, depthBracket = 0;
+  let inLine = false; // //-comment
+  let inBlock = false; // /* */
+  let inSingle = false, inDouble = false, inTemplate = false;
+  let templateExprDepth = 0; // ${...} inside template
+
+  for (let i = 0; i < content.length; i++) {
+    const c = content[i];
+    const n = content[i + 1];
+    if (inLine) { if (c === '\n') inLine = false; continue; }
+    if (inBlock) { if (c === '*' && n === '/') { inBlock = false; i++; } continue; }
+    if (inSingle) { if (c === '\\') { i++; continue; } if (c === "'") inSingle = false; if (c === '\n') return `unterminated single-quoted string near line ${content.slice(0, i).split('\n').length}`; continue; }
+    if (inDouble) { if (c === '\\') { i++; continue; } if (c === '"') inDouble = false; if (c === '\n') return `unterminated double-quoted string near line ${content.slice(0, i).split('\n').length}`; continue; }
+    if (inTemplate) {
+      if (c === '\\') { i++; continue; }
+      if (c === '`' && templateExprDepth === 0) { inTemplate = false; continue; }
+      if (c === '$' && n === '{') { templateExprDepth++; i++; continue; }
+      if (c === '}' && templateExprDepth > 0) { templateExprDepth--; continue; }
+      // Inside ${...} we still fall through so brackets in the expression
+      // are balanced — but only when templateExprDepth > 0 does '}' pop the
+      // expression rather than the outer stack. Skip the outer bracket
+      // machine for characters inside the template body.
+      continue;
+    }
+    // Not inside any quote / comment
+    if (c === '/' && n === '/') { inLine = true; i++; continue; }
+    if (c === '/' && n === '*') { inBlock = true; i++; continue; }
+    if (c === "'") { inSingle = true; continue; }
+    if (c === '"') { inDouble = true; continue; }
+    if (c === '`') { inTemplate = true; continue; }
+    if (c === '{') depthBrace++;
+    else if (c === '}') { depthBrace--; if (depthBrace < 0) return `unmatched '}' near line ${content.slice(0, i).split('\n').length}`; }
+    else if (c === '(') depthParen++;
+    else if (c === ')') { depthParen--; if (depthParen < 0) return `unmatched ')' near line ${content.slice(0, i).split('\n').length}`; }
+    else if (c === '[') depthBracket++;
+    else if (c === ']') { depthBracket--; if (depthBracket < 0) return `unmatched ']' near line ${content.slice(0, i).split('\n').length}`; }
+  }
+
+  if (inSingle) return 'unterminated single-quoted string at EOF';
+  if (inDouble) return 'unterminated double-quoted string at EOF';
+  if (inTemplate) return 'unterminated template literal at EOF';
+  if (inBlock) return 'unterminated /* */ comment at EOF';
+  if (depthBrace !== 0) return `unbalanced braces (${depthBrace > 0 ? '+' : ''}${depthBrace}) at EOF — file may be truncated`;
+  if (depthParen !== 0) return `unbalanced parens (${depthParen > 0 ? '+' : ''}${depthParen}) at EOF — file may be truncated`;
+  if (depthBracket !== 0) return `unbalanced brackets (${depthBracket > 0 ? '+' : ''}${depthBracket}) at EOF — file may be truncated`;
+  return null;
+}
+
 /** Interface for the McpServerService to log calls */
 interface McpCallLogger {
   addCallLogEntry(entry: McpCallLogEntry): void;
@@ -147,22 +227,33 @@ export function registerTools(
       } else if (ext === 'js' || ext === 'mjs' || ext === 'cjs') {
         cmd = { bin: 'node', args: ['--check', abs] };
       }
-      // .ts/.tsx/.jsx: skipped — tsc is too heavy as a per-commit gate and
-      // node --check rejects all TS syntax. Future work: optional swc/esbuild
-      // syntactic check if available in the worktree.
-      if (!cmd) continue;
-      try {
-        if (!_execa) {
-          const mod: any = await import('execa');
-          _execa = typeof mod.execa === 'function' ? mod.execa
-            : typeof mod.default === 'function' ? mod.default
-            : mod.default?.execa;
+      // TS/TSX/JSX have no cheap parser here (tsc is too heavy, node --check
+      // rejects TS syntax). Fall through to the structural check below.
+      if (cmd) {
+        try {
+          if (!_execa) {
+            const mod: any = await import('execa');
+            _execa = typeof mod.execa === 'function' ? mod.execa
+              : typeof mod.default === 'function' ? mod.default
+              : mod.default?.execa;
+          }
+          await _execa!(cmd.bin, cmd.args, { cwd: worktreePath, timeout: 5_000 });
+        } catch (err: any) {
+          const stderr = (err?.stderr || err?.message || '').toString();
+          parseFailures.push({ file: rel, error: stderr.split('\n').slice(0, 4).join('\n') });
+          continue;
         }
-        await _execa!(cmd.bin, cmd.args, { cwd: worktreePath, timeout: 5_000 });
-      } catch (err: any) {
-        const stderr = (err?.stderr || err?.message || '').toString();
-        parseFailures.push({ file: rel, error: stderr.split('\n').slice(0, 4).join('\n') });
       }
+
+      // Structural sanity check — runs for TS/TSX/JSX (where we have no
+      // parser) AND as a second pass on JS/Py files (parsers can occasionally
+      // accept legitimately-truncated files). ~1ms/file, no subprocess.
+      try {
+        const fs = await import('fs/promises');
+        const content = await fs.readFile(abs, 'utf8');
+        const problem = structuralSanityCheck(content);
+        if (problem) parseFailures.push({ file: rel, error: `structural: ${problem}` });
+      } catch { /* best-effort */ }
     }
 
     if (parseFailures.length > 0) {

@@ -2048,6 +2048,57 @@ ${DEVOPS_KIT_DIR}/
   }
 
   /**
+   * Garbage-collect crash-safety snapshots. `WatcherService.triggerPeriodicSnapshot`
+   * pins worktree state to `refs/kit-autosave/<sessionId>` every 5 min; without
+   * pruning, these refs accumulate forever (each is a stash commit + tree,
+   * potentially megabytes for large worktrees). Prunes refs older than
+   * SNAPSHOT_TTL_DAYS. Safe: real work is on session branches, not autosave
+   * refs; the refs are pure crash-recovery. Runs on startup only for now —
+   * a daily timer would be nicer but 7-day TTL doesn't need it.
+   */
+  async gcOldSnapshots(): Promise<number> {
+    const SNAPSHOT_TTL_DAYS = 7;
+    const cutoffSec = Math.floor(Date.now() / 1000) - SNAPSHOT_TTL_DAYS * 86400;
+    let pruned = 0;
+
+    // Group instances by repoPath (worktrees share a common gitdir per repo)
+    // so we scan each source repo's ref namespace once.
+    const seenRepos = new Set<string>();
+    for (const inst of this.instances.values()) {
+      const repoPath = inst.config?.repoPath;
+      if (!repoPath || seenRepos.has(repoPath)) continue;
+      seenRepos.add(repoPath);
+      if (!existsSync(repoPath)) continue;
+      try {
+        // for-each-ref gives us `<sha> <committer-timestamp> <refname>`.
+        // Autosave refs are the same across worktrees of the same repo since
+        // they share the common gitdir.
+        const listed = await execaCmd('git', [
+          'for-each-ref',
+          '--format=%(objectname)%09%(committerdate:unix)%09%(refname)',
+          'refs/kit-autosave/',
+        ], { cwd: repoPath });
+        const lines = listed.stdout.split('\n').filter(Boolean);
+        for (const line of lines) {
+          const [, tsStr, ref] = line.split('\t');
+          const ts = parseInt(tsStr, 10);
+          if (!Number.isFinite(ts) || ts >= cutoffSec) continue;
+          try {
+            await execaCmd('git', ['update-ref', '-d', ref], { cwd: repoPath });
+            pruned++;
+          } catch (err) {
+            console.warn(`[AgentInstanceService] Failed to prune ${ref}: ${err}`);
+          }
+        }
+      } catch { /* repo may not have any autosave refs — fine */ }
+    }
+    if (pruned > 0) {
+      console.log(`[AgentInstanceService] GC'd ${pruned} stale autosave snapshot ref(s) (>${SNAPSHOT_TTL_DAYS}d)`);
+    }
+    return pruned;
+  }
+
+  /**
    * One-click rebase repair: back up the current tip + pre-rebase tip to
    * `backup/<sessionId>-pre-abort-HEAD` and `backup/<sessionId>-pre-rebase-tip`,
    * then `git rebase --abort`. Clears the `staleRebase` flag on success.
