@@ -23,6 +23,8 @@ import type { CommitAnalysisService } from './CommitAnalysisService';
 import type { WorkerBridgeService } from './WorkerBridgeService';
 import type { RebaseWatcherService } from './RebaseWatcherService';
 import { databaseService } from './DatabaseService';
+import { evaluateAutoCommitGuardForWorktree } from './GitRewriteGuardIO';
+import { formatWipCommitMessage } from '../../shared/wip-commit-marker';
 import type { AgentType } from '../../shared/types';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { promises as fs } from 'fs';
@@ -552,16 +554,30 @@ export class WatcherService extends BaseService {
     // Don't race an agent-triggered commit that's debouncing.
     if (this.debounceTimers.has(sessionId)) return;
 
+    // SAFETY: never auto-commit during a rebase / merge / cherry-pick /
+    // bisect / detached HEAD, or while a history-rewrite lockfile is held.
+    // Committing then is what silently orphans real work when a rebase is
+    // in flight (KIT auto-commit + rebase race incident).
+    const guard = evaluateAutoCommitGuardForWorktree(instance.worktreePath);
+    if (!guard.allowed) {
+      console.warn(
+        `[WatcherService] Periodic auto-save skipped for ${sessionId}: ${guard.kind} — ${guard.message}`
+      );
+      return;
+    }
+
     // Only commit when there's actually uncommitted work.
     const status = await this.gitService.getStatus(sessionId).catch(() => null);
     const changed = status?.data?.changes?.length || 0;
     if (!status?.success || changed === 0) return;
 
-    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
-    const baseMsg = `WIP: periodic auto-save (${stamp})`;
-    const commitMessage = instance.primaryRepoName
-      ? `[Upgrade From ${instance.primaryRepoName}] ${baseMsg}`
-      : baseMsg;
+    const scopePrefix = instance.primaryRepoName
+      ? `[Upgrade From ${instance.primaryRepoName}]`
+      : undefined;
+    const commitMessage = formatWipCommitMessage({ scopePrefix });
+    // For the activity feed + telemetry we still want a short "baseMsg" for
+    // display; strip the trailer.
+    const baseMsg = commitMessage.split('\n')[0];
 
     const result = await this.gitService.commit(sessionId, commitMessage, instance.repoName);
     if (!result.success || !result.data) return;
