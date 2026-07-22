@@ -1971,6 +1971,7 @@ const api = {
         deleteLocalBranch?: boolean;
         deleteRemoteBranch?: boolean;
         worktreePath?: string;
+        skipCiGate?: boolean;
       }
     ): Promise<IpcResult<{
       success: boolean;
@@ -1980,6 +1981,8 @@ const api = {
       conflictingFiles?: string[];
       stashRecovered?: boolean;
       stashConflictFiles?: string[];
+      gateReason?: 'CI_RED' | 'CI_PENDING' | 'WIP_COMMITS' | 'GH_UNAVAILABLE' | 'CI_UNKNOWN';
+      gateDetails?: unknown;
     }>> =>
       ipcRenderer.invoke(IPC.MERGE_EXECUTE, repoPath, sourceBranch, targetBranch, options),
 

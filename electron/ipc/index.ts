@@ -1306,6 +1306,7 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     deleteLocalBranch?: boolean;
     deleteRemoteBranch?: boolean;
     worktreePath?: string;
+    skipCiGate?: boolean;
   }) => {
     return services.merge.executeMerge(repoPath, sourceBranch, targetBranch, options);
   });

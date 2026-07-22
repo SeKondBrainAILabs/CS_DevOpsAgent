@@ -93,6 +93,19 @@ Then respond with:
 ✓ MCP tools available: [yes/no — confirm you see: kit_commit, kit_commit_all, kit_get_session_info, kit_log_activity, kit_lock_file, kit_unlock_file, kit_get_commit_history, kit_request_review]
 ✓ kit_log_activity registration call succeeded: [yes/no — required from Step 0 above]` : ''}
 
+## 🛑 MERGE POLICY — MAIN IS PROTECTED (S9N-6394)
+**You may NEVER merge into \`main\` / \`master\` (direct push OR PR) unless CI is green.**
+
+Before any merge into main:
+1. Run \`gh pr checks <PR-number>\` (or \`gh run list --branch <source-branch> --limit 1\`)
+2. Every required check must be \`SUCCESS\`. **PENDING or FAILURE = stop.**
+3. Never merge a \`WIP:\` / \`[Kanvas]\` / \`[Kanvas Restart]\` auto-checkpoint commit into main. Squash/interactive-rebase to clean tips first.
+4. After merge, verify: \`gh run watch --exit-status\` on the triggered main run. If it goes red, **revert immediately** (\`git revert <merge-sha> && git push\`).
+
+The KIT MergeService also enforces this at the code level — a red or pending CI blocks \`merge:execute\` and returns an error. But the prompt rule is the primary contract; the code gate is belt-and-suspenders. **Never bypass with \`--force\` / \`--no-verify\` unless the user explicitly authorizes.**
+
+If the target repo has a pre-push hook (\`typecheck\`, \`gate\`, tests), let it run — do not skip it.
+
 ## 1. SETUP (run first)
 \`\`\`bash
 cd "${vars.repoPath}"
@@ -314,6 +327,19 @@ Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\
 
 🛑 **REGISTER FIRST**: Before any setup steps, call the MCP tool \`kit_log_activity\` with \`session_id="${vars.sessionId}"\`, \`type="session"\`, \`message="Session connected — starting setup"\`. The KIT dashboard stays on "Waiting for agent to connect…" until this lands. Seeing the tool listed is not enough — you must invoke it.
 ` : ''}
+## 🛑 MERGE POLICY — MAIN IS PROTECTED (S9N-6394)
+**You may NEVER merge into \`main\` / \`master\` (direct push OR PR) unless CI is green.**
+
+Before any merge into main:
+1. Run \`gh pr checks <PR-number>\` (or \`gh run list --branch <source-branch> --limit 1\`)
+2. Every required check must be \`SUCCESS\`. **PENDING or FAILURE = stop.**
+3. Never merge a \`WIP:\` / \`[Kanvas]\` / \`[Kanvas Restart]\` auto-checkpoint commit into main. Squash/interactive-rebase to clean tips first.
+4. After merge, verify: \`gh run watch --exit-status\` on the triggered main run. If it goes red, **revert immediately** (\`git revert <merge-sha> && git push\`).
+
+The KIT MergeService also enforces this at the code level — a red or pending CI blocks \`merge:execute\` and returns an error. But the prompt rule is the primary contract; the code gate is belt-and-suspenders. **Never bypass with \`--force\` / \`--no-verify\` unless the user explicitly authorizes.**
+
+If the target repo has a pre-push hook (\`typecheck\`, \`gate\`, tests), let it run — do not skip it.
+
 ## 1. SETUP (run first)
 \`\`\`bash
 cd "${vars.repoPath}"
