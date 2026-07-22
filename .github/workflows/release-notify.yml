@@ -1,0 +1,16 @@
+name: Notify SoWork on release
+
+# Announces a KIT for DevOps release to SoWork after the Build & Release
+# workflow's publish job promotes the draft to a published release.
+# `gh release edit --draft=false` in release.yml triggers the release:published
+# event this workflow listens for. Thin caller around the org-shared reusable
+# workflow in Core_Infrastructure — channel is defaulted THERE (#prod-releases).
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    uses: SeKondBrainAILabs/Core_Infrastructure/.github/workflows/_shared-sowork-release-notify.yml@main
+    secrets: inherit
