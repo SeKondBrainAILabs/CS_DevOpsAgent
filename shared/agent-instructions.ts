@@ -71,7 +71,7 @@ This session has a KIT MCP server configured at: \`${vars.mcpUrl}\`
 MCP config is provided via \`.mcp.json\` and \`.claude/settings.json\` in this worktree.
 If using global config: check \`~/.claude/settings.json\` (install via KIT Settings > MCP tab).
 You should have these MCP tools available:
-\`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+\`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`, \`kit_merge\`, \`kit_rebase\`
 
 **⚠️ These are MCP protocol tools, NOT bash commands. Do NOT try to run them in a terminal.**
 **If you do NOT see these tools in your available tools list, the MCP connection failed — use the FALLBACK instructions in each section below.**
@@ -90,7 +90,7 @@ Then respond with:
 ✓ Current directory: [output of pwd]
 ✓ Houserules read: [yes/no - if yes, summarize key rules]
 ✓ File locks checked: [yes/no]${vars.mcpUrl ? `
-✓ MCP tools available: [yes/no — confirm you see: kit_commit, kit_commit_all, kit_get_session_info, kit_log_activity, kit_lock_file, kit_unlock_file, kit_get_commit_history, kit_request_review]
+✓ MCP tools available: [yes/no — confirm you see: kit_commit, kit_commit_all, kit_get_session_info, kit_log_activity, kit_lock_file, kit_unlock_file, kit_get_commit_history, kit_request_review, kit_merge, kit_rebase]
 ✓ kit_log_activity registration call succeeded: [yes/no — required from Step 0 above]` : ''}
 
 ## 🛑 MERGE POLICY — MAIN IS PROTECTED (S9N-6394)
@@ -321,7 +321,7 @@ This session has a KIT MCP server.
 \`\`\`json
 { "mcpServers": { "kit": { "type": "http", "url": "${vars.rpcUrl || vars.mcpUrl}" } } }
 \`\`\`
-Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`, \`kit_merge\`, \`kit_rebase\`
 
 **⚠️ These are MCP protocol tools — NOT bash commands. Do not run them in a terminal.**
 
@@ -511,7 +511,7 @@ Or add \`.mcp.json\` to the project root:
 { "mcpServers": { "kit": { "type": "streamable-http", "url": "${vars.mcpUrl}" } } }
 \`\`\`
 
-Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`, \`kit_merge\`, \`kit_rebase\`
 ` : '';
 
   const agentPrompt = `# SESSION ${shortSessionId}
@@ -525,7 +525,7 @@ ${vars.mcpUrl ? `
 ## 🔌 MCP SERVER CONNECTION
 KIT MCP server: \`${vars.mcpUrl}\`
 Config via \`.mcp.json\` in project root (auto-created by KIT) or Cursor Settings → MCP.
-Available tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+Available tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`, \`kit_merge\`, \`kit_rebase\`
 **These are MCP protocol tools — NOT bash commands.**
 ` : ''}
 ## 1. SETUP (run in Cursor terminal)
@@ -640,7 +640,7 @@ If not auto-detected, add to VS Code settings (\`Cmd+,\` → search "mcp"):
 }
 \`\`\`
 
-Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`, \`kit_merge\`, \`kit_rebase\`
 ` : '';
 
   const agentPrompt = `# SESSION ${shortSessionId}
@@ -654,7 +654,7 @@ ${vars.mcpUrl ? `
 ## 🔌 MCP SERVER CONNECTION
 KIT MCP server: \`${vars.mcpUrl}\`
 Config via \`.mcp.json\` in project root (auto-detected by VS Code) or VS Code settings → mcp.servers.
-Available tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+Available tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`, \`kit_merge\`, \`kit_rebase\`
 **These are MCP protocol tools — NOT bash commands.**
 ` : ''}
 ## 1. SETUP (run in VS Code terminal)
@@ -765,7 +765,7 @@ If not auto-detected, add via **Cline Settings → MCP Servers → Add**:
 - Type: \`Streamable HTTP\`
 - URL: \`${vars.mcpUrl}\`
 
-Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`, \`kit_merge\`, \`kit_rebase\`
 
 **session_id for all MCP calls: \`${vars.sessionId}\`**
 ` : '';
@@ -781,7 +781,7 @@ ${vars.mcpUrl ? `
 ## 🔌 MCP SERVER CONNECTION
 KIT MCP server: \`${vars.mcpUrl}\`
 Config via \`.mcp.json\` in project root (auto-detected by Cline) or Cline Settings → MCP Servers.
-Available tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+Available tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`, \`kit_merge\`, \`kit_rebase\`
 **These are MCP protocol tools — NOT bash commands.**
 ` : ''}
 ## 1. SETUP (run in terminal)
@@ -1103,7 +1103,7 @@ If not auto-detected, add to \`~/.codex/config.json\`:
 { "mcpServers": { "kit": { "type": "http", "url": "${vars.mcpUrl}" } } }
 \`\`\`
 
-Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`
+Available MCP tools: \`kit_commit\`, \`kit_commit_all\`, \`kit_get_session_info\`, \`kit_log_activity\`, \`kit_lock_file\`, \`kit_unlock_file\`, \`kit_get_commit_history\`, \`kit_request_review\`, \`kit_merge\`, \`kit_rebase\`
 
 **session_id for all MCP calls: \`${vars.sessionId}\`**
 ` : `

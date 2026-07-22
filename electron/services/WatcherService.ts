@@ -60,8 +60,16 @@ export class WatcherService extends BaseService {
   private lastIdleEndAt: Map<string, number> = new Map();  // sessionId → last idle-end tick
   private idleEndTimer: NodeJS.Timeout | null = null;
   private static readonly IDLE_END_TICK_MS = 60 * 1000;
-  private static readonly IDLE_END_QUIET_MS = 5 * 60 * 1000;
-  private static readonly IDLE_END_BURST_WINDOW_MS = 30 * 60 * 1000;
+  /** 30 min of no writes to ANY tracked file in the session before idle-end
+   *  fires. Was 5 min — easily exhausted by an agent pausing mid-thought,
+   *  which caused auto-checkpoint attempts on files still being iterated on.
+   *  30 min is high enough that "quiet" actually means the agent has moved
+   *  on, low enough that the auto-checkpoint still lands within the hour. */
+  private static readonly IDLE_END_QUIET_MS = 30 * 60 * 1000;
+  /** Burst window widened to match — a "burst" spans 90 min of accumulated
+   *  writes so idle-end after 30 min of quiet still sees the burst it's
+   *  responding to. Was 30 min. */
+  private static readonly IDLE_END_BURST_WINDOW_MS = 90 * 60 * 1000;
   private static readonly IDLE_END_MIN_WRITES = 3;
   /** Don't emit two idle-end notifications for the same session within 15 min. */
   private static readonly IDLE_END_COOLDOWN_MS = 15 * 60 * 1000;

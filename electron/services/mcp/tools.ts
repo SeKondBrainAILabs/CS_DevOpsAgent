@@ -1111,4 +1111,130 @@ export function registerTools(
       };
     })
   );
+
+  // --------------------------------------------------------------------------
+  // kit_merge — Execute a merge via the same code path as the UI merge modal.
+  // Enforces the S9N-6394 CI gate for protected targets (main/master/
+  // production/release). Agents must not pass force=true unless the user has
+  // explicitly authorized bypassing the gate — see the MERGE POLICY block in
+  // the session prompt.
+  // --------------------------------------------------------------------------
+  srv.tool(
+    'kit_merge',
+    'Merge the session branch into a target branch (default: baseBranch). ' +
+    'For protected targets (main/master/production/release) the S9N-6394 CI ' +
+    'gate refuses the merge if `gh pr checks` reports non-green, if pending, ' +
+    'if the source contains WIP/[Kanvas] auto-checkpoint commits, or if gh is ' +
+    'not installed. Pass force=true ONLY when the user has explicitly ' +
+    'authorized bypassing the gate (never on your own initiative).',
+    {
+      session_id: z.string().describe('The KIT session ID'),
+      cwd: z.string().describe('Your current shell working directory (run `pwd`). REQUIRED — must be the session worktree, on the session branch.'),
+      target_branch: z.string().optional().describe('Target branch to merge into. Defaults to the session\'s baseBranch.'),
+      force: z.boolean().optional().default(false).describe('Bypass the S9N-6394 CI gate. ONLY set when the user has explicitly authorized skipping the CI verification. Never set on your own initiative — the gate exists because auto-sync merged a mid-write file into Core_Kora_ChromeExt/main on 2026-07-22.'),
+    },
+    withCallLog('kit_merge', async ({ session_id, cwd, target_branch, force }) => {
+      if (!deps.mergeService) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Merge service not available' }) }] };
+      }
+      const worktree = binder.getWorktreePathForRepo(session_id);
+      if (!worktree) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown session or worktree not registered', session_id }) }] };
+      }
+      const divergence = await checkDivergence(session_id, undefined, cwd);
+      if (divergence) return divergenceResponse(session_id, 'kit_merge', divergence);
+
+      // Resolve source branch + target from the instance config.
+      const instances = deps.agentInstanceService?.listInstances();
+      const inst = instances?.success && instances.data ? instances.data.find((i: any) => i.sessionId === session_id) : undefined;
+      const sourceBranch = inst?.config?.branchName;
+      const resolvedTarget = target_branch || inst?.config?.baseBranch || 'main';
+      const repoPath = inst?.config?.repoPath;
+      if (!sourceBranch || !repoPath) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Could not resolve source branch or repo path', session_id }) }] };
+      }
+
+      deps.activityService?.log(session_id, 'git', `MCP kit_merge: ${sourceBranch} → ${resolvedTarget}${force ? ' (CI gate override)' : ''}`, { source: 'mcp', toolName: 'kit_merge' });
+
+      const result = await deps.mergeService.executeMerge(repoPath, sourceBranch, resolvedTarget, {
+        worktreePath: worktree,
+        skipCiGate: !!force,
+      });
+
+      if (!result.success || !result.data) {
+        return { content: [{ type: 'text', text: JSON.stringify({
+          error: result.error?.message || 'Merge failed',
+          success: false,
+        }) }] };
+      }
+      const md = result.data;
+      return { content: [{ type: 'text', text: JSON.stringify({
+        success: md.success,
+        message: md.message,
+        mergeCommitHash: md.mergeCommitHash,
+        filesChanged: md.filesChanged,
+        conflictingFiles: md.conflictingFiles,
+        gateReason: md.gateReason,
+        gateDetails: md.gateDetails,
+        source: sourceBranch,
+        target: resolvedTarget,
+      }) }] };
+    })
+  );
+
+  // --------------------------------------------------------------------------
+  // kit_rebase — On-demand rebase onto baseBranch via the same AI-conflict-
+  // resolution code path the post-commit rebase uses. No CI gate here — rebase
+  // moves the session branch onto latest baseBranch, doesn't touch protected
+  // targets.
+  // --------------------------------------------------------------------------
+  srv.tool(
+    'kit_rebase',
+    'Rebase the session branch onto the latest baseBranch. Fetches origin, ' +
+    'then rebases; conflicts get resolved by the AI conflict resolver. Use ' +
+    'when you want the session branch up to date with base before continuing ' +
+    'work OR before opening a PR (so CI runs against the latest base).',
+    {
+      session_id: z.string().describe('The KIT session ID'),
+      cwd: z.string().describe('Your current shell working directory (run `pwd`). REQUIRED — must be the session worktree, on the session branch.'),
+      base_branch: z.string().optional().describe('Base branch to rebase onto. Defaults to the session\'s baseBranch.'),
+    },
+    withCallLog('kit_rebase', async ({ session_id, cwd, base_branch }) => {
+      if (!deps.rebaseWatcherService) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Rebase service not available' }) }] };
+      }
+      const worktree = binder.getWorktreePathForRepo(session_id);
+      if (!worktree) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown session', session_id }) }] };
+      }
+      const divergence = await checkDivergence(session_id, undefined, cwd);
+      if (divergence) return divergenceResponse(session_id, 'kit_rebase', divergence);
+
+      const instances = deps.agentInstanceService?.listInstances();
+      const inst = instances?.success && instances.data ? instances.data.find((i: any) => i.sessionId === session_id) : undefined;
+      const resolvedBase = base_branch || inst?.config?.baseBranch || 'main';
+      const repoPath = inst?.config?.repoPath;
+      if (!repoPath) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Could not resolve repo path', session_id }) }] };
+      }
+
+      deps.activityService?.log(session_id, 'git', `MCP kit_rebase: onto ${resolvedBase}`, { source: 'mcp', toolName: 'kit_rebase' });
+
+      try {
+        const result = await deps.rebaseWatcherService.performRebaseForPath(session_id, repoPath, resolvedBase);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          success: !!result.success,
+          message: result.message || '',
+          incomingCommits: result.incomingCommits,
+          commitsAdded: result.commitsAdded,
+          baseBranch: resolvedBase,
+        }) }] };
+      } catch (err) {
+        return { content: [{ type: 'text', text: JSON.stringify({
+          error: err instanceof Error ? err.message : 'Rebase failed',
+          success: false,
+        }) }] };
+      }
+    })
+  );
 }

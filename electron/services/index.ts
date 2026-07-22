@@ -304,6 +304,15 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // WatcherService's .commit-msg-file path already fires. Without this hook
   // MCP-driven agent commits silently skip the post-commit remote sync.
   mcpServer.setPostCommitRebase((sessionId, repoName) => watcher.attemptPostCommitRebase(sessionId, repoName));
+  // v2.6.95 — expose kit_merge / kit_rebase to agents.
+  mcpServer.setMergeService({
+    executeMerge: (repoPath, sourceBranch, targetBranch, options) =>
+      merge.executeMerge(repoPath, sourceBranch, targetBranch, options),
+  });
+  mcpServer.setRebaseWatcherService({
+    performRebaseForPath: (sessionId, repoPath, baseBranch) =>
+      rebaseWatcher.performRebaseForPath(sessionId, repoPath, baseBranch),
+  });
   mcpServer.setDebugLog(debugLog);
   console.log('[Services] MCP server initialized on port', mcpServer.getPort());
 
