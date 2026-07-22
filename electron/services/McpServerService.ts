@@ -91,6 +91,12 @@ export interface McpServiceDeps {
     generateFeatureContract: (worktreePath: string, feature: any) => Promise<any>;
   };
   emitCommitCompleted?: (sessionId: string, hash: string, message: string, filesChanged: number) => void;
+  /**
+   * Fire the on-demand rebase logic after an MCP-driven commit succeeds. Not
+   * required — omitting it just means MCP commits skip the post-commit
+   * remote sync (same behavior as pre-v2.6.92). Wired in services/index.ts.
+   */
+  postCommitRebase?: (sessionId: string, repoName?: string) => Promise<void>;
   debugLog?: DebugLogService | null;
 }
 
@@ -216,6 +222,14 @@ export class McpServerService extends BaseService {
 
   getDeps(): McpServiceDeps {
     return this.deps;
+  }
+
+  /** Wire the post-commit rebase hook. Called from services/index.ts once
+   *  WatcherService is constructed — the hook fires after every successful
+   *  MCP kit_commit so agent-driven commits get the same "on-demand" rebase
+   *  every .commit-msg-file-driven commit already got. */
+  setPostCommitRebase(fn: NonNullable<McpServiceDeps['postCommitRebase']>): void {
+    this.deps.postCommitRebase = fn;
   }
 
   wireCommitEmitter(): void {

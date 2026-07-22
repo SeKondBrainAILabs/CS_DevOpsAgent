@@ -300,6 +300,10 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   mcpServer.setDebugLogDep(debugLog);
   await mcpServer.initialize();
   mcpServer.wireCommitEmitter();
+  // Every kit_commit / kit_commit_all should get the on-demand rebase that
+  // WatcherService's .commit-msg-file path already fires. Without this hook
+  // MCP-driven agent commits silently skip the post-commit remote sync.
+  mcpServer.setPostCommitRebase((sessionId, repoName) => watcher.attemptPostCommitRebase(sessionId, repoName));
   mcpServer.setDebugLog(debugLog);
   console.log('[Services] MCP server initialized on port', mcpServer.getPort());
 

@@ -691,7 +691,14 @@ export function registerTools(
         // 5. Emit commit event so renderer CommitsTab updates in real-time
         deps.emitCommitCompleted?.(session_id, hash, commitMessage, filesChanged);
 
-        // 6. Post-commit contract check (fire-and-forget)
+        // 6. On-demand post-commit rebase (fire-and-forget). Wired from
+        // services/index.ts to WatcherService.attemptPostCommitRebase — same
+        // logic the .commit-msg-file path fires. Before v2.6.92 this was
+        // silently skipped for MCP commits so agent-driven sessions never got
+        // the "on-demand" rebase they were configured for.
+        deps.postCommitRebase?.(session_id, repo).catch(() => { /* non-fatal */ });
+
+        // 7. Post-commit contract check (fire-and-forget)
         triggerContractCheck(session_id, worktree, hash).catch(() => {});
 
         const result: Record<string, unknown> = {
@@ -817,6 +824,9 @@ export function registerTools(
               );
             }
           }
+
+          // On-demand post-commit rebase (fire-and-forget) — see kit_commit.
+          deps.postCommitRebase?.(session_id, repo.repoName).catch(() => { /* non-fatal */ });
 
           // Post-commit contract check
           triggerContractCheck(session_id, repo.worktreePath, hash).catch(() => {});
