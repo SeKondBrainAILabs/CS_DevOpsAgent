@@ -629,10 +629,14 @@ ${DEVOPS_KIT_DIR}/
         agentCount: 1,
       });
 
-      // Create the branch if it doesn't exist
-      await this.createBranchIfNeeded(config);
-
-      // Create worktree for isolated development
+      // Create worktree for isolated development. createWorktreeIfNeeded
+      // handles branch creation atomically via `git worktree add -b <branch>
+      // <path> <base>` — no need to pre-create the branch by touching the
+      // source repo's HEAD. The old createBranchIfNeeded path did
+      // `git checkout -b` + `git checkout -` in config.repoPath, which
+      // switched the user's source-repo branch out from under any work they
+      // had open (and could leave them stuck on the session branch if the
+      // return checkout failed).
       const worktreePath = await this.createWorktreeIfNeeded(config);
 
       // Update instance with worktree path
@@ -798,32 +802,6 @@ ${DEVOPS_KIT_DIR}/
     } catch (error) {
       console.warn(`[AgentInstanceService] Could not create session file: ${error}`);
       // Don't fail the whole operation if session file creation fails
-    }
-  }
-
-  /**
-   * Create branch if it doesn't exist
-   */
-  private async createBranchIfNeeded(config: AgentInstanceConfig): Promise<void> {
-    try {
-      // Strip origin/ prefix — git checkout -b <branch> origin/main works, but
-      // normalizing avoids surprises with stored values like "origin/Development".
-      const baseBranch = config.baseBranch.replace(/^origin\//, '');
-
-      // Check if branch exists
-      const branchResult = await execaCmd('git', ['branch', '--list', config.branchName], { cwd: config.repoPath });
-
-      if (!branchResult.stdout.trim()) {
-        // Branch doesn't exist, create it
-        await execaCmd('git', ['checkout', '-b', config.branchName, baseBranch], { cwd: config.repoPath });
-        console.log(`[AgentInstanceService] Created branch ${config.branchName} from ${baseBranch}`);
-
-        // Switch back to original branch
-        await execaCmd('git', ['checkout', '-'], { cwd: config.repoPath });
-      }
-    } catch (error) {
-      console.warn(`[AgentInstanceService] Could not create branch: ${error}`);
-      // Don't fail the whole operation if branch creation fails
     }
   }
 
