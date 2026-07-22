@@ -298,6 +298,11 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   mcpServer.setDatabaseService(databaseService);
   mcpServer.setMcpCallDb(databaseService);
   mcpServer.setDebugLogDep(debugLog);
+  // v2.5 additions — expose workspace / config / project-group services to MCP
+  // so agents can call kit_workspace_* / kit_get_repo_worktree_mode / etc.
+  mcpServer.setConfigServiceForMcp(config);
+  mcpServer.setWorkspaceServiceForMcp(workspace);
+  mcpServer.setProjectGroupServiceForMcp(projectGroup);
   await mcpServer.initialize();
   mcpServer.wireCommitEmitter();
   mcpServer.setDebugLog(debugLog);
