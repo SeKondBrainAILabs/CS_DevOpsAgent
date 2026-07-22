@@ -66,8 +66,10 @@ export class FileMonitor {
       // and following them recurses into other repos' worktree trees (unbounded).
       followSymlinks: false,
       awaitWriteFinish: {
-        stabilityThreshold: 1000,
-        pollInterval: 500,
+        // 30s stability window — see WatcherService.ts for rationale. Worker
+        // watcher needs the same value so both code paths agree.
+        stabilityThreshold: 30_000,
+        pollInterval: 2_000,
       },
     });
 

@@ -333,8 +333,15 @@ export class WatcherService extends BaseService {
         // Don't follow symlinks into sibling repos (unbounded cross-repo recursion).
         followSymlinks: false,
         awaitWriteFinish: {
-          stabilityThreshold: 1000,
-          pollInterval: 500,
+          // 30s of "no writes" before we consider the file settled. Was 1s,
+          // which was short enough that an agent saving a burst of files
+          // could trigger auto-lock / commit-msg-file / idle-end tracking
+          // while a later file in the burst was still mid-write. 30s
+          // eliminates that class of mid-change catch. Adds up to 30s of
+          // latency on the activity feed's "file X changed" line — a fair
+          // trade for correctness.
+          stabilityThreshold: 30_000,
+          pollInterval: 2_000,
         },
       });
 
