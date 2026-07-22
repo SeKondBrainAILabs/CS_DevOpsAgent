@@ -102,3 +102,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --draft=false
+
+  # Announce to SoWork #prod-releases after publish. Chained directly via
+  # `needs: publish` rather than relying on the `release: published` event,
+  # because GITHUB_TOKEN-triggered actions can't cascade into other workflows
+  # (GitHub's recursion prevention) — release-notify.yml stays as a safety
+  # net for MANUAL releases created via the UI, but the CI path needs this
+  # direct chain to actually fire.
+  notify-sowork:
+    needs: publish
+    uses: SeKondBrainAILabs/Core_Infrastructure/.github/workflows/_shared-sowork-release-notify.yml@main
+    secrets: inherit
