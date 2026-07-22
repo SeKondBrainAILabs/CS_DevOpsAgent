@@ -66,6 +66,11 @@ export interface McpServiceDeps {
     // (injectable so it's mockable in tests). Distinct name from the IpcResult
     // getCurrentBranch(repoPath) to avoid a method-name collision on GitService.
     getCurrentBranchName?: (worktreePath: string) => Promise<string | null>;
+    // Day 1.5 + Day 2 additions — repo-path-keyed reads for the workspace
+    // browser / agent operations. Each returns IpcResult<T>.
+    getRepoStatus?: (repoPath: string) => Promise<any>;
+    listBranchesForRepo?: (repoPath: string) => Promise<any>;
+    listWorktrees?: (repoPath: string) => Promise<any>;
   };
   activityService?: {
     log: (sessionId: string, type: string, message: string, details?: Record<string, unknown>) => void;
@@ -78,6 +83,28 @@ export interface McpServiceDeps {
   };
   agentInstanceService?: {
     listInstances: () => { success: boolean; data?: any[] };
+    // R1 + C5 additions — count / mode queries per repo path.
+    getActiveSessionCountForRepo?: (repoPath: string) => { success: boolean; data?: number };
+    getActiveSessionsForRepo?: (repoPath: string) => any[];
+  };
+  // C5 Single-Session Mode per-repo settings + O5 telemetry toggle live here.
+  configService?: {
+    getRepoWorktreeMode: (repoPath: string) => 'in-place' | 'worktree';
+    setRepoWorktreeMode: (repoPath: string, mode: 'in-place' | 'worktree') => void;
+  };
+  // Epic A — Workspace discovery.
+  workspaceService?: {
+    list: () => any;
+    get: (id: string) => any;
+    add: (input: { path: string; name?: string; scanDepth?: number; ignoreGlobs?: string[] }) => any;
+    remove: (id: string) => any;
+    getActive: () => any;
+    scan: (id: string) => Promise<any>;
+  };
+  // Epic F — Project groups.
+  projectGroupService?: {
+    list: () => any;
+    add: (input: { name: string; repoPaths: string[]; color?: string }) => any;
   };
   databaseService?: {
     recordCommit: (sessionId: string, hash: string, message: string, filesChanged: number) => void;
@@ -230,6 +257,20 @@ export class McpServerService extends BaseService {
 
   setContractGenerationService(svc: McpServiceDeps['contractGenerationService']): void {
     this.deps.contractGenerationService = svc;
+  }
+
+  // v2.5 additions — workspace / config / project group so the MCP tool
+  // layer can expose kit_workspace_* / kit_get_repo_worktree_mode / etc.
+  setConfigServiceForMcp(svc: McpServiceDeps['configService']): void {
+    this.deps.configService = svc;
+  }
+
+  setWorkspaceServiceForMcp(svc: McpServiceDeps['workspaceService']): void {
+    this.deps.workspaceService = svc;
+  }
+
+  setProjectGroupServiceForMcp(svc: McpServiceDeps['projectGroupService']): void {
+    this.deps.projectGroupService = svc;
   }
 
   setDebugLogDep(debugLog: DebugLogService): void {

@@ -12,7 +12,7 @@ import { McpSessionBinder } from '../../../electron/services/mcp/session-binder'
 function zodChain(): any {
   const c: any = {};
   ['string', 'number', 'boolean', 'array', 'object', 'enum', 'record',
-    'optional', 'default', 'describe', 'unknown'].forEach(m => { c[m] = (..._a: any[]) => zodChain(); });
+    'optional', 'default', 'describe', 'unknown', 'int', 'min', 'max'].forEach(m => { c[m] = (..._a: any[]) => zodChain(); });
   c.then = undefined;
   return c;
 }

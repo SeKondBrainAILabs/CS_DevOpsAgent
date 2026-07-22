@@ -23,6 +23,7 @@ import type { CommitAnalysisService } from './CommitAnalysisService';
 import type { WorkerBridgeService } from './WorkerBridgeService';
 import type { RebaseWatcherService } from './RebaseWatcherService';
 import { databaseService } from './DatabaseService';
+import { evaluateAutoCommitGuardForWorktree } from './GitRewriteGuardIO';
 import type { AgentType } from '../../shared/types';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { promises as fs } from 'fs';
@@ -703,6 +704,15 @@ export class WatcherService extends BaseService {
       return { committed: false, skipReason: 'in-place session — never auto-commit against source-repo HEAD' };
     }
 
+    // 0.5. History-rewrite guard (from origin/main track, merged at v2.7.0).
+    //      Refuse if a rebase/merge/cherry-pick/bisect is in progress or the
+    //      worktree is on a detached HEAD — a commit landing in any of those
+    //      states can silently orphan the real work git is mid-rewriting.
+    const guard = evaluateAutoCommitGuardForWorktree(instance.worktreePath);
+    if (!guard.allowed) {
+      return { committed: false, skipReason: `${guard.kind}: ${guard.message}` };
+    }
+
     // 1. Cooldown between auto-commits per session.
     const lastAuto = this.lastAutoCommitAt.get(sessionId) || 0;
     if (now - lastAuto < WatcherService.AUTO_COMMIT_COOLDOWN_MS) {
@@ -808,6 +818,18 @@ export class WatcherService extends BaseService {
     if (!existsSync(instance.worktreePath)) return;
     // Don't race an agent-triggered commit that's debouncing.
     if (this.debounceTimers.has(sessionId)) return;
+
+    // SAFETY (from origin/main track): never touch the worktree during a
+    // rebase / merge / cherry-pick / bisect / detached HEAD, or while a
+    // history-rewrite lockfile is held. Even for snapshot-only paths this
+    // avoids racing with `git stash create` against a transient index.
+    const guard = evaluateAutoCommitGuardForWorktree(instance.worktreePath);
+    if (!guard.allowed) {
+      console.warn(
+        `[WatcherService] Periodic snapshot skipped for ${sessionId}: ${guard.kind} — ${guard.message}`
+      );
+      return;
+    }
 
     // Only snapshot when there's actually uncommitted work.
     const status = await this.gitService.getStatus(sessionId).catch(() => null);

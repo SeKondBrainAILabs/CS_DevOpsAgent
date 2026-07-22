@@ -7,6 +7,12 @@ import { BaseService } from './BaseService';
 import type { IpcResult, MergePreview, MergeResult } from '../../shared/types';
 import { promises as fs } from 'fs';
 import path from 'path';
+import {
+  acquireHistoryRewriteLock,
+  evaluateAutoCommitGuardForWorktree,
+  releaseHistoryRewriteLock,
+} from './GitRewriteGuardIO';
+import { evaluateRebaseTipGuard } from '../../shared/rebase-tip-guard';
 
 // Parse the porcelain output of `git worktree list --porcelain` and return
 // the worktree path that currently has `branch` checked out, or null if no
@@ -969,6 +975,17 @@ export class MergeService extends BaseService {
               );
             }
 
+            // SAFETY: refuse to auto-commit if the worktree is mid-rebase /
+            // mid-merge / detached. Committing then is what caused the
+            // KIT auto-commit + rebase-race incident (silently orphaned
+            // ~15 real commits).
+            const preCommitGuard = evaluateAutoCommitGuardForWorktree(options.worktreePath);
+            if (!preCommitGuard.allowed) {
+              throw new Error(
+                `Pre-merge auto-commit refused: ${preCommitGuard.message}`
+              );
+            }
+
             // Commit with auto-commit message
             const commitResult = await this.git(
               ['commit', '-m', '[Kanvas] Auto-commit uncommitted changes before merge'],
@@ -1183,9 +1200,27 @@ export class MergeService extends BaseService {
         let rebaseConflictFiles: string[] = [];
         const worktreePath = options.worktreePath;
 
-        try {
-          const rebaseWorkdir = worktreePath || repoPath;
+        // SAFETY: acquire per-worktree history-rewrite lock so the KIT
+        // periodic auto-saver + Kanvas auto-commit skip while this
+        // rebase is running (fix for the KIT rebase-race incident that
+        // orphaned ~15 real commits).
+        const rebaseWorkdir = worktreePath || repoPath;
+        await acquireHistoryRewriteLock(
+          rebaseWorkdir,
+          `rebase ${sourceBranch} onto origin/${targetBranch}`
+        );
 
+        // Capture pre-rebase commit count so we can detect tip inversion
+        // (the signature of the rebase-race bug).
+        let preRebaseCount = 0;
+        try {
+          const { stdout } = await this.git(['rev-list', '--count', 'HEAD'], rebaseWorkdir);
+          preRebaseCount = Number(stdout.trim()) || 0;
+        } catch {
+          preRebaseCount = 0;
+        }
+
+        try {
           // Checkout the source branch in the worktree (or main repo)
           const checkoutSrc = await this.git(['checkout', sourceBranch], rebaseWorkdir);
           if (checkoutSrc.exitCode !== 0) {
@@ -1199,6 +1234,27 @@ export class MergeService extends BaseService {
           const rebaseResult = await this.git(['rebase', `origin/${targetBranch}`], rebaseWorkdir);
 
           if (rebaseResult.exitCode === 0) {
+            // TIP-COUNT SAFETY: verify we didn't drop commits. If the
+            // post-rebase tip is behind the pre-rebase tip, treat as fatal
+            // and reset --hard ORIG_HEAD to recover.
+            let postRebaseCount = preRebaseCount;
+            try {
+              const { stdout } = await this.git(['rev-list', '--count', 'HEAD'], rebaseWorkdir);
+              postRebaseCount = Number(stdout.trim()) || 0;
+            } catch {
+              // Non-fatal — fall through to permissive.
+            }
+            const tipGuard = evaluateRebaseTipGuard({
+              preRebaseCommitCount: preRebaseCount,
+              postRebaseCommitCount: postRebaseCount,
+              branchName: sourceBranch,
+            });
+            if (!tipGuard.safe) {
+              console.error(`[MergeService] ${tipGuard.message}`);
+              await this.git(['reset', '--hard', 'ORIG_HEAD'], rebaseWorkdir).catch(() => {});
+              throw new Error(tipGuard.message);
+            }
+
             rebasedSuccessfully = true;
             console.log(`[MergeService] Rebase fallback succeeded — source branch is now linear with ${targetBranch}`);
 
@@ -1220,7 +1276,10 @@ export class MergeService extends BaseService {
           const msg = rebaseErr instanceof Error ? rebaseErr.message : String(rebaseErr);
           console.warn(`[MergeService] Rebase fallback threw:`, msg);
           // Make sure we leave the source branch in a clean state
-          await this.git(['rebase', '--abort'], worktreePath || repoPath).catch(() => {});
+          await this.git(['rebase', '--abort'], rebaseWorkdir).catch(() => {});
+        } finally {
+          // Always release the lock, even if the rebase threw / conflicted.
+          await releaseHistoryRewriteLock(rebaseWorkdir);
         }
 
         if (rebasedSuccessfully) {

@@ -1,7 +1,9 @@
 /**
  * MCP Tool Handlers
  *
- * Registers 8 tools via mcpServer.tool() with Zod input schemas:
+ * Registers tools via mcpServer.tool() with Zod input schemas:
+ *
+ * Session ops (existing):
  * - kit_commit
  * - kit_commit_all (multi-repo: commit across all repos)
  * - kit_get_session_info
@@ -10,6 +12,17 @@
  * - kit_unlock_file
  * - kit_get_commit_history
  * - kit_request_review
+ *
+ * Workspace + repo state (v2.5 additions):
+ * - kit_workspace_list / kit_workspace_add / kit_workspace_scan
+ * - kit_project_group_list / kit_project_group_add
+ * - kit_get_repo_status (branch / ahead-behind / uncommitted / stash / worktree)
+ * - kit_list_branches (with C7 hygiene metadata)
+ * - kit_list_worktrees
+ * - kit_get_repo_worktree_mode / kit_set_repo_worktree_mode (C5 Single-Session Mode)
+ * - kit_get_active_session_count (R1 fix)
+ * - kit_check_autocommit_guard (KIT rebase-race incident fix — agents check before
+ *   triggering any commit-like operation to avoid orphaning real work)
  */
 
 import { z } from 'zod';
@@ -18,6 +31,7 @@ import { join, basename, relative } from 'path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpSessionBinder } from './session-binder';
 import type { McpServiceDeps, McpCallLogEntry } from '../McpServerService';
+import { evaluateAutoCommitGuardForWorktree } from '../GitRewriteGuardIO';
 
 // Dynamic execa (ESM-only) for the worktree-divergence guards. Mirrors the
 // resolution fallbacks used in AgentInstanceService for bundler compatibility.
@@ -163,6 +177,8 @@ export function registerTools(
   // Tools that change state — their calls are logged to the session activity feed
   const STATE_CHANGING_TOOLS = new Set([
     'kit_commit', 'kit_commit_all', 'kit_lock_file', 'kit_unlock_file', 'kit_request_review',
+    'kit_workspace_add', 'kit_workspace_scan', 'kit_project_group_add',
+    'kit_set_repo_worktree_mode',
   ]);
 
   // ===========================================================================
@@ -1235,6 +1251,174 @@ export function registerTools(
           success: false,
         }) }] };
       }
+    })
+  );
+
+  // ==========================================================================
+  // v2.5 additions (merged in at v2.7.0 from origin/main track) —
+  // Workspace / repo state / auto-commit guard. Read-heavy tools that let
+  // agents interrogate branch / worktree / session state before deciding to
+  // spawn work or run commits. All are safe defaults: when a service isn't
+  // wired, the tool returns a clear "not-available" response rather than
+  // throwing.
+  // ==========================================================================
+
+  const notAvailable = (service: string) => ({
+    content: [{ type: 'text', text: JSON.stringify({ error: `${service} not available` }) }],
+  });
+
+  // -- Workspace ops -------------------------------------------------------
+
+  srv.tool(
+    'kit_workspace_list',
+    'List all configured workspaces (root folders that Kanvas scans for repos).',
+    {},
+    withCallLog('kit_workspace_list', async () => {
+      if (!deps.workspaceService?.list) return notAvailable('workspaceService');
+      const result = deps.workspaceService.list();
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    })
+  );
+
+  srv.tool(
+    'kit_workspace_add',
+    'Add a workspace folder. Kanvas will scan it for repos and start watching for new / removed repos.',
+    {
+      path: z.string().describe('Absolute filesystem path to a folder containing git repos'),
+      name: z.string().optional().describe('Display name; defaults to folder basename'),
+      scan_depth: z.number().int().min(0).max(10).optional().describe('How many dir levels deep to scan (default 2)'),
+      ignore_globs: z.array(z.string()).optional().describe('Folder basenames to skip (default: node_modules, .git, .worktrees, dist, build)'),
+    },
+    withCallLog('kit_workspace_add', async ({ path, name, scan_depth, ignore_globs }) => {
+      if (!deps.workspaceService?.add) return notAvailable('workspaceService');
+      const result = deps.workspaceService.add({ path, name, scanDepth: scan_depth, ignoreGlobs: ignore_globs });
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    })
+  );
+
+  srv.tool(
+    'kit_workspace_scan',
+    'Scan a workspace for git repos. Returns the DiscoveredRepo[] list.',
+    { workspace_id: z.string().describe('Workspace id from kit_workspace_list') },
+    withCallLog('kit_workspace_scan', async ({ workspace_id }) => {
+      if (!deps.workspaceService?.scan) return notAvailable('workspaceService');
+      const result = await deps.workspaceService.scan(workspace_id);
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    })
+  );
+
+  // -- Project group ops ---------------------------------------------------
+
+  srv.tool(
+    'kit_project_group_list',
+    'List cross-repo project groups (e.g. "Core Stack" = Kora + Backend + Kanvas + AI_Backend).',
+    {},
+    withCallLog('kit_project_group_list', async () => {
+      if (!deps.projectGroupService?.list) return notAvailable('projectGroupService');
+      const result = deps.projectGroupService.list();
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    })
+  );
+
+  srv.tool(
+    'kit_project_group_add',
+    'Create a persistent cross-repo project group.',
+    {
+      name: z.string().describe('Group name (case-insensitive unique)'),
+      repo_paths: z.array(z.string()).min(1).describe('Member repo paths (absolute)'),
+      color: z.string().optional().describe('Optional UI accent color (hex)'),
+    },
+    withCallLog('kit_project_group_add', async ({ name, repo_paths, color }) => {
+      if (!deps.projectGroupService?.add) return notAvailable('projectGroupService');
+      const result = deps.projectGroupService.add({ name, repoPaths: repo_paths, color });
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    })
+  );
+
+  // -- Git repo state (repo-path keyed, no sessionId required) ------------
+
+  srv.tool(
+    'kit_get_repo_status',
+    'Compact git snapshot for any repo path: branch, upstream, ahead/behind, uncommitted (M/S/U), stash count, worktree count, last commit. Safe to call frequently — 4 parallel fault-tolerant git invocations.',
+    { repo_path: z.string().describe('Absolute repo path') },
+    withCallLog('kit_get_repo_status', async ({ repo_path }) => {
+      if (!deps.gitService?.getRepoStatus) return notAvailable('gitService.getRepoStatus');
+      const result = await deps.gitService.getRepoStatus(repo_path);
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    })
+  );
+
+  srv.tool(
+    'kit_list_branches',
+    'List branches with C7 hygiene metadata (merged / stale / gone-on-remote / has-worktree / is-current). Sorted newest-commit-first.',
+    { repo_path: z.string().describe('Absolute repo path') },
+    withCallLog('kit_list_branches', async ({ repo_path }) => {
+      if (!deps.gitService?.listBranchesForRepo) return notAvailable('gitService.listBranchesForRepo');
+      const result = await deps.gitService.listBranchesForRepo(repo_path);
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    })
+  );
+
+  srv.tool(
+    'kit_list_worktrees',
+    'List git worktrees for a repo (each with path, branch, head sha).',
+    { repo_path: z.string().describe('Absolute repo path') },
+    withCallLog('kit_list_worktrees', async ({ repo_path }) => {
+      if (!deps.gitService?.listWorktrees) return notAvailable('gitService.listWorktrees');
+      const result = await deps.gitService.listWorktrees(repo_path);
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    })
+  );
+
+  // -- Single-Session Mode + active session count (C5 + R1) ---------------
+
+  srv.tool(
+    'kit_get_repo_worktree_mode',
+    'Get the per-repo worktree mode (in-place | worktree). When "in-place", the system blocks creating a 2nd active session (Single-Session Mode / C5).',
+    { repo_path: z.string().describe('Absolute repo path') },
+    withCallLog('kit_get_repo_worktree_mode', async ({ repo_path }) => {
+      if (!deps.configService?.getRepoWorktreeMode) return notAvailable('configService');
+      const mode = deps.configService.getRepoWorktreeMode(repo_path);
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, data: mode }) }] };
+    })
+  );
+
+  srv.tool(
+    'kit_set_repo_worktree_mode',
+    'Set the per-repo worktree mode. Use "in-place" to enable Single-Session Mode (blocks multiple concurrent sessions on this repo).',
+    {
+      repo_path: z.string().describe('Absolute repo path'),
+      mode: z.enum(['in-place', 'worktree']).describe('worktree = default; in-place = Single-Session Mode'),
+    },
+    withCallLog('kit_set_repo_worktree_mode', async ({ repo_path, mode }) => {
+      if (!deps.configService?.setRepoWorktreeMode) return notAvailable('configService');
+      deps.configService.setRepoWorktreeMode(repo_path, mode);
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, mode, repoPath: repo_path }) }] };
+    })
+  );
+
+  srv.tool(
+    'kit_get_active_session_count',
+    'Get the count of ACTIVE agent sessions for a repo (excludes completed / closed / failed). Powers the "should I spawn another session" decision + Single-Session Mode guard.',
+    { repo_path: z.string().describe('Absolute repo path') },
+    withCallLog('kit_get_active_session_count', async ({ repo_path }) => {
+      if (!deps.agentInstanceService?.getActiveSessionCountForRepo) {
+        return notAvailable('agentInstanceService.getActiveSessionCountForRepo');
+      }
+      const result = deps.agentInstanceService.getActiveSessionCountForRepo(repo_path);
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    })
+  );
+
+  // -- Auto-commit safety guard (KIT rebase-race fix) ---------------------
+
+  srv.tool(
+    'kit_check_autocommit_guard',
+    'Check whether auto-commit is currently SAFE on a worktree. Returns allowed=true only when NO rebase/merge/cherry-pick/bisect is in progress, HEAD is not detached, and no history-rewrite lockfile is held. Agents SHOULD call this before triggering any commit path to avoid the KIT rebase-race that silently orphaned ~15 real commits in the July 22 incident.',
+    { worktree_path: z.string().describe('Absolute worktree path (usually your session cwd)') },
+    withCallLog('kit_check_autocommit_guard', async ({ worktree_path }) => {
+      const guard = evaluateAutoCommitGuardForWorktree(worktree_path);
+      return { content: [{ type: 'text', text: JSON.stringify(guard) }] };
     })
   );
 }
