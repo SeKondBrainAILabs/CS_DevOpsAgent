@@ -675,6 +675,19 @@ export class WatcherService extends BaseService {
     nWrites: number,
     now: number
   ): Promise<{ committed: true; shortHash: string; staleHours: number } | { committed: false; skipReason?: string }> {
+    // 0. Source-repo guard. If the "worktree" path is the same directory as
+    //    the user's source checkout, an auto-commit would land on whatever
+    //    branch they happen to have checked out there — the opposite of the
+    //    isolation KIT is meant to provide. Refuse the auto-commit; the
+    //    snapshot ref still recovers the work. This can only happen in a
+    //    truly in-place session (useWorktree: false with no sibling worktree
+    //    ever created); v2.6.91 migrates the stale useWorktree drift on
+    //    startup so this branch is essentially dead code — but the guard
+    //    stays as a defense-in-depth line the auto path never crosses.
+    if (instance.worktreePath === instance.repoPath) {
+      return { committed: false, skipReason: 'in-place session — never auto-commit against source-repo HEAD' };
+    }
+
     // 1. Cooldown between auto-commits per session.
     const lastAuto = this.lastAutoCommitAt.get(sessionId) || 0;
     if (now - lastAuto < WatcherService.AUTO_COMMIT_COOLDOWN_MS) {

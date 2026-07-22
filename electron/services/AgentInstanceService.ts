@@ -1601,6 +1601,36 @@ ${DEVOPS_KIT_DIR}/
    *
    * Returns { moved, regenerated } counts.
    */
+  /**
+   * Migrate stale `useWorktree: false` config where a real sibling worktree
+   * exists. The instance store ended up with many rows in an inconsistent
+   * state (useWorktree=false but worktreePath set to a distinct sibling)
+   * because `restartInstance`'s cold path fell back to
+   * `inheritedConfig?.useWorktree ?? false` when `sessionData.worktreePath`
+   * was empty at restart time. Downstream code that inspects the flag
+   * (external tooling, future guards) then reads "in-place" when the
+   * instance is actually worktree-isolated. Fix: any row where
+   * `worktreePath` is set AND differs from `repoPath` gets
+   * `useWorktree: true`. Idempotent — clean rows are untouched.
+   */
+  migrateUseWorktreeFlag(): number {
+    let migrated = 0;
+    for (const instance of this.instances.values()) {
+      const cfg = instance.config;
+      if (!cfg) continue;
+      const wt = instance.worktreePath;
+      if (!wt || wt === cfg.repoPath) continue; // no drift possible
+      if (cfg.useWorktree === true) continue;   // already correct
+      cfg.useWorktree = true;
+      migrated++;
+    }
+    if (migrated > 0) {
+      this.saveInstances();
+      console.log(`[AgentInstanceService] Migrated useWorktree=true on ${migrated} drifted instance(s)`);
+    }
+    return migrated;
+  }
+
   async migrateLegacyWorktrees(): Promise<{ moved: number; regenerated: number }> {
     let moved = 0;
     let regenerated = 0;

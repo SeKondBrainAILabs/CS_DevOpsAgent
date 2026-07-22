@@ -323,6 +323,11 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     console.log(`[Services] Multi-repo session ${sessionId} registered with MCP binder (${repos.length} repos)`);
   };
 
+  // Repair inconsistent config: useWorktree=false while worktreePath actually
+  // points to a distinct sibling. Legacy of restartInstance's cold path — see
+  // AgentInstanceService.migrateUseWorktreeFlag. Cheap, idempotent, safe.
+  agentInstance.migrateUseWorktreeFlag();
+
   // One-time migration for sessions still living at <repo>/local_deploy/<branch>.
   // Moves them to <repo_parent>/KIT-DevOps-<repo_name>/<branch> via `git worktree
   // move`, regenerates each prompt so the user's "Copy Prompt" shows the new
