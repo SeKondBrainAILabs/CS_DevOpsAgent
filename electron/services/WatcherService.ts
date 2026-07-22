@@ -65,6 +65,16 @@ export class WatcherService extends BaseService {
   private static readonly IDLE_END_MIN_WRITES = 3;
   /** Don't emit two idle-end notifications for the same session within 15 min. */
   private static readonly IDLE_END_COOLDOWN_MS = 15 * 60 * 1000;
+  /** Auto-commit on idle-end when it's been longer than this since HEAD moved.
+   *  Anything shorter and the agent is probably mid-flow; anything much longer
+   *  and we're accumulating the kind of blob-merge (98 files at once) the
+   *  screenshot showed. */
+  private static readonly AUTO_COMMIT_STALE_HEAD_MS = 3 * 60 * 60 * 1000;
+  /** Minimum gap between two AUTO commits on the same session, so a flurry of
+   *  idle-ends doesn't stack five checkpoint commits in ten minutes. */
+  private static readonly AUTO_COMMIT_COOLDOWN_MS = 60 * 60 * 1000;
+  /** Timestamp of last auto-commit per session (Date.now() ms). */
+  private lastAutoCommitAt: Map<string, number> = new Map();
 
   // Phase 4: Analysis services for incremental analysis
   private astParser: ASTParserService | null = null;
@@ -585,9 +595,13 @@ export class WatcherService extends BaseService {
    * so the burst-end state is separately recoverable from the rolling
    * kit-autosave ref (which the next periodic snapshot would overwrite).
    *
-   * Deliberately does NOT auto-commit. Real commits stay agent-driven via
-   * kit_commit (which enforces the parser + diff-size gates). Auto-committing
-   * on burst-end would tempt a broken snapshot into `git log`.
+   * If HEAD hasn't moved in AUTO_COMMIT_STALE_HEAD_MS AND the worktree parses
+   * cleanly (Python/JS syntax check), also lay down an auto-checkpoint commit
+   * so the eventual merge is a series of small chunks rather than the 98-file
+   * blob-merge the screenshot in v2.6.89 was arguing against. Auto-commits are
+   * self-labeled (`[Kanvas] auto-checkpoint after Xh idle`) so squash on merge
+   * is trivial. Never pushed. Falls back to snapshot-only when the parse gate
+   * blocks — a broken worktree never reaches `git log`.
    */
   private startIdleEndTimer(): void {
     if (this.idleEndTimer) return;
@@ -623,17 +637,138 @@ export class WatcherService extends BaseService {
         const nWrites = hist.length;
         const quietMin = Math.round((now - lastWrite) / 60_000);
         const refHint = snap.success && snap.data ? snap.data.refName : null;
-        this.activityService.log(
-          sessionId,
-          'snapshot',
-          `Idle-end detected — ${nWrites} write(s) in the last burst, quiet ${quietMin} min. ` +
-          (refHint ? `Burst-end snapshot: git checkout ${refHint}. ` : '') +
-          `Consider calling kit_commit to lock in progress.`
-        );
+
+        // Second stage: consider an auto-commit if HEAD has been stationary long
+        // enough that the agent is racking up blob-merge material.
+        const autoCommitResult = await this.tryIdleEndAutoCommit(instance, sessionId, nWrites, now);
+
+        if (autoCommitResult.committed) {
+          this.activityService.log(
+            sessionId,
+            'commit',
+            `Auto-checkpoint [${autoCommitResult.shortHash}] after ${autoCommitResult.staleHours}h idle (${nWrites} writes). Merge will squash — self-labeled '[Kanvas] auto-checkpoint'.`
+          );
+        } else {
+          this.activityService.log(
+            sessionId,
+            'snapshot',
+            `Idle-end detected — ${nWrites} write(s) in the last burst, quiet ${quietMin} min. ` +
+            (autoCommitResult.skipReason ? `Auto-commit skipped: ${autoCommitResult.skipReason}. ` : '') +
+            (refHint ? `Burst-end snapshot: git checkout ${refHint}. ` : '') +
+            `Consider calling kit_commit to lock in progress.`
+          );
+        }
       } catch (err) {
         console.warn(`[WatcherService] idle-end snapshot failed for ${sessionId}:`, err);
       }
     }
+  }
+
+  /**
+   * Attempt an auto-checkpoint commit on idle-end. Returns `{ committed: true }`
+   * on success, `{ committed: false, skipReason }` when we deliberately declined
+   * (head recent, cooldown active, parse failure, empty tree). Never pushes.
+   */
+  private async tryIdleEndAutoCommit(
+    instance: WatcherInstance,
+    sessionId: string,
+    nWrites: number,
+    now: number
+  ): Promise<{ committed: true; shortHash: string; staleHours: number } | { committed: false; skipReason?: string }> {
+    // 1. Cooldown between auto-commits per session.
+    const lastAuto = this.lastAutoCommitAt.get(sessionId) || 0;
+    if (now - lastAuto < WatcherService.AUTO_COMMIT_COOLDOWN_MS) {
+      return { committed: false }; // silent skip — cooldown, don't clutter feed
+    }
+
+    // 2. HEAD age. If the branch is being committed to at normal cadence the
+    //    agent doesn't need our help.
+    let staleMs = Infinity;
+    try {
+      const commitTs = await this.gitCmd(instance.worktreePath, ['log', '-1', '--format=%ct', 'HEAD']);
+      const secs = parseInt(commitTs.trim(), 10);
+      if (Number.isFinite(secs) && secs > 0) staleMs = now - secs * 1000;
+    } catch { /* no HEAD yet — treat as infinitely stale so first commit lands */ }
+    if (staleMs < WatcherService.AUTO_COMMIT_STALE_HEAD_MS) {
+      return { committed: false }; // recent enough, silent skip
+    }
+
+    // 3. Anything to commit?
+    let dirty = '';
+    try {
+      dirty = await this.gitCmd(instance.worktreePath, ['status', '--porcelain']);
+    } catch {
+      return { committed: false, skipReason: 'git status failed' };
+    }
+    if (!dirty.trim()) return { committed: false }; // clean tree — nothing to do
+
+    // 4. Parse-check any changed source files we understand. Reuses the same
+    //    logic as kit_commit's sanity gate — a broken file never lands as
+    //    an auto-commit. The user still has the snapshot ref for recovery.
+    const parseFailure = await this.parseCheckChangedFiles(instance.worktreePath, dirty);
+    if (parseFailure) {
+      return { committed: false, skipReason: `parse error in ${parseFailure.file} (${parseFailure.error})` };
+    }
+
+    // 5. Do it.
+    const staleHours = Math.max(1, Math.round(staleMs / 3600_000));
+    const baseMsg = `[Kanvas] auto-checkpoint after ${staleHours}h idle (${nWrites} writes)`;
+    const commitMessage = instance.primaryRepoName
+      ? `[Upgrade From ${instance.primaryRepoName}] ${baseMsg}`
+      : baseMsg;
+    const result = await this.gitService.commit(sessionId, commitMessage, instance.repoName);
+    if (!result.success || !result.data) {
+      return { committed: false, skipReason: `git commit failed: ${result.error?.message || 'unknown'}` };
+    }
+    this.lastAutoCommitAt.set(sessionId, now);
+    return { committed: true, shortHash: result.data.shortHash || result.data.hash.substring(0, 7), staleHours };
+  }
+
+  /** Run one raw git command in a worktree, return stdout. Thin wrapper so the
+   *  auto-commit path can reach the same execa the rest of KIT uses without
+   *  going through GitService's IPC-shaped API. */
+  private async gitCmd(cwd: string, args: string[]): Promise<string> {
+    const mod: any = await import('execa');
+    const execa = typeof mod.execa === 'function' ? mod.execa
+      : typeof mod.default === 'function' ? mod.default
+      : mod.default?.execa;
+    const { stdout } = await execa('git', args, { cwd, timeout: 10_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+    return stdout;
+  }
+
+  /** Parse-check changed source files. Returns null on success, or the first
+   *  offending file (name + short error) so the caller can log which one
+   *  blocked the auto-commit. Mirrors the syntactic gate in tools.ts —
+   *  Python via `python3 -c ast.parse`, JS/MJS/CJS via `node --check`.
+   *  TS/TSX/JSX skipped (no cheap parser available — kit_commit uses a
+   *  structural check but that's more code than the auto path needs).
+   */
+  private async parseCheckChangedFiles(
+    worktreePath: string,
+    porcelain: string
+  ): Promise<{ file: string; error: string } | null> {
+    for (const line of porcelain.split('\n')) {
+      if (line.length < 4) continue;
+      const xy = line.slice(0, 2);
+      if (xy.includes('D')) continue; // deleted, nothing to parse
+      const rel = line.slice(3).replace(/^"|"$/g, '');
+      const ext = rel.toLowerCase().split('.').pop() || '';
+      let bin = ''; let args: string[] = [];
+      const abs = `${worktreePath}/${rel}`;
+      if (!existsSync(abs)) continue;
+      if (ext === 'py') { bin = 'python3'; args = ['-c', 'import ast,sys\nast.parse(open(sys.argv[1]).read())', abs]; }
+      else if (ext === 'js' || ext === 'mjs' || ext === 'cjs') { bin = 'node'; args = ['--check', abs]; }
+      else continue;
+      try {
+        const mod: any = await import('execa');
+        const execa = typeof mod.execa === 'function' ? mod.execa : typeof mod.default === 'function' ? mod.default : mod.default?.execa;
+        await execa(bin, args, { cwd: worktreePath, timeout: 5_000 });
+      } catch (err: any) {
+        const stderr = (err?.stderr || err?.message || '').toString().split('\n').slice(0, 2).join(' ');
+        return { file: rel, error: stderr.slice(0, 120) };
+      }
+    }
+    return null;
   }
 
   private async triggerPeriodicSnapshot(instance: WatcherInstance): Promise<void> {
