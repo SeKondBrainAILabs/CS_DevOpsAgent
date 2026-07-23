@@ -154,6 +154,12 @@ const mockApi = {
     getWorktreeMode: createMockFn({ success: true, data: 'worktree' }),
     setWorktreeMode: createMockFn({ success: true }),
     getActiveSessionCount: createMockFn({ success: true, data: 0 }),
+    // WorkspaceBrowserView's per-repo status effect calls this for the card
+    // badge (see renderer/components/features/WorkspaceBrowserView.tsx). It
+    // MUST be present or the Promise.all in that effect throws, the catch
+    // swallows it, statusByPath never populates, and priority/risk + session
+    // rows silently break.
+    getRunningSessionCount: createMockFn({ success: true, data: 0 }),
   },
   cleanup: {
     analyze: createMockFn({
