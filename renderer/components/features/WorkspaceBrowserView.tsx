@@ -1031,7 +1031,10 @@ export function WorkspaceBrowserView(): React.ReactElement {
         try {
           const [modeRes, countRes, statusRes] = await Promise.all([
             window.api.repoWorkspace.getWorktreeMode(repo.path),
-            window.api.repoWorkspace.getActiveSessionCount(repo.path),
+            // Use the running-count (agent attached) for the repo card badge.
+            // The lifecycle-broad getActiveSessionCount stays for the SSM
+            // guard in NewSessionWizard — see shared/instance-status.ts.
+            window.api.repoWorkspace.getRunningSessionCount(repo.path),
             window.api.git.getRepoStatus(repo.path),
           ]);
           const block: RepoStatusBlock = {

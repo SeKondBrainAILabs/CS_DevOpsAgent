@@ -76,6 +76,25 @@ export default function App(): React.ReactElement {
   // Startup stale-session scan results
   const [staleSessions, setStaleSessions] = React.useState<import('../shared/types').StaleSessionInfo[]>([]);
   const [autoRemovedCount, setAutoRemovedCount] = React.useState(0);
+  // Orphaned session recovery — hoisted from MainLayout so the stale-session
+  // dialog can suppress the orphaned banner while it's open and can dismiss
+  // it when the user picks "Keep all". Before this, the two flows ran
+  // independently and the user's "Keep all" in the modal left the redundant
+  // "Recover All" bar dangling at the top of the app.
+  interface OrphanedSession {
+    sessionId: string;
+    repoPath: string;
+    sessionData: { task?: string; branchName?: string; agentType?: string };
+    lastModified: Date;
+  }
+  const [orphanedSessions, setOrphanedSessions] = React.useState<OrphanedSession[]>([]);
+  // Latch: once the user has dismissed the recovery UI in this session (via
+  // "Keep all" on the stale dialog, "Dismiss" on the orphaned banner, or by
+  // firing "Recover All"), we ignore later orphaned events from the still-in-
+  // flight scanAllReposForSessions IPC. Without this latch a slow scan that
+  // finishes AFTER dismissal re-populates orphanedSessions and the banner
+  // reappears — the "still seeing this issue" v2.6.85 didn't cover.
+  const recoveryDismissedRef = React.useRef(false);
 
   useEffect(() => {
     // Risky stale sessions (unmerged commits) → prompt the user.
@@ -89,8 +108,32 @@ export default function App(): React.ReactElement {
         setAutoRemovedCount((n) => n + sessions.length);
       }
     });
-    return () => { unsubFound?.(); unsubAuto?.(); };
+    // Orphaned sessions (disk files without matching in-memory instance).
+    // Skip when the user has already dismissed recovery in this session — the
+    // late arrival would otherwise resurrect the banner they just closed.
+    const unsubOrph = window.api?.recovery?.onOrphanedSessionsFound?.((sessions) => {
+      if (recoveryDismissedRef.current) return;
+      setOrphanedSessions(sessions);
+    });
+    return () => { unsubFound?.(); unsubAuto?.(); unsubOrph?.(); };
   }, [removeReportedSession]);
+
+  const handleRecoverAll = React.useCallback(async () => {
+    const list = orphanedSessions.map(s => ({ sessionId: s.sessionId, repoPath: s.repoPath }));
+    try {
+      const result = await window.api?.recovery?.recoverMultiple?.(list);
+      if (result?.success) {
+        setOrphanedSessions([]);
+        recoveryDismissedRef.current = true;
+      }
+    } catch (err) {
+      console.error('Recovery failed:', err);
+    }
+  }, [orphanedSessions]);
+  const handleDismissOrphaned = React.useCallback(() => {
+    setOrphanedSessions([]);
+    recoveryDismissedRef.current = true;
+  }, []);
 
   useEffect(() => {
     const unsubStatus = window.api?.rebaseWatcher?.onStatusChanged?.((data) => {
@@ -259,6 +302,13 @@ export default function App(): React.ReactElement {
       <MainLayout
         sidebar={<Sidebar />}
         statusBar={<StatusBar agent={selectedAgent} />}
+        orphanedSessions={orphanedSessions}
+        onRecoverOrphaned={handleRecoverAll}
+        onDismissOrphaned={handleDismissOrphaned}
+        // Hide the orphaned banner while the stale-session dialog is up so the
+        // user isn't looking at two overlapping "old sessions from prior run"
+        // affordances at the same time.
+        suppressOrphanedBanner={staleSessions.length > 0}
       >
         {mainContent}
       </MainLayout>
@@ -302,7 +352,16 @@ export default function App(): React.ReactElement {
       {staleSessions.length > 0 && (
         <StaleSessionsDialog
           sessions={staleSessions}
-          onClose={() => setStaleSessions([])}
+          onClose={() => {
+            setStaleSessions([]);
+            // Treat "Keep all" as "leave old sessions alone entirely" — also
+            // dismiss the orphaned recovery banner and latch the decision so
+            // a late orphaned scan can't resurrect the banner the user just
+            // closed (the actual v2.6.87 fix; v2.6.85 cleared once but the
+            // late-arrival event re-populated).
+            setOrphanedSessions([]);
+            recoveryDismissedRef.current = true;
+          }}
           onRemoved={(ids) => {
             ids.forEach((id) => removeReportedSession(id));
             setStaleSessions((prev) => prev.filter((s) => !ids.includes(s.sessionId)));

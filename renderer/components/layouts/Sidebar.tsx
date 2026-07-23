@@ -22,7 +22,16 @@ export function Sidebar(): React.ReactElement {
   const setSelectedSession = useAgentStore((state) => state.setSelectedSession);
   const removeReportedSession = useAgentStore((state) => state.removeReportedSession);
 
-  const allSessions = Array.from(reportedSessions.values());
+  // Filter out terminal-state sessions from the tree — the user reads the
+  // sidebar as "what's alive to work with", not "everything KIT has ever
+  // seen". Before this filter, sessions with status='closed' (e.g. l63a on
+  // agent_memory_vault, closed 4 months ago) still rendered and inflated
+  // the repo-level count above what the agent-type group actually showed.
+  // Backend reaping doesn't remove them from the SessionReport store — it
+  // just flips `status`. So filtering here is the correct fix.
+  const allSessions = Array.from(reportedSessions.values()).filter(
+    (session) => session.status !== 'closed'
+  );
   const sessions = selectedAgentId
     ? allSessions.filter((session) => session.agentId === selectedAgentId)
     : allSessions;

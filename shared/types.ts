@@ -639,6 +639,20 @@ export interface AgentInstance {
    * v2.6.59 — no recovery is possible for those without lineage data.
    */
   predecessorSessionIds?: string[];
+  /**
+   * Set by `detectStaleRebases` startup scan when the worktree's gitdir has a
+   * `rebase-merge` or `rebase-apply` directory older than the stale threshold
+   * (default 6h). Cleared automatically when the gitdir no longer has rebase
+   * state. Renderer surfaces this as a banner with an "Abort + back up" button
+   * wired to the `INSTANCE_REPAIR_STALE_REBASE` IPC handler.
+   */
+  staleRebase?: {
+    detectedAt: string;     // when the scan flagged it
+    startedAt: string;      // mtime of rebase-merge/apply dir
+    kind: 'merge' | 'apply';
+    ageMinutes: number;     // age at detection time
+    gitDir: string;         // absolute path to the rebase-* dir, for repair
+  };
 }
 
 // =============================================================================
@@ -1033,6 +1047,10 @@ export interface MergeResult {
   stashRecovered?: boolean;
   /** Files that could not be recovered from stash due to unresolvable conflicts */
   stashConflictFiles?: string[];
+  /** S9N-6394: reason the merge gate blocked the operation, when it did. */
+  gateReason?: 'CI_RED' | 'CI_PENDING' | 'WIP_COMMITS' | 'GH_UNAVAILABLE' | 'CI_UNKNOWN';
+  /** S9N-6394: raw payload from the gate (failing checks, WIP shas, etc.). */
+  gateDetails?: unknown;
 }
 
 // =============================================================================

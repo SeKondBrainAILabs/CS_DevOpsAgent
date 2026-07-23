@@ -430,6 +430,39 @@ export class GitService extends BaseService {
   }
 
   /**
+   * Crash-safety snapshot: capture the worktree's tracked + untracked state as
+   * a stash commit and pin it under `refs/kit-autosave/<sessionId>` without
+   * touching HEAD, the index, or `git log`. Replaces the old WIP periodic
+   * auto-commit which polluted history AND let truncated/broken files
+   * (Kemory's ai_chat_service.py being the loud case) get pushed to origin.
+   *
+   * Cost: roughly the same as `git stash create` — sub-100ms for typical
+   * worktrees. The pinned ref is reachable for GC but invisible in
+   * `git log` unless explicitly asked for. Recovery:
+   *   git diff refs/kit-autosave/<sessionId> -- <file>
+   *   git checkout refs/kit-autosave/<sessionId> -- <file>
+   *
+   * Returns null when there's nothing to snapshot (clean tree) or when the
+   * stash invocation produces no SHA. Either is fine and counts as a no-op.
+   */
+  async createSnapshot(
+    worktreePath: string,
+    sessionId: string
+  ): Promise<IpcResult<{ sha: string; refName: string } | null>> {
+    return this.wrap(async () => {
+      // `git stash create` makes a stash commit without storing it in
+      // `refs/stash` — we get the SHA back and pin it ourselves. `-u`
+      // (include untracked) captures new files that haven't been added yet,
+      // which is where most agent edits live before the first kit_commit.
+      const sha = (await this.git(['stash', 'create', '-u', 'kit-autosave'], worktreePath)).trim();
+      if (!sha) return null; // clean tree — nothing to snapshot
+      const refName = `refs/kit-autosave/${sessionId}`;
+      await this.git(['update-ref', refName, sha], worktreePath);
+      return { sha, refName };
+    }, 'GIT_CREATE_SNAPSHOT_FAILED');
+  }
+
+  /**
    * Find existing version-tag prefixes in a repo (for the wizard to suggest one).
    * A "version tag" is any tag ending in vMAJOR.MINOR.PATCH; the returned prefix
    * is everything up to and including the leading "v" (e.g. "SDDMini-KH/v").

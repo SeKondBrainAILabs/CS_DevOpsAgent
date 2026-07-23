@@ -54,6 +54,105 @@ type Divergence = {
   [k: string]: unknown;
 };
 
+/** Verdict from preCommitSanityCheck. block=true → return error to agent. */
+type SanityGateResult = {
+  block: boolean;
+  reason?: string;
+  details?: Record<string, unknown>;
+  /** Set when we snapshotted the worktree before refusing — so the agent's
+   *  work isn't lost while they fix the issue. */
+  snapshotRef?: string;
+  retryGuidance?: string;
+};
+
+/** Files we know how to syntax-check quickly. Anything else is skipped. */
+const PARSE_CHECKABLE = /\.(py|js|mjs|cjs|jsx|ts|tsx)$/i;
+/** Single-file shrink threshold that requires force=true. */
+const SHRINK_PCT_THRESHOLD = 0.5;
+/** Below this line count the shrink check is skipped — tiny files routinely
+ *  shrink during refactors and would create false positives. */
+const SHRINK_MIN_LINES = 300;
+
+/**
+ * Cheap structural sanity check for TS/TSX/JSX (and anything else parser-check
+ * can't handle). Not a real parser — catches the truncation/conflict-marker
+ * class of breakage that KIT itself introduced (f7f05bb, Kanvas auto-merge
+ * mangles) at ~1ms per file. Returns null when the file looks structurally
+ * sound; a short error string when it's obviously broken.
+ *
+ * Checks:
+ *   - No leftover conflict markers (<<<<<<< / ======= / >>>>>>> at line start)
+ *   - Balanced brackets and parens, respecting strings and comments
+ *   - No unterminated single-quoted / double-quoted / template string at EOF
+ *
+ * Deliberately conservative — we'd rather miss a subtle bug than false-positive
+ * on legitimate code. Balanced-braces on a small file can be wrong (macros,
+ * dedented strings) so keep this to modest false-positive risk.
+ */
+function structuralSanityCheck(content: string): string | null {
+  // 1. Leftover merge-conflict markers
+  const lines = content.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (l.startsWith('<<<<<<<') || l.startsWith('=======') && lines[i].length === 7 || l.startsWith('>>>>>>>')) {
+      // Skip the '=======' one — it collides too often with divider comments.
+      // Only fire on <<<<<<< / >>>>>>> which are unambiguous.
+      if (l.startsWith('<<<<<<<') || l.startsWith('>>>>>>>')) {
+        return `unresolved conflict marker at line ${i + 1}: ${l.slice(0, 40)}`;
+      }
+    }
+  }
+
+  // 2. Bracket balance + string-terminator tracking. Single-pass character
+  //    machine that respects //, /* */, ' ', " ", and template literals.
+  let depthBrace = 0, depthParen = 0, depthBracket = 0;
+  let inLine = false; // //-comment
+  let inBlock = false; // /* */
+  let inSingle = false, inDouble = false, inTemplate = false;
+  let templateExprDepth = 0; // ${...} inside template
+
+  for (let i = 0; i < content.length; i++) {
+    const c = content[i];
+    const n = content[i + 1];
+    if (inLine) { if (c === '\n') inLine = false; continue; }
+    if (inBlock) { if (c === '*' && n === '/') { inBlock = false; i++; } continue; }
+    if (inSingle) { if (c === '\\') { i++; continue; } if (c === "'") inSingle = false; if (c === '\n') return `unterminated single-quoted string near line ${content.slice(0, i).split('\n').length}`; continue; }
+    if (inDouble) { if (c === '\\') { i++; continue; } if (c === '"') inDouble = false; if (c === '\n') return `unterminated double-quoted string near line ${content.slice(0, i).split('\n').length}`; continue; }
+    if (inTemplate) {
+      if (c === '\\') { i++; continue; }
+      if (c === '`' && templateExprDepth === 0) { inTemplate = false; continue; }
+      if (c === '$' && n === '{') { templateExprDepth++; i++; continue; }
+      if (c === '}' && templateExprDepth > 0) { templateExprDepth--; continue; }
+      // Inside ${...} we still fall through so brackets in the expression
+      // are balanced — but only when templateExprDepth > 0 does '}' pop the
+      // expression rather than the outer stack. Skip the outer bracket
+      // machine for characters inside the template body.
+      continue;
+    }
+    // Not inside any quote / comment
+    if (c === '/' && n === '/') { inLine = true; i++; continue; }
+    if (c === '/' && n === '*') { inBlock = true; i++; continue; }
+    if (c === "'") { inSingle = true; continue; }
+    if (c === '"') { inDouble = true; continue; }
+    if (c === '`') { inTemplate = true; continue; }
+    if (c === '{') depthBrace++;
+    else if (c === '}') { depthBrace--; if (depthBrace < 0) return `unmatched '}' near line ${content.slice(0, i).split('\n').length}`; }
+    else if (c === '(') depthParen++;
+    else if (c === ')') { depthParen--; if (depthParen < 0) return `unmatched ')' near line ${content.slice(0, i).split('\n').length}`; }
+    else if (c === '[') depthBracket++;
+    else if (c === ']') { depthBracket--; if (depthBracket < 0) return `unmatched ']' near line ${content.slice(0, i).split('\n').length}`; }
+  }
+
+  if (inSingle) return 'unterminated single-quoted string at EOF';
+  if (inDouble) return 'unterminated double-quoted string at EOF';
+  if (inTemplate) return 'unterminated template literal at EOF';
+  if (inBlock) return 'unterminated /* */ comment at EOF';
+  if (depthBrace !== 0) return `unbalanced braces (${depthBrace > 0 ? '+' : ''}${depthBrace}) at EOF — file may be truncated`;
+  if (depthParen !== 0) return `unbalanced parens (${depthParen > 0 ? '+' : ''}${depthParen}) at EOF — file may be truncated`;
+  if (depthBracket !== 0) return `unbalanced brackets (${depthBracket > 0 ? '+' : ''}${depthBracket}) at EOF — file may be truncated`;
+  return null;
+}
+
 /** Interface for the McpServerService to log calls */
 interface McpCallLogger {
   addCallLogEntry(entry: McpCallLogEntry): void;
@@ -81,6 +180,170 @@ export function registerTools(
     'kit_workspace_add', 'kit_workspace_scan', 'kit_project_group_add',
     'kit_set_repo_worktree_mode',
   ]);
+
+  // ===========================================================================
+  // Pre-commit sanity gate
+  //
+  // Why this exists: KIT pushed a 1120-line truncation of ai_chat_service.py
+  // straight to Kemory main in June 2026 because nothing along the path
+  // — agent, watcher, kit_commit, merge — noticed the file went 1497 → 378.
+  // Pre-commit hooks would have caught it, but worktree gitdirs don't
+  // inherit the project's `.pre-commit-config.yaml` so they never ran.
+  // This gate is the KIT-side defense in depth: a syntax parse on every
+  // changed file + a diff-size sanity check that forces the agent to
+  // confirm any 50%+ shrink on a non-trivial file. Snapshots the work
+  // before refusing so retries can't lose data.
+  // ===========================================================================
+  async function preCommitSanityCheck(
+    worktreePath: string,
+    sessionId: string,
+    force: boolean
+  ): Promise<SanityGateResult> {
+    // 1. Inventory the changed files via porcelain. `XY <path>` where the
+    //    second char is the worktree-vs-index status; `??` = untracked.
+    let porcelain = '';
+    try {
+      const r = await gitInWorktree(['status', '--porcelain', '-z'], worktreePath);
+      porcelain = r.stdout;
+    } catch {
+      // If we can't read status, don't block — let gitService.commit surface
+      // the real error rather than mask it with a sanity-gate failure.
+      return { block: false };
+    }
+
+    // Porcelain -z separator: every record ends in NUL. Rename records carry
+    // an extra NUL-separated old-path; we keep only the new path.
+    const records = porcelain.split('\0').filter(Boolean);
+    const changedPaths: { path: string; deleted: boolean; untracked: boolean }[] = [];
+    for (let i = 0; i < records.length; i++) {
+      const rec = records[i];
+      if (rec.length < 3) continue;
+      const xy = rec.slice(0, 2);
+      const rest = rec.slice(3);
+      const isRename = xy[0] === 'R' || xy[0] === 'C';
+      const path = isRename ? rest : rest; // -z renames put old path in next record; we skip the old
+      if (isRename) i++; // consume the old-path record
+      const deleted = xy.includes('D');
+      const untracked = xy === '??';
+      changedPaths.push({ path, deleted, untracked });
+    }
+
+    // 2. Parser gate — never bypassable. A failing parse means the file on
+    //    disk is broken; force=true can't pretend otherwise.
+    const parseFailures: Array<{ file: string; error: string }> = [];
+    for (const { path: rel, deleted } of changedPaths) {
+      if (deleted) continue;
+      if (!PARSE_CHECKABLE.test(rel)) continue;
+      const abs = join(worktreePath, rel);
+      if (!existsSync(abs)) continue;
+      const ext = rel.toLowerCase().split('.').pop() || '';
+      let cmd: { bin: string; args: string[] } | null = null;
+      if (ext === 'py') {
+        cmd = { bin: 'python3', args: ['-c', `import ast,sys\nast.parse(open(sys.argv[1]).read())`, abs] };
+      } else if (ext === 'js' || ext === 'mjs' || ext === 'cjs') {
+        cmd = { bin: 'node', args: ['--check', abs] };
+      }
+      // TS/TSX/JSX have no cheap parser here (tsc is too heavy, node --check
+      // rejects TS syntax). Fall through to the structural check below.
+      if (cmd) {
+        try {
+          if (!_execa) {
+            const mod: any = await import('execa');
+            _execa = typeof mod.execa === 'function' ? mod.execa
+              : typeof mod.default === 'function' ? mod.default
+              : mod.default?.execa;
+          }
+          await _execa!(cmd.bin, cmd.args, { cwd: worktreePath, timeout: 5_000 });
+        } catch (err: any) {
+          const stderr = (err?.stderr || err?.message || '').toString();
+          parseFailures.push({ file: rel, error: stderr.split('\n').slice(0, 4).join('\n') });
+          continue;
+        }
+      }
+
+      // Structural sanity check — runs for TS/TSX/JSX (where we have no
+      // parser) AND as a second pass on JS/Py files (parsers can occasionally
+      // accept legitimately-truncated files). ~1ms/file, no subprocess.
+      try {
+        const fs = await import('fs/promises');
+        const content = await fs.readFile(abs, 'utf8');
+        const problem = structuralSanityCheck(content);
+        if (problem) parseFailures.push({ file: rel, error: `structural: ${problem}` });
+      } catch { /* best-effort */ }
+    }
+
+    if (parseFailures.length > 0) {
+      // Snapshot before refusing so the agent's work survives until they fix it.
+      let snapshotRef: string | undefined;
+      try {
+        const snap = await deps.gitService?.createSnapshot(worktreePath, sessionId);
+        if (snap?.success && snap.data) snapshotRef = snap.data.refName;
+      } catch { /* best-effort */ }
+      return {
+        block: true,
+        reason: `Parse error in ${parseFailures.length} file(s) — commit refused. Re-read the file(s), fix the syntax, then retry. force=true does NOT bypass parser errors.`,
+        details: { parseFailures },
+        snapshotRef,
+        retryGuidance: 'Open each flagged file, locate the syntax error, fix it, then call kit_commit again (no force needed once the parse passes).',
+      };
+    }
+
+    // 3. Diff-size gate — bypassable with force=true.
+    if (!force) {
+      const shrinkFlags: Array<{ file: string; beforeLines: number; afterLines: number; shrinkPct: number }> = [];
+      for (const { path: rel, deleted, untracked } of changedPaths) {
+        if (deleted || untracked) continue; // shrink is only meaningful for modifications
+        const abs = join(worktreePath, rel);
+        if (!existsSync(abs)) continue;
+        let beforeLines = 0;
+        let afterLines = 0;
+        try {
+          const before = await gitInWorktree(['show', `HEAD:${rel}`], worktreePath);
+          beforeLines = before.stdout.split('\n').length;
+        } catch {
+          continue; // new file or untracked at HEAD — no shrink possible
+        }
+        try {
+          const after = await gitInWorktree(['cat-file', '-p', `:0:${rel}`], worktreePath).catch(async () => {
+            // not staged yet — read working tree
+            const fs = await import('fs/promises');
+            return { stdout: await fs.readFile(abs, 'utf8'), stderr: '' };
+          });
+          afterLines = after.stdout.split('\n').length;
+        } catch {
+          continue;
+        }
+        if (beforeLines < SHRINK_MIN_LINES) continue;
+        const shrink = (beforeLines - afterLines) / beforeLines;
+        if (shrink >= SHRINK_PCT_THRESHOLD) {
+          shrinkFlags.push({
+            file: rel,
+            beforeLines,
+            afterLines,
+            shrinkPct: Math.round(shrink * 100),
+          });
+        }
+      }
+
+      if (shrinkFlags.length > 0) {
+        let snapshotRef: string | undefined;
+        try {
+          const snap = await deps.gitService?.createSnapshot(worktreePath, sessionId);
+          if (snap?.success && snap.data) snapshotRef = snap.data.refName;
+        } catch { /* best-effort */ }
+        const summary = shrinkFlags.map(f => `${f.file} (${f.beforeLines}→${f.afterLines} lines, -${f.shrinkPct}%)`).join('; ');
+        return {
+          block: true,
+          reason: `Suspicious shrink in ${shrinkFlags.length} file(s): ${summary}. Re-read the file(s) to confirm the change is intentional, then retry with force=true if it is.`,
+          details: { shrinkFlags },
+          snapshotRef,
+          retryGuidance: 'If the shrink is wrong (accidental truncation), discard the on-disk file and reapply your changes. If intentional, call kit_commit again with force=true.',
+        };
+      }
+    }
+
+    return { block: false };
+  }
 
   // ===========================================================================
   // Worktree-divergence guards
@@ -349,8 +612,9 @@ export function registerTools(
       cwd: z.string().describe('Your current shell working directory (run `pwd`). REQUIRED. The commit is rejected if this is not the session worktree, so your work is never silently committed to the wrong place.'),
       push: z.boolean().optional().default(false).describe('Push to remote after commit'),
       repo: z.string().optional().describe('Target repo name (multi-repo mode). Omit for primary repo.'),
+      force: z.boolean().optional().default(false).describe('Bypass the pre-commit sanity gate (diff-size warning + parser check). Set to true ONLY after re-reading any flagged file and confirming the change is intentional. Parser errors block even with force=true — they always mean the on-disk file is broken.'),
     },
-    withCallLog('kit_commit', async ({ session_id, message, cwd, push, repo }) => {
+    withCallLog('kit_commit', async ({ session_id, message, cwd, push, repo, force }) => {
       const worktree = binder.getWorktreePathForRepo(session_id, repo);
       if (!worktree) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown session or repo', session_id, repo }) }] };
@@ -362,6 +626,21 @@ export function registerTools(
 
       if (!deps.gitService) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Git service not available' }) }] };
+      }
+
+      // Pre-commit sanity gate — catches the f7f05bb-class truncation that
+      // pushed a 378-line broken ai_chat_service.py straight to Kemory main
+      // because nothing in the path noticed the file went from 1497 → 378.
+      const gate = await preCommitSanityCheck(worktree, session_id, !!force);
+      if (gate.block) {
+        deps.activityService?.log(session_id, 'warning', `Commit blocked by sanity gate: ${gate.reason}`, { source: 'mcp', toolName: 'kit_commit' });
+        return { content: [{ type: 'text', text: JSON.stringify({
+          error: 'Commit refused by sanity gate',
+          reason: gate.reason,
+          details: gate.details,
+          snapshot: gate.snapshotRef,
+          retry: gate.retryGuidance,
+        }) }] };
       }
 
       try {
@@ -428,7 +707,14 @@ export function registerTools(
         // 5. Emit commit event so renderer CommitsTab updates in real-time
         deps.emitCommitCompleted?.(session_id, hash, commitMessage, filesChanged);
 
-        // 6. Post-commit contract check (fire-and-forget)
+        // 6. On-demand post-commit rebase (fire-and-forget). Wired from
+        // services/index.ts to WatcherService.attemptPostCommitRebase — same
+        // logic the .commit-msg-file path fires. Before v2.6.92 this was
+        // silently skipped for MCP commits so agent-driven sessions never got
+        // the "on-demand" rebase they were configured for.
+        deps.postCommitRebase?.(session_id, repo).catch(() => { /* non-fatal */ });
+
+        // 7. Post-commit contract check (fire-and-forget)
         triggerContractCheck(session_id, worktree, hash).catch(() => {});
 
         const result: Record<string, unknown> = {
@@ -462,8 +748,9 @@ export function registerTools(
       message: z.string().describe('Commit message (conventional commits format preferred)'),
       cwd: z.string().describe('Your current shell working directory (run `pwd`). REQUIRED — must be the session\'s primary worktree, or the call is rejected.'),
       push: z.boolean().optional().default(false).describe('Push to remote after each commit'),
+      force: z.boolean().optional().default(false).describe('Bypass the pre-commit sanity gate (diff-size warning) for ALL repos in this multi-repo commit. Parser errors still block even with force=true.'),
     },
-    withCallLog('kit_commit_all', async ({ session_id, message, cwd, push }) => {
+    withCallLog('kit_commit_all', async ({ session_id, message, cwd, push, force }) => {
       const repos = binder.getReposForSession(session_id);
       if (repos.length === 0) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown session', session_id }) }] };
@@ -475,6 +762,26 @@ export function registerTools(
 
       if (!deps.gitService) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Git service not available' }) }] };
+      }
+
+      // Sanity gate per repo. If ANY repo blocks, refuse the whole multi-repo
+      // commit — a partial commit across a multi-repo session leaves the
+      // ecosystem in a worse state than one with no commits at all.
+      const blockedRepos: Array<{ repoName: string; reason: string; details: unknown; snapshot?: string }> = [];
+      for (const r of repos) {
+        const wt = binder.getWorktreePathForRepo(session_id, r.repoName);
+        if (!wt) continue;
+        const gate = await preCommitSanityCheck(wt, session_id, !!force);
+        if (gate.block) {
+          blockedRepos.push({ repoName: r.repoName, reason: gate.reason || 'sanity gate', details: gate.details, snapshot: gate.snapshotRef });
+        }
+      }
+      if (blockedRepos.length > 0) {
+        deps.activityService?.log(session_id, 'warning', `kit_commit_all blocked by sanity gate (${blockedRepos.length} repo(s))`, { source: 'mcp', toolName: 'kit_commit_all' });
+        return { content: [{ type: 'text', text: JSON.stringify({
+          error: 'Commit refused by sanity gate in one or more repos — no repos committed.',
+          blockedRepos,
+        }) }] };
       }
 
       const results: Array<{ repoName: string; commitHash?: string; filesChanged?: number; pushed?: boolean; error?: string }> = [];
@@ -533,6 +840,9 @@ export function registerTools(
               );
             }
           }
+
+          // On-demand post-commit rebase (fire-and-forget) — see kit_commit.
+          deps.postCommitRebase?.(session_id, repo.repoName).catch(() => { /* non-fatal */ });
 
           // Post-commit contract check
           triggerContractCheck(session_id, repo.worktreePath, hash).catch(() => {});
@@ -818,12 +1128,139 @@ export function registerTools(
     })
   );
 
+  // --------------------------------------------------------------------------
+  // kit_merge — Execute a merge via the same code path as the UI merge modal.
+  // Enforces the S9N-6394 CI gate for protected targets (main/master/
+  // production/release). Agents must not pass force=true unless the user has
+  // explicitly authorized bypassing the gate — see the MERGE POLICY block in
+  // the session prompt.
+  // --------------------------------------------------------------------------
+  srv.tool(
+    'kit_merge',
+    'Merge the session branch into a target branch (default: baseBranch). ' +
+    'For protected targets (main/master/production/release) the S9N-6394 CI ' +
+    'gate refuses the merge if `gh pr checks` reports non-green, if pending, ' +
+    'if the source contains WIP/[Kanvas] auto-checkpoint commits, or if gh is ' +
+    'not installed. Pass force=true ONLY when the user has explicitly ' +
+    'authorized bypassing the gate (never on your own initiative).',
+    {
+      session_id: z.string().describe('The KIT session ID'),
+      cwd: z.string().describe('Your current shell working directory (run `pwd`). REQUIRED — must be the session worktree, on the session branch.'),
+      target_branch: z.string().optional().describe('Target branch to merge into. Defaults to the session\'s baseBranch.'),
+      force: z.boolean().optional().default(false).describe('Bypass the S9N-6394 CI gate. ONLY set when the user has explicitly authorized skipping the CI verification. Never set on your own initiative — the gate exists because auto-sync merged a mid-write file into Core_Kora_ChromeExt/main on 2026-07-22.'),
+    },
+    withCallLog('kit_merge', async ({ session_id, cwd, target_branch, force }) => {
+      if (!deps.mergeService) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Merge service not available' }) }] };
+      }
+      const worktree = binder.getWorktreePathForRepo(session_id);
+      if (!worktree) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown session or worktree not registered', session_id }) }] };
+      }
+      const divergence = await checkDivergence(session_id, undefined, cwd);
+      if (divergence) return divergenceResponse(session_id, 'kit_merge', divergence);
+
+      // Resolve source branch + target from the instance config.
+      const instances = deps.agentInstanceService?.listInstances();
+      const inst = instances?.success && instances.data ? instances.data.find((i: any) => i.sessionId === session_id) : undefined;
+      const sourceBranch = inst?.config?.branchName;
+      const resolvedTarget = target_branch || inst?.config?.baseBranch || 'main';
+      const repoPath = inst?.config?.repoPath;
+      if (!sourceBranch || !repoPath) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Could not resolve source branch or repo path', session_id }) }] };
+      }
+
+      deps.activityService?.log(session_id, 'git', `MCP kit_merge: ${sourceBranch} → ${resolvedTarget}${force ? ' (CI gate override)' : ''}`, { source: 'mcp', toolName: 'kit_merge' });
+
+      const result = await deps.mergeService.executeMerge(repoPath, sourceBranch, resolvedTarget, {
+        worktreePath: worktree,
+        skipCiGate: !!force,
+      });
+
+      if (!result.success || !result.data) {
+        return { content: [{ type: 'text', text: JSON.stringify({
+          error: result.error?.message || 'Merge failed',
+          success: false,
+        }) }] };
+      }
+      const md = result.data;
+      return { content: [{ type: 'text', text: JSON.stringify({
+        success: md.success,
+        message: md.message,
+        mergeCommitHash: md.mergeCommitHash,
+        filesChanged: md.filesChanged,
+        conflictingFiles: md.conflictingFiles,
+        gateReason: md.gateReason,
+        gateDetails: md.gateDetails,
+        source: sourceBranch,
+        target: resolvedTarget,
+      }) }] };
+    })
+  );
+
+  // --------------------------------------------------------------------------
+  // kit_rebase — On-demand rebase onto baseBranch via the same AI-conflict-
+  // resolution code path the post-commit rebase uses. No CI gate here — rebase
+  // moves the session branch onto latest baseBranch, doesn't touch protected
+  // targets.
+  // --------------------------------------------------------------------------
+  srv.tool(
+    'kit_rebase',
+    'Rebase the session branch onto the latest baseBranch. Fetches origin, ' +
+    'then rebases; conflicts get resolved by the AI conflict resolver. Use ' +
+    'when you want the session branch up to date with base before continuing ' +
+    'work OR before opening a PR (so CI runs against the latest base).',
+    {
+      session_id: z.string().describe('The KIT session ID'),
+      cwd: z.string().describe('Your current shell working directory (run `pwd`). REQUIRED — must be the session worktree, on the session branch.'),
+      base_branch: z.string().optional().describe('Base branch to rebase onto. Defaults to the session\'s baseBranch.'),
+    },
+    withCallLog('kit_rebase', async ({ session_id, cwd, base_branch }) => {
+      if (!deps.rebaseWatcherService) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Rebase service not available' }) }] };
+      }
+      const worktree = binder.getWorktreePathForRepo(session_id);
+      if (!worktree) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown session', session_id }) }] };
+      }
+      const divergence = await checkDivergence(session_id, undefined, cwd);
+      if (divergence) return divergenceResponse(session_id, 'kit_rebase', divergence);
+
+      const instances = deps.agentInstanceService?.listInstances();
+      const inst = instances?.success && instances.data ? instances.data.find((i: any) => i.sessionId === session_id) : undefined;
+      const resolvedBase = base_branch || inst?.config?.baseBranch || 'main';
+      const repoPath = inst?.config?.repoPath;
+      if (!repoPath) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Could not resolve repo path', session_id }) }] };
+      }
+
+      deps.activityService?.log(session_id, 'git', `MCP kit_rebase: onto ${resolvedBase}`, { source: 'mcp', toolName: 'kit_rebase' });
+
+      try {
+        const result = await deps.rebaseWatcherService.performRebaseForPath(session_id, repoPath, resolvedBase);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          success: !!result.success,
+          message: result.message || '',
+          incomingCommits: result.incomingCommits,
+          commitsAdded: result.commitsAdded,
+          baseBranch: resolvedBase,
+        }) }] };
+      } catch (err) {
+        return { content: [{ type: 'text', text: JSON.stringify({
+          error: err instanceof Error ? err.message : 'Rebase failed',
+          success: false,
+        }) }] };
+      }
+    })
+  );
+
   // ==========================================================================
-  // v2.5 additions — Workspace / repo state / auto-commit guard
-  // Read-heavy tools that let agents interrogate branch / worktree / session
-  // state before deciding to spawn work or run commits. All are safe defaults:
-  // when a service isn't wired, the tool returns a clear "not-available"
-  // response rather than throwing.
+  // v2.5 additions (merged in at v2.7.0 from origin/main track) —
+  // Workspace / repo state / auto-commit guard. Read-heavy tools that let
+  // agents interrogate branch / worktree / session state before deciding to
+  // spawn work or run commits. All are safe defaults: when a service isn't
+  // wired, the tool returns a clear "not-available" response rather than
+  // throwing.
   // ==========================================================================
 
   const notAvailable = (service: string) => ({

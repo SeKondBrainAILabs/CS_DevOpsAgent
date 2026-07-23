@@ -305,6 +305,19 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   mcpServer.setProjectGroupServiceForMcp(projectGroup);
   await mcpServer.initialize();
   mcpServer.wireCommitEmitter();
+  // Every kit_commit / kit_commit_all should get the on-demand rebase that
+  // WatcherService's .commit-msg-file path already fires. Without this hook
+  // MCP-driven agent commits silently skip the post-commit remote sync.
+  mcpServer.setPostCommitRebase((sessionId, repoName) => watcher.attemptPostCommitRebase(sessionId, repoName));
+  // v2.6.95 — expose kit_merge / kit_rebase to agents.
+  mcpServer.setMergeService({
+    executeMerge: (repoPath, sourceBranch, targetBranch, options) =>
+      merge.executeMerge(repoPath, sourceBranch, targetBranch, options),
+  });
+  mcpServer.setRebaseWatcherService({
+    performRebaseForPath: (sessionId, repoPath, baseBranch) =>
+      rebaseWatcher.performRebaseForPath(sessionId, repoPath, baseBranch),
+  });
   mcpServer.setDebugLog(debugLog);
   console.log('[Services] MCP server initialized on port', mcpServer.getPort());
 
@@ -328,6 +341,11 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     console.log(`[Services] Multi-repo session ${sessionId} registered with MCP binder (${repos.length} repos)`);
   };
 
+  // Repair inconsistent config: useWorktree=false while worktreePath actually
+  // points to a distinct sibling. Legacy of restartInstance's cold path — see
+  // AgentInstanceService.migrateUseWorktreeFlag. Cheap, idempotent, safe.
+  agentInstance.migrateUseWorktreeFlag();
+
   // One-time migration for sessions still living at <repo>/local_deploy/<branch>.
   // Moves them to <repo_parent>/KIT-DevOps-<repo_name>/<branch> via `git worktree
   // move`, regenerates each prompt so the user's "Copy Prompt" shows the new
@@ -347,6 +365,16 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // every other git op fails with `fatal: not a git repository` and the
   // session is stuck in the UI. Marks those instances `completed`.
   await agentInstance.reapBrokenLinks();
+
+  // Detect interrupted rebases (rebase-merge or rebase-apply dir older than
+  // 6h) and flag the instance so the UI can surface "Abort + back up" before
+  // the agent walks in confused by a parked HEAD. Idempotent; clears the
+  // flag when the rebase state is gone.
+  await agentInstance.detectStaleRebases();
+
+  // Prune crash-safety snapshot refs (refs/kit-autosave/*) older than 7d.
+  // Snapshots are pure recovery aids and accumulate unboundedly without GC.
+  await agentInstance.gcOldSnapshots();
 
   // Repatriate any `mcp_calls` stranded under previous-restart sessionIds. A
   // builds-before-v2.6.58 transferSessionData omitted mcp_calls, so the MCP

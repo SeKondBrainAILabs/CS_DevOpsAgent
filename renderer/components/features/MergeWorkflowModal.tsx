@@ -55,6 +55,11 @@ export function MergeWorkflowModal({
   const [preview, setPreview] = useState<MergePreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // S9N-6394: reason the merge gate blocked (CI_RED / CI_PENDING / WIP_COMMITS
+  // / GH_UNAVAILABLE / CI_UNKNOWN). Non-null → error screen shows the
+  // "Merge without CI check" override.
+  type GateReason = 'CI_RED' | 'CI_PENDING' | 'WIP_COMMITS' | 'GH_UNAVAILABLE' | 'CI_UNKNOWN';
+  const [gateReason, setGateReason] = useState<GateReason | null>(null);
   const [showAdvancedError, setShowAdvancedError] = useState(false);
 
   // Dynamically resolved branch from worktree (may differ from session's branchName)
@@ -221,11 +226,27 @@ export function MergeWorkflowModal({
       } catch { setDirtyCount(0); setDirtyDecision('committed'); }
 
       // Read the session's GitHub-Action-on-merge config (tag-push), if any.
+      // Falls back to repo-level detectTagPrefixes when the session has no
+      // mergeAction — covers sessions created with the toggle off AND sessions
+      // restarted through the cold path that drops config. Without the fallback
+      // the tag step silently vanishes for most sessions and users assume
+      // tag-push is broken.
       try {
         if (sessionId) {
           const inst = await window.api?.instance?.get?.(sessionId);
           const ma = inst?.success ? inst.data?.config?.mergeAction : undefined;
-          setMergeActionPrefix(ma?.enabled && ma.type === 'tag-push' ? ma.tagPrefix : null);
+          if (ma?.enabled && ma.type === 'tag-push') {
+            setMergeActionPrefix(ma.tagPrefix);
+          } else if (repoPath) {
+            const detected = await window.api?.git?.detectTagPrefixes?.(repoPath);
+            if (detected?.success && detected.data && detected.data[0]) {
+              setMergeActionPrefix(detected.data[0].prefix);
+            } else {
+              setMergeActionPrefix(null);
+            }
+          } else {
+            setMergeActionPrefix(null);
+          }
         }
       } catch { setMergeActionPrefix(null); }
 
@@ -579,14 +600,15 @@ export function MergeWorkflowModal({
     }
   }, [preview, step, loading, dirtyDecision, handleAutoFix]);
 
-  const handleExecuteMerge = async () => {
+  const handleExecuteMerge = async (opts?: { skipCiGate?: boolean }) => {
     setStep('executing');
     setError(null);
+    setGateReason(null);
     setProgressLog([]);
 
     try {
       if (window.api?.merge?.execute) {
-        addProgress('Executing merge...');
+        addProgress(opts?.skipCiGate ? 'Executing merge (CI gate overridden)…' : 'Executing merge...');
 
         const result = await window.api.merge.execute(
           repoPath,
@@ -597,6 +619,7 @@ export function MergeWorkflowModal({
             deleteLocalBranch,
             deleteRemoteBranch,
             worktreePath,
+            skipCiGate: opts?.skipCiGate,
           }
         );
 
@@ -606,16 +629,17 @@ export function MergeWorkflowModal({
             updateLastProgress('done');
             setStep('complete');
             onMergeComplete?.();
-            // Defer session deletion until the user dismisses the success screen.
-            // Deleting the session immediately unmounts this modal (via parent
-            // state changes) before the "complete" step can render, making the
-            // dialog appear to vanish silently after a successful merge.
             if (deleteSession && sessionId && onDeleteSession) {
               pendingSessionDelete.current = sessionId;
             }
           } else {
             updateLastProgress('error');
             setErrorWithLog(result.data.message);
+            // S9N-6394: surface the gate reason so the error screen can show
+            // an explicit "Merge without CI check" override button.
+            if ((result.data as { gateReason?: string }).gateReason) {
+              setGateReason((result.data as { gateReason: string }).gateReason as GateReason);
+            }
             setStep('error');
           }
         } else {
@@ -1218,7 +1242,29 @@ export function MergeWorkflowModal({
                 </svg>
               </div>
               <h3 className="text-lg font-medium text-text-primary mb-2">Merge Failed</h3>
-              <p className="text-sm text-red-600 mb-4">{error}</p>
+              <p className="text-sm text-red-600 mb-4 whitespace-pre-wrap">{error}</p>
+              {/* S9N-6394 override — only shown when the failure is a gate refusal. */}
+              {gateReason && (
+                <div className="mb-4 mx-auto max-w-md p-3 rounded-lg bg-amber-50 border border-amber-200 text-left text-xs text-amber-900">
+                  <div className="font-medium mb-1">
+                    {gateReason === 'CI_RED' && 'CI is red on the source branch.'}
+                    {gateReason === 'CI_PENDING' && 'CI is still running on the source branch.'}
+                    {gateReason === 'WIP_COMMITS' && 'Source branch contains WIP / auto-checkpoint commits.'}
+                    {gateReason === 'GH_UNAVAILABLE' && 'gh CLI not available — CI status could not be verified.'}
+                    {gateReason === 'CI_UNKNOWN' && 'CI status could not be determined.'}
+                  </div>
+                  <p className="mb-2">
+                    Merging would advance <code className="font-mono">{targetBranch}</code> without a verified green build.
+                    The 2026-07-22 Core_Kora_ChromeExt incident (a mid-write commit reached main) is exactly the class of failure this gate is protecting against.
+                  </p>
+                  <button
+                    onClick={() => void handleExecuteMerge({ skipCiGate: true })}
+                    className="w-full px-3 py-2 rounded-md bg-amber-600 text-white text-xs font-medium hover:bg-amber-700"
+                  >
+                    Merge without CI check (I've verified manually)
+                  </button>
+                </div>
+              )}
               {progressLog.length > 0 && (
                 <div className="bg-surface-secondary rounded-lg p-3 text-left max-h-40 overflow-auto mb-3">
                   {progressLog.map((entry, i) => (

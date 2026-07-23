@@ -157,6 +157,189 @@ export class MergeService extends BaseService {
    * per-worktree identifiers that have no business propagating into shared
    * branches. If any file in the list isn't tracked, it's silently skipped.
    */
+  /**
+   * S9N-6394 pre-merge gate for protected targets (main/master/production/
+   * release). Blocks the merge when either:
+   *
+   *   (a) `gh pr checks` on the source branch reports any FAILURE / PENDING /
+   *       ERROR / CANCELLED / TIMED_OUT check — or the tool is unavailable.
+   *       Uses --required so informational-only workflows don't false-fail;
+   *       falls back to `gh run list --branch --limit 5` when the branch has
+   *       no PR (still catches broken workflow runs).
+   *   (b) The source-branch commits contain a WIP:/[Kanvas]/[Kanvas Restart]
+   *       auto-checkpoint tip. These were the exact class of commit
+   *       (a mid-write file, "WIP: pre-sync commit") that broke Core_Kora_
+   *       ChromeExt main in the incident that spawned the ticket.
+   *
+   * Both are recoverable via options.skipCiGate=true, which the UI surfaces
+   * as an explicit "Merge without CI check" affordance. The default path
+   * refuses so agent-driven merges cannot ship a red or mid-write state.
+   */
+  private async checkMergeGate(
+    worktreePath: string,
+    sourceBranch: string,
+    targetBranch: string
+  ): Promise<{ ok: true } | { ok: false; message: string; reason: 'CI_RED' | 'CI_PENDING' | 'WIP_COMMITS' | 'GH_UNAVAILABLE' | 'CI_UNKNOWN'; details?: unknown }> {
+    // (b) — cheap, no subprocess: scan commit messages between source and
+    // target. Do this first so a WIP tip fails fast before we spend the
+    // gh-CLI round-trip.
+    try {
+      const range = `origin/${targetBranch}..${sourceBranch}`;
+      const { stdout: log } = await this.git(['log', range, '--format=%H%x09%s'], worktreePath);
+      const wipHits: Array<{ sha: string; subject: string }> = [];
+      for (const line of log.split('\n')) {
+        if (!line) continue;
+        const [sha, ...rest] = line.split('\t');
+        const subject = rest.join('\t');
+        if (/^WIP:/.test(subject) ||
+            /^\[Kanvas\]/.test(subject) ||
+            /^\[Kanvas Restart\]/.test(subject) ||
+            /pre-sync commit/i.test(subject)) {
+          wipHits.push({ sha: sha.slice(0, 8), subject });
+        }
+      }
+      if (wipHits.length > 0) {
+        const list = wipHits.slice(0, 4).map(h => `  ${h.sha} ${h.subject}`).join('\n');
+        const more = wipHits.length > 4 ? `\n  ...and ${wipHits.length - 4} more` : '';
+        return {
+          ok: false,
+          reason: 'WIP_COMMITS',
+          message:
+            `Refused merge into '${targetBranch}': source '${sourceBranch}' has ${wipHits.length} ` +
+            `WIP / Kanvas auto-checkpoint commit${wipHits.length > 1 ? 's' : ''} that must not reach a protected branch.\n\n` +
+            `${list}${more}\n\n` +
+            `Interactive-rebase to squash them (\`git rebase -i origin/${targetBranch}\`), or ` +
+            `use "Merge without CI check" if you're sure the tips are safe.`,
+          details: { wipCommits: wipHits },
+        };
+      }
+    } catch {
+      // Non-fatal — if we can't inspect the range (branch not pushed, etc.)
+      // fall through to the CI check.
+    }
+
+    // (a) — gh CLI. Missing gh isn't a hard fail, but we still refuse the
+    // merge with a clear message so the user installs it or overrides.
+    const runGh = async (args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string; code: number }> => {
+      try {
+        const mod: any = await import('execa');
+        const execa = typeof mod.execa === 'function' ? mod.execa
+          : typeof mod.default === 'function' ? mod.default
+          : mod.default?.execa;
+        const r = await execa('gh', args, { cwd: worktreePath, timeout: 30_000, reject: false });
+        return { ok: r.exitCode === 0, stdout: r.stdout || '', stderr: r.stderr || '', code: r.exitCode ?? -1 };
+      } catch (err: any) {
+        return { ok: false, stdout: '', stderr: err?.message || String(err), code: -1 };
+      }
+    };
+
+    // Prefer PR-level checks (matches how the team gates in GitHub).
+    const prChecks = await runGh(['pr', 'checks', sourceBranch, '--required', '--json', 'name,state,bucket']);
+    if (prChecks.code === -1 && /command not found|ENOENT/i.test(prChecks.stderr)) {
+      return {
+        ok: false,
+        reason: 'GH_UNAVAILABLE',
+        message:
+          `Refused merge into '${targetBranch}': gh CLI not installed. Install \`gh\` ` +
+          `and authenticate (\`gh auth login\`) so KIT can verify CI is green, or override ` +
+          `with "Merge without CI check" if you've verified manually.`,
+      };
+    }
+    if (prChecks.ok && prChecks.stdout.trim()) {
+      try {
+        const checks = JSON.parse(prChecks.stdout) as Array<{ name: string; state: string; bucket?: string }>;
+        const bad = checks.filter(c => {
+          const state = (c.state || '').toUpperCase();
+          const bucket = (c.bucket || '').toLowerCase();
+          return state === 'FAILURE' || state === 'ERROR' || state === 'CANCELLED' || state === 'TIMED_OUT'
+            || bucket === 'fail' || bucket === 'cancel';
+        });
+        const pending = checks.filter(c => {
+          const state = (c.state || '').toUpperCase();
+          const bucket = (c.bucket || '').toLowerCase();
+          return state === 'PENDING' || state === 'IN_PROGRESS' || state === 'QUEUED'
+            || bucket === 'pending';
+        });
+        if (bad.length > 0) {
+          const list = bad.slice(0, 5).map(c => `  ${c.name}: ${c.state}`).join('\n');
+          return {
+            ok: false,
+            reason: 'CI_RED',
+            message:
+              `Refused merge into '${targetBranch}': ${bad.length} required CI check${bad.length > 1 ? 's are' : ' is'} failing on '${sourceBranch}'.\n\n${list}\n\n` +
+              `Fix the failing check${bad.length > 1 ? 's' : ''} and rerun, or override with "Merge without CI check" if this is expected.`,
+            details: { failing: bad },
+          };
+        }
+        if (pending.length > 0) {
+          const list = pending.slice(0, 5).map(c => `  ${c.name}: ${c.state}`).join('\n');
+          return {
+            ok: false,
+            reason: 'CI_PENDING',
+            message:
+              `Refused merge into '${targetBranch}': ${pending.length} required CI check${pending.length > 1 ? 's are' : ' is'} still running on '${sourceBranch}'.\n\n${list}\n\n` +
+              `Wait for green — or override with "Merge without CI check" if you must.`,
+            details: { pending },
+          };
+        }
+        return { ok: true };
+      } catch {
+        // Fall through to branch-level check
+      }
+    }
+
+    // Fallback: no PR (or gh pr checks returned nothing) → check latest run on the branch.
+    const runList = await runGh(['run', 'list', '--branch', sourceBranch, '--limit', '5', '--json', 'status,conclusion,name,url']);
+    if (runList.ok && runList.stdout.trim()) {
+      try {
+        const runs = JSON.parse(runList.stdout) as Array<{ status: string; conclusion: string | null; name: string; url: string }>;
+        if (runs.length === 0) {
+          return {
+            ok: false,
+            reason: 'CI_UNKNOWN',
+            message:
+              `Refused merge into '${targetBranch}': no CI workflow runs found for '${sourceBranch}'. ` +
+              `Push a commit to trigger CI, open a PR, or override with "Merge without CI check".`,
+          };
+        }
+        const bad = runs.filter(r => r.conclusion && !['success', 'skipped', 'neutral'].includes(r.conclusion.toLowerCase()));
+        const running = runs.filter(r => (r.status || '').toLowerCase() !== 'completed');
+        if (bad.length > 0) {
+          const list = bad.slice(0, 5).map(r => `  ${r.name}: ${r.conclusion}`).join('\n');
+          return {
+            ok: false,
+            reason: 'CI_RED',
+            message:
+              `Refused merge into '${targetBranch}': ${bad.length} workflow run${bad.length > 1 ? 's' : ''} not green on '${sourceBranch}'.\n\n${list}\n\n` +
+              `Fix and retrigger, or override with "Merge without CI check".`,
+            details: { failing: bad },
+          };
+        }
+        if (running.length > 0) {
+          return {
+            ok: false,
+            reason: 'CI_PENDING',
+            message:
+              `Refused merge into '${targetBranch}': ${running.length} CI run${running.length > 1 ? 's are' : ' is'} still in progress on '${sourceBranch}'. Wait for completion or override.`,
+            details: { running },
+          };
+        }
+        return { ok: true };
+      } catch { /* fall through */ }
+    }
+
+    // If we got here we couldn't determine CI status at all. Fail closed —
+    // safer to refuse and prompt the user than silently ship.
+    return {
+      ok: false,
+      reason: 'CI_UNKNOWN',
+      message:
+        `Refused merge into '${targetBranch}': unable to determine CI status for '${sourceBranch}'. ` +
+        `gh CLI is available but returned no usable data. Verify with \`gh pr checks ${sourceBranch}\` or ` +
+        `override with "Merge without CI check".`,
+    };
+  }
+
   private async sanitizeKitBookkeepingForMerge(worktreePath: string, targetBranch: string): Promise<void> {
     const KIT_BOOKKEEPING_FILES = [
       '.S9N_KIT_DevOpsAgent/config.json',
@@ -642,6 +825,11 @@ export class MergeService extends BaseService {
       deleteLocalBranch?: boolean;
       deleteRemoteBranch?: boolean;
       worktreePath?: string;
+      /** S9N-6394 override — allow merging a protected target (main/master/
+       *  production/release) even when CI is red/pending OR the source branch
+       *  carries WIP/[Kanvas] auto-checkpoint commits. Surfaced in the UI as
+       *  an explicit "Merge without CI check" secondary button. */
+      skipCiGate?: boolean;
     } = {}
   ): Promise<IpcResult<MergeResult>> {
     return this.wrap(async () => {
@@ -666,6 +854,28 @@ export class MergeService extends BaseService {
             `so its commits are already on '${targetBranch}' — there is nothing to merge. ` +
             `If you intended to keep this work separate, switch the worktree to a session branch first.`,
         };
+      }
+
+      // S9N-6394 gate: refuse to advance a protected target unless CI is
+      // green AND the source doesn't carry WIP/auto-checkpoint tips.
+      // Only applies to main/master/production — feature-branch merges are
+      // unaffected. Users can override by passing options.skipCiGate=true,
+      // which the UI surfaces as an explicit "merge without CI check" button.
+      const isProtectedTarget = ['main', 'master', 'production', 'release'].includes(targetBranch);
+      if (isProtectedTarget && !options.skipCiGate) {
+        const gateResult = await this.checkMergeGate(
+          options.worktreePath || repoPath,
+          normalizedSource,
+          targetBranch
+        );
+        if (!gateResult.ok) {
+          return {
+            success: false,
+            message: gateResult.message,
+            gateReason: gateResult.reason,
+            gateDetails: gateResult.details,
+          } as MergeResult;
+        }
       }
 
       let didStash = false;
@@ -877,17 +1087,39 @@ export class MergeService extends BaseService {
         }
       }
 
-      // Pull latest changes — check result to avoid merging on a dirty state
-      const pullResult = await this.git(['pull', 'origin', targetBranch], mergeWorkdir);
-      if (pullResult.exitCode !== 0) {
-        console.error(`[MergeService] Pull failed:`, pullResult.stderr);
-        // Restore original branch — no merge has been started so no merge --abort needed
+      // Sync target with origin via fetch + fast-forward-only.
+      // Plain `git pull` inherits the user's pull.rebase/pull.ff config — if
+      // unset, git 2.27+ refuses with a "Need to specify how to reconcile
+      // divergent branches" wall of text. Worse, with pull.rebase=true it
+      // would silently rebase the user's local target onto origin, which can
+      // lose unpushed work. fetch + --ff-only is the safe path: it advances
+      // the target when behind, no-ops when up-to-date, fails cleanly with
+      // an actionable message when truly diverged.
+      const fetchResult = await this.git(['fetch', 'origin', targetBranch], mergeWorkdir);
+      if (fetchResult.exitCode !== 0) {
+        console.error(`[MergeService] Fetch failed:`, fetchResult.stderr);
         if (currentBranch !== targetBranch) {
           await this.git(['checkout', currentBranch], mergeWorkdir);
         }
         return {
           success: false,
-          message: `Failed to pull latest ${targetBranch}: ${pullResult.stderr || 'unknown error'}. Please try again.`,
+          message: `Failed to fetch latest ${targetBranch}: ${fetchResult.stderr || 'unknown error'}. Please try again.`,
+        };
+      }
+      const ffResult = await this.git(['merge', '--ff-only', `origin/${targetBranch}`], mergeWorkdir);
+      if (ffResult.exitCode !== 0) {
+        const isDiverged =
+          /not possible to fast-forward/i.test(ffResult.stderr) ||
+          /diverged|divergent/i.test(ffResult.stderr);
+        console.error(`[MergeService] Fast-forward failed:`, ffResult.stderr);
+        if (currentBranch !== targetBranch) {
+          await this.git(['checkout', currentBranch], mergeWorkdir);
+        }
+        return {
+          success: false,
+          message: isDiverged
+            ? `Local '${targetBranch}' has diverged from origin/${targetBranch} — local commits exist that aren't on the remote. Resolve manually (rebase your local '${targetBranch}' onto origin/${targetBranch}, or reset it if the local commits aren't needed) before retrying the merge.`
+            : `Failed to update ${targetBranch} from origin: ${ffResult.stderr || 'unknown error'}. Please try again.`,
         };
       }
 

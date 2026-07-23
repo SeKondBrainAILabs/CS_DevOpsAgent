@@ -64,11 +64,15 @@ export function StaleSessionsDialog({
       const session = sessions.find((s) => s.sessionId === sessionId);
       setProgress(`Removing ${session?.branchName ?? sessionId} (${i + 1}/${ids.length})…`);
       try {
-        const result = await window.api?.instance?.deleteWithCleanup?.(sessionId, {
-          deleteWorktree: true,
-          deleteLocalBranch: false, // unmerged work — keep the branch so commits survive
-          deleteRemoteBranch: false,
-        });
+        const result = await window.api?.instance?.deleteWithCleanup?.(
+          sessionId,
+          {
+            deleteWorktree: true,
+            deleteLocalBranch: false, // unmerged work — keep the branch so commits survive
+            deleteRemoteBranch: false,
+          },
+          session ? { repoPath: session.repoPath, branchName: session.branchName, worktreePath: session.worktreePath } : undefined
+        );
         if (result?.success) removed.push(sessionId);
         else errors.push(`${session?.branchName ?? sessionId}: ${result?.error?.message ?? 'failed'}`);
       } catch (err) {

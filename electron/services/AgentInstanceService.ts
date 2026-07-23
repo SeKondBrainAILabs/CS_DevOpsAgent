@@ -51,6 +51,7 @@ async function execaCmd(cmd: string, args: string[], options?: { cwd?: string; t
 }
 import { KANVAS_PATHS, FILE_COORDINATION_PATHS, DEVOPS_KIT_DIR } from '../../shared/agent-protocol';
 import { getAgentInstructions, generateClaudePrompt, generateCodexPrompt, InstructionVars } from '../../shared/agent-instructions';
+import { resolveUnpushedCount } from '../../shared/unpushed-count';
 import type {
   AgentType,
   AgentInstance,
@@ -70,7 +71,7 @@ function generateAgentPrompt(agentType: AgentType, vars: InstructionVars): strin
 }
 import { generateSecondaryBranchName } from '../../shared/types';
 import { evaluateSingleSessionGuard } from '../../shared/single-session-guard';
-import { isActiveInstance } from '../../shared/instance-status';
+import { isActiveInstance, isRunningInstance } from '../../shared/instance-status';
 import { planEnvSymlink } from '../../shared/env-symlink-plan';
 import { symlink, lstat } from 'fs/promises';
 import type { TerminalLogService } from './TerminalLogService';
@@ -179,10 +180,29 @@ export class AgentInstanceService extends BaseService {
   }
 
   /**
-   * IPC-friendly count of active sessions for a repo.
+   * IPC-friendly count of lifecycle-active sessions for a repo.
+   * Used by the Single-Session Mode guard (a `waiting` session has claimed
+   * the slot and a second one would conflict) — must include statuses the
+   * user-facing "running" badge excludes.
    */
   getActiveSessionCountForRepo(repoPath: string): IpcResult<number> {
     return { success: true, data: this.getActiveSessionsForRepo(repoPath).length };
+  }
+
+  /**
+   * Count of truly-running sessions (an agent is attached and working) for a
+   * repo. Distinct from `getActiveSessionCountForRepo` which includes
+   * `waiting`/`pending`/`initializing` — the broader set the SSM guard needs.
+   * The repo card surfaces THIS number as "N active" because users read it
+   * as "N agents actually working", not "N session records on disk".
+   * Without this distinction, agent_memory_vault showed "6 active" when 5
+   * of those were waiting-but-never-connected and only 1 had a live agent.
+   */
+  getRunningSessionCountForRepo(repoPath: string): IpcResult<number> {
+    const runningCount = Array.from(this.instances.values()).filter(
+      (inst) => inst.config.repoPath === repoPath && isRunningInstance(inst)
+    ).length;
+    return { success: true, data: runningCount };
   }
 
   constructor() {
@@ -610,10 +630,14 @@ ${DEVOPS_KIT_DIR}/
         agentCount: 1,
       });
 
-      // Create the branch if it doesn't exist
-      await this.createBranchIfNeeded(config);
-
-      // Create worktree for isolated development
+      // Create worktree for isolated development. createWorktreeIfNeeded
+      // handles branch creation atomically via `git worktree add -b <branch>
+      // <path> <base>` — no need to pre-create the branch by touching the
+      // source repo's HEAD. The old createBranchIfNeeded path did
+      // `git checkout -b` + `git checkout -` in config.repoPath, which
+      // switched the user's source-repo branch out from under any work they
+      // had open (and could leave them stuck on the session branch if the
+      // return checkout failed).
       const worktreePath = await this.createWorktreeIfNeeded(config);
 
       // Update instance with worktree path
@@ -783,32 +807,6 @@ ${DEVOPS_KIT_DIR}/
   }
 
   /**
-   * Create branch if it doesn't exist
-   */
-  private async createBranchIfNeeded(config: AgentInstanceConfig): Promise<void> {
-    try {
-      // Strip origin/ prefix — git checkout -b <branch> origin/main works, but
-      // normalizing avoids surprises with stored values like "origin/Development".
-      const baseBranch = config.baseBranch.replace(/^origin\//, '');
-
-      // Check if branch exists
-      const branchResult = await execaCmd('git', ['branch', '--list', config.branchName], { cwd: config.repoPath });
-
-      if (!branchResult.stdout.trim()) {
-        // Branch doesn't exist, create it
-        await execaCmd('git', ['checkout', '-b', config.branchName, baseBranch], { cwd: config.repoPath });
-        console.log(`[AgentInstanceService] Created branch ${config.branchName} from ${baseBranch}`);
-
-        // Switch back to original branch
-        await execaCmd('git', ['checkout', '-'], { cwd: config.repoPath });
-      }
-    } catch (error) {
-      console.warn(`[AgentInstanceService] Could not create branch: ${error}`);
-      // Don't fail the whole operation if branch creation fails
-    }
-  }
-
-  /**
    * Create worktree for isolated development.
    *
    * **Layout change (v2.6.54):** worktrees live OUTSIDE the source repo, at
@@ -882,6 +880,17 @@ ${DEVOPS_KIT_DIR}/
       // C6: link the main repo's .env into the worktree so the agent inherits env vars.
       await this.linkEnvIntoWorktree(config.repoPath, worktreeDir);
 
+      // Propagate the source repo's pre-commit hook to the worktree's gitdir so
+      // every KIT-initiated commit fires the project's existing hygiene. Worktree
+      // gitdirs have their OWN .git/hooks directory — if the project uses the
+      // `pre-commit` framework or husky, the hook is only installed in the
+      // SOURCE repo's gitdir by default. This is the gap that let Kemory's
+      // truncated ai_chat_service.py reach origin/main: kit_commit / merge auto-
+      // commits ran `git commit` in a worktree gitdir with no pre-commit hook
+      // physically present, so the project's parser/format/EOF checks silently
+      // didn't run. Best-effort — failure here doesn't block worktree creation.
+      await this.installPreCommitHookIntoWorktree(config.repoPath, worktreeDir);
+
       return worktreeDir;
     } catch (error) {
       console.warn(`[AgentInstanceService] Could not create worktree: ${error}`);
@@ -937,6 +946,66 @@ ${DEVOPS_KIT_DIR}/
       }
     } catch (err) {
       console.warn(`[AgentInstanceService] Could not link .env into worktree: ${err}`);
+    }
+  }
+
+  /**
+   * Copy the source repo's pre-commit hook script (if any) into the worktree's
+   * gitdir/hooks/ so KIT-initiated commits run the same checks. Worktrees have
+   * isolated `.git/hooks/` directories at `<source>/.git/worktrees/<wt>/hooks/`,
+   * so a hook installed by `pre-commit install` or `husky install` in the
+   * source repo only fires for commits made from the source's working tree —
+   * KIT-managed worktrees silently skip it. This is the gap that let Kemory's
+   * 1119-line truncation reach origin/main.
+   *
+   * Strategy: copy `<source>/.git/hooks/pre-commit` (the executable that
+   * `pre-commit install` / husky write) verbatim into the worktree's
+   * hooks dir. The script itself dispatches to `.pre-commit-config.yaml` or
+   * `.husky/pre-commit` so we don't need to know which tool is in use.
+   *
+   * Idempotent — if a hook is already present in the worktree gitdir we
+   * leave it alone (the user may have hand-customized it). Failure here is
+   * non-fatal: worktree creation still succeeds, the agent just doesn't get
+   * the hook safety net.
+   */
+  private async installPreCommitHookIntoWorktree(repoPath: string, worktreePath: string): Promise<void> {
+    try {
+      // Resolve the worktree's gitdir via `git rev-parse --git-dir` from
+      // inside the worktree — far more reliable than reconstructing the path
+      // from the basename (legacy `local_deploy/` worktrees don't match).
+      const gitDirRes = await execaCmd('git', ['rev-parse', '--git-dir'], { cwd: worktreePath });
+      const rawGitDir = gitDirRes.stdout.trim();
+      const wtGitDir = rawGitDir.startsWith('/') ? rawGitDir : join(worktreePath, rawGitDir);
+      const wtHooksDir = join(wtGitDir, 'hooks');
+      const wtPreCommit = join(wtHooksDir, 'pre-commit');
+
+      if (existsSync(wtPreCommit)) {
+        console.log(`[AgentInstanceService] Worktree pre-commit hook already present: ${wtPreCommit}`);
+        return;
+      }
+
+      // Source hook lives at <source>/.git/hooks/pre-commit after pre-commit or
+      // husky has been installed. If it doesn't exist, the project has no
+      // hooks configured and there's nothing to propagate.
+      const sourceGitDirRes = await execaCmd('git', ['rev-parse', '--git-common-dir'], { cwd: repoPath });
+      const rawSourceGitDir = sourceGitDirRes.stdout.trim();
+      const sourceGitDir = rawSourceGitDir.startsWith('/') ? rawSourceGitDir : join(repoPath, rawSourceGitDir);
+      const sourcePreCommit = join(sourceGitDir, 'hooks', 'pre-commit');
+
+      if (!existsSync(sourcePreCommit)) {
+        console.log(`[AgentInstanceService] No source pre-commit hook to install (${sourcePreCommit} missing)`);
+        return;
+      }
+
+      await mkdir(wtHooksDir, { recursive: true });
+      const fs = await import('fs/promises');
+      const contents = await fs.readFile(sourcePreCommit);
+      await fs.writeFile(wtPreCommit, contents, { mode: 0o755 });
+      console.log(`[AgentInstanceService] Installed pre-commit hook into worktree: ${wtPreCommit}`);
+    } catch (err) {
+      // Hook install failure is never fatal — the worktree should still come
+      // up. The KIT-side parser/diff gate provides defense-in-depth.
+      console.warn(`[AgentInstanceService] Could not install pre-commit hook into worktree: ${err}`);
     }
   }
 
@@ -1505,6 +1574,11 @@ ${DEVOPS_KIT_DIR}/
       await mkdir(dirname(worktreePath), { recursive: true });
       await execaCmd('git', ['worktree', 'add', '--force', worktreePath, branchName], { cwd: repoPath });
       console.log(`[AgentInstanceService] Repaired worktree at ${worktreePath} (branch ${branchName})`);
+      // Also re-install the project's pre-commit hook into the freshly
+      // materialized worktree gitdir. `git worktree add --force` doesn't
+      // copy hooks; without this, the repaired worktree commits with no
+      // project hook firing — same hole as the original create path.
+      await this.installPreCommitHookIntoWorktree(repoPath, worktreePath);
       return true;
     } catch (err) {
       console.warn(`[AgentInstanceService] Could not repair worktree at ${worktreePath}: ${err}`);
@@ -1528,6 +1602,36 @@ ${DEVOPS_KIT_DIR}/
    *
    * Returns { moved, regenerated } counts.
    */
+  /**
+   * Migrate stale `useWorktree: false` config where a real sibling worktree
+   * exists. The instance store ended up with many rows in an inconsistent
+   * state (useWorktree=false but worktreePath set to a distinct sibling)
+   * because `restartInstance`'s cold path fell back to
+   * `inheritedConfig?.useWorktree ?? false` when `sessionData.worktreePath`
+   * was empty at restart time. Downstream code that inspects the flag
+   * (external tooling, future guards) then reads "in-place" when the
+   * instance is actually worktree-isolated. Fix: any row where
+   * `worktreePath` is set AND differs from `repoPath` gets
+   * `useWorktree: true`. Idempotent — clean rows are untouched.
+   */
+  migrateUseWorktreeFlag(): number {
+    let migrated = 0;
+    for (const instance of this.instances.values()) {
+      const cfg = instance.config;
+      if (!cfg) continue;
+      const wt = instance.worktreePath;
+      if (!wt || wt === cfg.repoPath) continue; // no drift possible
+      if (cfg.useWorktree === true) continue;   // already correct
+      cfg.useWorktree = true;
+      migrated++;
+    }
+    if (migrated > 0) {
+      this.saveInstances();
+      console.log(`[AgentInstanceService] Migrated useWorktree=true on ${migrated} drifted instance(s)`);
+    }
+    return migrated;
+  }
+
   async migrateLegacyWorktrees(): Promise<{ moved: number; regenerated: number }> {
     let moved = 0;
     let regenerated = 0;
@@ -1862,6 +1966,230 @@ ${DEVOPS_KIT_DIR}/
   }
 
   /**
+   * Detect interrupted rebases in every live worktree and flag the instance.
+   *
+   * Why: when a rebase is left mid-flight (agent quit, machine slept, Kanvas
+   * auto-save committed during the pause), `HEAD` ends up parked at a
+   * historical snapshot. The next agent that walks in sees "files reverted"
+   * and gets paranoid — exactly the failure mode you hit on
+   * codex-session-20260527-citw. Surfacing it as an instance-level flag lets
+   * the UI show a banner with "Abort + back up" rather than relying on the
+   * agent to diagnose git plumbing on its own.
+   *
+   * For each non-terminal instance we resolve the worktree's gitdir via
+   * `git rev-parse --git-dir` and look for `rebase-merge` or `rebase-apply`.
+   * Anything older than STALE_REBASE_MINUTES (6h) gets flagged; younger ones
+   * we leave alone — could be an in-flight rebase the agent is mid-way
+   * through. Idempotent: a subsequent scan that finds no rebase state clears
+   * the flag.
+   */
+  async detectStaleRebases(): Promise<number> {
+    const STALE_REBASE_MINUTES = 360; // 6h — anything younger is plausibly active
+    const { statSync } = await import('fs');
+    let flagged = 0;
+    let cleared = 0;
+    let saveNeeded = false;
+
+    const inspect = async (wt: string): Promise<AgentInstance['staleRebase'] | null> => {
+      if (!existsSync(wt)) return null;
+      let gitDirRel: string;
+      try {
+        const r = await execaCmd('git', ['rev-parse', '--git-dir'], { cwd: wt });
+        gitDirRel = r.stdout.trim();
+      } catch {
+        return null;
+      }
+      const absGitDir = gitDirRel.startsWith('/') ? gitDirRel : join(wt, gitDirRel);
+      for (const kind of ['merge', 'apply'] as const) {
+        const dir = join(absGitDir, `rebase-${kind}`);
+        if (!existsSync(dir)) continue;
+        try {
+          const s = statSync(dir);
+          const ageMs = Date.now() - s.mtimeMs;
+          const ageMinutes = Math.round(ageMs / 60_000);
+          if (ageMinutes < STALE_REBASE_MINUTES) return null;
+          return {
+            detectedAt: new Date().toISOString(),
+            startedAt: new Date(s.mtimeMs).toISOString(),
+            kind,
+            ageMinutes,
+            gitDir: dir,
+          };
+        } catch {
+          // unreadable — skip rather than guess
+        }
+      }
+      return null;
+    };
+
+    for (const instance of this.instances.values()) {
+      if (instance.status === 'completed' || instance.status === 'failed' || instance.status === 'closed') continue;
+
+      let detected: AgentInstance['staleRebase'] | null = null;
+      const wts = instance.multiRepoEntries && instance.multiRepoEntries.length > 0
+        ? instance.multiRepoEntries.map(r => r.worktreePath).filter((p): p is string => !!p)
+        : (instance.worktreePath ? [instance.worktreePath] : []);
+      for (const wt of wts) {
+        detected = await inspect(wt);
+        if (detected) break; // first hit per instance is enough — UI will deep-link
+      }
+
+      if (detected && !instance.staleRebase) {
+        instance.staleRebase = detected;
+        flagged++;
+        saveNeeded = true;
+        const ageHours = Math.round(detected.ageMinutes / 60);
+        console.warn(
+          `[AgentInstanceService] Stale rebase flagged on ${instance.id} (${instance.sessionId || 'no-session'}): ${detected.kind}, ${ageHours}h old`
+        );
+      } else if (!detected && instance.staleRebase) {
+        delete instance.staleRebase;
+        cleared++;
+        saveNeeded = true;
+      }
+    }
+
+    if (saveNeeded) this.saveInstances();
+    if (flagged + cleared > 0) {
+      console.log(`[AgentInstanceService] Stale-rebase scan: ${flagged} flagged, ${cleared} cleared`);
+    }
+    return flagged;
+  }
+
+  /**
+   * Garbage-collect crash-safety snapshots. `WatcherService.triggerPeriodicSnapshot`
+   * pins worktree state to `refs/kit-autosave/<sessionId>` every 5 min; without
+   * pruning, these refs accumulate forever (each is a stash commit + tree,
+   * potentially megabytes for large worktrees). Prunes refs older than
+   * SNAPSHOT_TTL_DAYS. Safe: real work is on session branches, not autosave
+   * refs; the refs are pure crash-recovery. Runs on startup only for now —
+   * a daily timer would be nicer but 7-day TTL doesn't need it.
+   */
+  async gcOldSnapshots(): Promise<number> {
+    const SNAPSHOT_TTL_DAYS = 7;
+    const cutoffSec = Math.floor(Date.now() / 1000) - SNAPSHOT_TTL_DAYS * 86400;
+    let pruned = 0;
+
+    // Group instances by repoPath (worktrees share a common gitdir per repo)
+    // so we scan each source repo's ref namespace once.
+    const seenRepos = new Set<string>();
+    for (const inst of this.instances.values()) {
+      const repoPath = inst.config?.repoPath;
+      if (!repoPath || seenRepos.has(repoPath)) continue;
+      seenRepos.add(repoPath);
+      if (!existsSync(repoPath)) continue;
+      try {
+        // for-each-ref gives us `<sha> <committer-timestamp> <refname>`.
+        // Autosave refs are the same across worktrees of the same repo since
+        // they share the common gitdir.
+        const listed = await execaCmd('git', [
+          'for-each-ref',
+          '--format=%(objectname)%09%(committerdate:unix)%09%(refname)',
+          'refs/kit-autosave/',
+        ], { cwd: repoPath });
+        const lines = listed.stdout.split('\n').filter(Boolean);
+        for (const line of lines) {
+          const [, tsStr, ref] = line.split('\t');
+          const ts = parseInt(tsStr, 10);
+          if (!Number.isFinite(ts) || ts >= cutoffSec) continue;
+          try {
+            await execaCmd('git', ['update-ref', '-d', ref], { cwd: repoPath });
+            pruned++;
+          } catch (err) {
+            console.warn(`[AgentInstanceService] Failed to prune ${ref}: ${err}`);
+          }
+        }
+      } catch { /* repo may not have any autosave refs — fine */ }
+    }
+    if (pruned > 0) {
+      console.log(`[AgentInstanceService] GC'd ${pruned} stale autosave snapshot ref(s) (>${SNAPSHOT_TTL_DAYS}d)`);
+    }
+    return pruned;
+  }
+
+  /**
+   * One-click rebase repair: back up the current tip + pre-rebase tip to
+   * `backup/<sessionId>-pre-abort-HEAD` and `backup/<sessionId>-pre-rebase-tip`,
+   * then `git rebase --abort`. Clears the `staleRebase` flag on success.
+   * Returns the backup branch names so the UI can quote them in a toast.
+   *
+   * Safe by design: only runs when the gitdir genuinely has rebase state,
+   * never deletes data (the floating commits remain in reflog for 90 days
+   * after abort, the explicit backup branches survive even past that).
+   */
+  async repairStaleRebase(instanceId: string): Promise<IpcResult<{
+    backupBranches: string[];
+    landedAt: string;
+  }>> {
+    const instance = this.instances.get(instanceId);
+    if (!instance) return { success: false, error: { code: 'NOT_FOUND', message: `Instance ${instanceId} not found` } };
+
+    const wt = instance.multiRepoEntries?.[0]?.worktreePath || instance.worktreePath;
+    if (!wt || !existsSync(wt)) {
+      return { success: false, error: { code: 'NO_WORKTREE', message: 'Worktree path missing or gone' } };
+    }
+
+    // Verify there's actually rebase state — refuse to act otherwise so a
+    // stale flag can't trigger a destructive `--abort` on a clean tree.
+    let gitDirRel: string;
+    try {
+      const r = await execaCmd('git', ['rev-parse', '--git-dir'], { cwd: wt });
+      gitDirRel = r.stdout.trim();
+    } catch (err) {
+      return { success: false, error: { code: 'GIT_FAIL', message: `git rev-parse failed: ${err instanceof Error ? err.message : String(err)}` } };
+    }
+    const absGitDir = gitDirRel.startsWith('/') ? gitDirRel : join(wt, gitDirRel);
+    const hasRebase = existsSync(join(absGitDir, 'rebase-merge')) || existsSync(join(absGitDir, 'rebase-apply'));
+    if (!hasRebase) {
+      // Stale flag, no real state — just clear and exit cleanly.
+      delete instance.staleRebase;
+      this.saveInstances();
+      return { success: true, data: { backupBranches: [], landedAt: 'no-op (no rebase state)' } };
+    }
+
+    const tag = (instance.sessionId || instanceId).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const headBackup = `backup/${tag}-pre-abort-HEAD`;
+    const origBackup = `backup/${tag}-pre-rebase-tip`;
+    const made: string[] = [];
+
+    // Capture HEAD (whatever weird mid-rebase state it's in) and ORIG_HEAD
+    // (the pre-rebase branch tip). Both are recoverable from reflog too, but
+    // explicit branches survive reflog expiry and are easier to inspect.
+    try {
+      const headSha = (await execaCmd('git', ['rev-parse', 'HEAD'], { cwd: wt })).stdout.trim();
+      if (headSha) {
+        await execaCmd('git', ['branch', '-f', headBackup, headSha], { cwd: wt });
+        made.push(headBackup);
+      }
+    } catch {
+      // best-effort — don't block abort on backup failure (reflog still has it)
+    }
+    try {
+      const origSha = (await execaCmd('git', ['rev-parse', 'ORIG_HEAD'], { cwd: wt })).stdout.trim();
+      if (origSha) {
+        await execaCmd('git', ['branch', '-f', origBackup, origSha], { cwd: wt });
+        made.push(origBackup);
+      }
+    } catch {
+      // ORIG_HEAD may be missing in some rebase states — that's fine
+    }
+
+    // Actually abort
+    try {
+      await execaCmd('git', ['rebase', '--abort'], { cwd: wt });
+    } catch (err) {
+      return { success: false, error: { code: 'ABORT_FAIL', message: `git rebase --abort failed: ${err instanceof Error ? err.message : String(err)}` } };
+    }
+
+    delete instance.staleRebase;
+    this.saveInstances();
+
+    const landedSha = (await execaCmd('git', ['rev-parse', '--short', 'HEAD'], { cwd: wt }).catch(() => ({ stdout: 'unknown' }))).stdout.trim();
+    console.log(`[AgentInstanceService] Aborted stale rebase on ${instance.id} (${instance.sessionId || 'no-session'}); backups: ${made.join(', ') || 'none'}; HEAD now at ${landedSha}`);
+    return { success: true, data: { backupBranches: made, landedAt: landedSha } };
+  }
+
+  /**
    * Mark instances whose worktreePath no longer exists on disk as 'closed' and
    * save. Returns the number of instances reaped.
    *
@@ -1993,7 +2321,40 @@ ${DEVOPS_KIT_DIR}/
    * Pre-delete safety check: returns info about worktree, uncommitted changes,
    * unpushed commits, and remote branch existence so the UI can show warnings.
    */
-  async getDeleteSafetyInfo(sessionId: string): Promise<IpcResult<{
+  /**
+   * Resolve a sessionId to an instance, falling back to (repoPath, branchName)
+   * when the in-memory map doesn't have a direct sessionId match. Required
+   * because SessionReports loaded from disk often carry sessionIds from an
+   * earlier lifecycle (pre-restart, pre-purge) that no longer exist in the
+   * live map. Without this fallback, every Delete on such a session returns
+   * "Session not found" and the user has to do filesystem surgery manually.
+   *
+   * Returns the matched instance (and its in-memory id) or null. Callers
+   * still need their own NOT_FOUND branch for the truly-orphaned case where
+   * even the (repo, branch) lookup misses — that's the "ghost delete" path.
+   */
+  private resolveInstanceForDelete(
+    sessionId: string,
+    hints?: { repoPath?: string; branchName?: string }
+  ): { id: string; instance: AgentInstance } | null {
+    for (const [id, inst] of this.instances) {
+      if (inst.sessionId === sessionId) return { id, instance: inst };
+    }
+    if (hints?.repoPath && hints?.branchName) {
+      for (const [id, inst] of this.instances) {
+        if (inst.config?.repoPath === hints.repoPath &&
+            inst.config?.branchName === hints.branchName) {
+          return { id, instance: inst };
+        }
+      }
+    }
+    return null;
+  }
+
+  async getDeleteSafetyInfo(
+    sessionId: string,
+    hints?: { repoPath?: string; branchName?: string }
+  ): Promise<IpcResult<{
     hasWorktree: boolean;
     worktreePath: string | null;
     hasUncommittedChanges: boolean;
@@ -2002,29 +2363,42 @@ ${DEVOPS_KIT_DIR}/
     branchName: string;
     repoPath: string;
   }>> {
-    // Find instance by sessionId
-    let instance: AgentInstance | undefined;
-    for (const inst of this.instances.values()) {
-      if (inst.sessionId === sessionId) {
-        instance = inst;
-        break;
-      }
-    }
+    // Resolve via sessionId first, fall back to (repoPath, branchName) hints
+    // so a stale sessionId on a SessionReport doesn't block delete.
+    const resolved = this.resolveInstanceForDelete(sessionId, hints);
+    let repoPath: string;
+    let branchName: string;
+    let baseBranch: string;
+    let worktreePath: string | null;
 
-    if (!instance) {
-      return { success: false, error: { code: 'NOT_FOUND', message: 'Session not found' } };
+    if (resolved) {
+      repoPath = resolved.instance.config.repoPath;
+      branchName = resolved.instance.config.branchName;
+      baseBranch = (resolved.instance.config.baseBranch || 'main').replace(/^origin\//, '');
+      worktreePath = resolved.instance.worktreePath && resolved.instance.worktreePath !== repoPath
+        ? resolved.instance.worktreePath : null;
+    } else if (hints?.repoPath && hints?.branchName) {
+      // Ghost-mode safety check: no in-memory instance, but we know which
+      // (repo, branch) this session refers to. We can still do all the git
+      // checks against the user-provided paths. Worktree path is unknown
+      // here — the cleanup call will derive it from the worktree registry.
+      repoPath = hints.repoPath;
+      branchName = hints.branchName;
+      baseBranch = 'main';
+      worktreePath = null;
+    } else {
+      return { success: false, error: { code: 'NOT_FOUND', message: 'Session not found and no (repoPath, branchName) hint provided. Re-open the session list and try again.' } };
     }
-
-    const repoPath = instance.config.repoPath;
-    const branchName = instance.config.branchName;
-    const worktreePath = instance.worktreePath && instance.worktreePath !== repoPath
-      ? instance.worktreePath : null;
 
     let hasUncommittedChanges = false;
     let unpushedCommitCount = 0;
     let hasRemoteBranch = false;
 
     const checkPath = worktreePath || repoPath;
+    // Count against the worktree (where the branch is actually checked out) so
+    // HEAD resolves to the session branch even when the main repo is on a
+    // different branch.
+    const countPath = worktreePath || repoPath;
 
     try {
       // Check uncommitted changes
@@ -2032,11 +2406,54 @@ ${DEVOPS_KIT_DIR}/
       hasUncommittedChanges = statusOut.stdout.trim().length > 0;
     } catch { /* ignore */ }
 
-    try {
-      // Check unpushed commits
-      const aheadOut = await execaCmd('git', ['rev-list', '--count', `origin/${branchName}..${branchName}`], { cwd: repoPath });
-      unpushedCommitCount = parseInt(aheadOut.stdout.trim(), 10) || 0;
-    } catch { /* branch may not track remote */ }
+    // ------------------------------------------------------------------
+    // Unpushed / at-risk commit count.
+    //
+    // FIX: the old metric `origin/<branch>..<branch>` (no fetch, compared
+    // against the branch's OWN remote ref) massively over-reported after a
+    // rebase — a real dialog warned "322 unpushed commits will be lost" when
+    // only 1 commit was truly at risk (the rest were patch-present on
+    // origin/main). We now:
+    //   1. FETCH the branch's remote ref + the base branch so we compare
+    //      against fresh state.
+    //   2. Compute a PATCH-EQUIVALENCE-AWARE count (--cherry-pick) against
+    //      BOTH origin/<branch> and origin/<baseBranch>, and take the MIN —
+    //      work present on either baseline is not lost when we delete locally.
+    // ------------------------------------------------------------------
+
+    // Best-effort fetch (short timeout, never fatal — offline / no-remote is fine).
+    await execaCmd('git', ['fetch', 'origin', branchName], { cwd: repoPath, timeout: 15_000 }).catch(() => {});
+    await execaCmd('git', ['fetch', 'origin', baseBranch], { cwd: repoPath, timeout: 15_000 }).catch(() => {});
+
+    const cherryCount = async (base: string): Promise<number | null> => {
+      try {
+        const out = await execaCmd(
+          'git',
+          ['rev-list', '--count', '--cherry-pick', '--right-only', `${base}...HEAD`],
+          { cwd: countPath }
+        );
+        const n = parseInt(out.stdout.trim(), 10);
+        return Number.isFinite(n) ? n : null;
+      } catch {
+        return null; // base ref doesn't exist / not comparable
+      }
+    };
+
+    const vsRemoteBranch = await cherryCount(`origin/${branchName}`);
+    const vsBaseBranch = await cherryCount(`origin/${baseBranch}`);
+
+    let totalCommits: number | undefined;
+    if (vsRemoteBranch === null && vsBaseBranch === null) {
+      // No comparable baseline at all — fall back to raw commit count so a
+      // brand-new never-pushed branch still warns about its real work.
+      try {
+        const out = await execaCmd('git', ['rev-list', '--count', 'HEAD'], { cwd: countPath });
+        const n = parseInt(out.stdout.trim(), 10);
+        if (Number.isFinite(n)) totalCommits = n;
+      } catch { /* ignore */ }
+    }
+
+    unpushedCommitCount = resolveUnpushedCount({ vsRemoteBranch, vsBaseBranch }, totalCommits);
 
     try {
       // Check if remote branch exists
@@ -2063,27 +2480,39 @@ ${DEVOPS_KIT_DIR}/
    */
   async deleteInstanceWithCleanup(
     sessionId: string,
-    options: { deleteWorktree?: boolean; deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean }
+    options: { deleteWorktree?: boolean; deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean },
+    hints?: { repoPath?: string; branchName?: string; worktreePath?: string }
   ): Promise<IpcResult<void>> {
-    // Find instance by sessionId
+    // Resolve via sessionId, then (repo, branch) hints, then ghost-mode if
+    // even hints alone are enough to do filesystem cleanup. The "Session not
+    // found" hardstop here was the user-visible bug: stale SessionReports
+    // carry sessionIds that no longer match the live map, and the only way
+    // out was manual git surgery.
+    const resolved = this.resolveInstanceForDelete(sessionId, hints);
+
     let instanceId: string | undefined;
-    let instance: AgentInstance | undefined;
-    for (const [id, inst] of this.instances) {
-      if (inst.sessionId === sessionId) {
-        instanceId = id;
-        instance = inst;
-        break;
-      }
-    }
+    let repoPath: string;
+    let branchName: string;
+    let worktreePath: string | null;
 
-    if (!instance || !instanceId) {
-      return { success: false, error: { code: 'NOT_FOUND', message: 'Session not found' } };
+    if (resolved) {
+      instanceId = resolved.id;
+      repoPath = resolved.instance.config.repoPath;
+      branchName = resolved.instance.config.branchName;
+      worktreePath = resolved.instance.worktreePath && resolved.instance.worktreePath !== repoPath
+        ? resolved.instance.worktreePath : null;
+    } else if (hints?.repoPath && hints?.branchName) {
+      // Ghost-mode delete: no in-memory instance, but the UI knows the
+      // (repo, branch) — just clean what's on disk. instanceId stays
+      // undefined; we'll skip the deleteInstance() bookkeeping call at the
+      // end since there's nothing to delete from electron-store.
+      repoPath = hints.repoPath;
+      branchName = hints.branchName;
+      worktreePath = hints.worktreePath || null;
+      console.log(`[AgentInstanceService] Ghost-mode delete for ${sessionId} (no in-memory instance) — operating on ${repoPath} branch ${branchName}`);
+    } else {
+      return { success: false, error: { code: 'NOT_FOUND', message: 'Session not found and no (repoPath, branchName) hint provided.' } };
     }
-
-    const repoPath = instance.config.repoPath;
-    const branchName = instance.config.branchName;
-    const worktreePath = instance.worktreePath && instance.worktreePath !== repoPath
-      ? instance.worktreePath : null;
 
     // 1. Remove worktree first (must happen before branch delete)
     if (options.deleteWorktree && worktreePath) {
@@ -2118,8 +2547,22 @@ ${DEVOPS_KIT_DIR}/
       }
     }
 
-    // 4. Delete the instance itself (files, state, etc.)
-    return this.deleteInstance(instanceId);
+    // 4. Delete the instance itself (files, state, etc.) — only if we had
+    // an in-memory instance. Ghost-mode delete already finished the on-disk
+    // cleanup above and has nothing to remove from electron-store.
+    if (instanceId) {
+      return this.deleteInstance(instanceId);
+    }
+
+    // Ghost-mode: still attempt to delete session files on disk by sessionId,
+    // since SessionReports come from those files and the user will keep
+    // seeing the entry in the list until they're gone.
+    try {
+      await this.deleteSessionFilesFromDiskBySessionId(sessionId, repoPath);
+    } catch (err) {
+      console.warn(`[AgentInstanceService] Ghost-mode delete: failed to clean session files: ${err}`);
+    }
+    return { success: true, data: undefined };
   }
 
   /**
@@ -2404,24 +2847,42 @@ ${DEVOPS_KIT_DIR}/
         }
       }
 
-      // If no instance found but we have session data, create a temporary config
+      // If no instance found but we have session data, create a temporary config.
+      // Try to inherit from any closed/historical instance that ever ran on this
+      // (repoPath, branchName) pair — that's where mergeAction, multiRepo,
+      // customMcpEnabled etc. live. Cherry-picking only the sessionData fields
+      // (as the original code did) silently stripped tag-push config on every
+      // cold-path restart, which is why most users saw "tags suddenly broken".
       if (!targetInstance && sessionData) {
         console.log(`[AgentInstanceService] No instance found for ${sessionId}, creating from session data`);
         this.terminalLogService?.info(`No stored instance found, using session data`, sessionId, 'Restart');
 
-        // Create config from session data
+        // Scan the in-memory map for a recent instance on the same (repo, branch)
+        // whose config we can carry forward. Most recent wins.
+        let inheritedConfig: AgentInstanceConfig | undefined;
+        for (const inst of this.instances.values()) {
+          if (inst.config?.repoPath === sessionData.repoPath &&
+              inst.config?.branchName === sessionData.branchName) {
+            inheritedConfig = inst.config;
+            break;
+          }
+        }
+
         const config: AgentInstanceConfig = {
+          // Inherit everything first (mergeAction, multiRepo, customMcpEnabled, etc.)…
+          ...(inheritedConfig || {}),
+          // …then override with the live session-data values we trust more.
           repoPath: sessionData.repoPath,
-          agentType: sessionData.agentType || 'claude',
-          taskDescription: sessionData.task || 'Restarted session',
+          agentType: sessionData.agentType || inheritedConfig?.agentType || 'claude',
+          taskDescription: sessionData.task || inheritedConfig?.taskDescription || 'Restarted session',
           branchName: sessionData.branchName,
-          baseBranch: (sessionData.baseBranch || 'main').replace(/^origin\//, ''),
-          useWorktree: !!sessionData.worktreePath,
-          autoCommit: true,
-          commitInterval: 30000,
-          rebaseFrequency: 'never',
-          systemPrompt: '',
-          contextPreservation: '',
+          baseBranch: (sessionData.baseBranch || inheritedConfig?.baseBranch || 'main').replace(/^origin\//, ''),
+          useWorktree: !!sessionData.worktreePath || (inheritedConfig?.useWorktree ?? false),
+          autoCommit: inheritedConfig?.autoCommit ?? true,
+          commitInterval: inheritedConfig?.commitInterval ?? 30000,
+          rebaseFrequency: inheritedConfig?.rebaseFrequency ?? 'never',
+          systemPrompt: inheritedConfig?.systemPrompt ?? '',
+          contextPreservation: inheritedConfig?.contextPreservation ?? '',
         };
 
         // Purge any lingering instance on this branch so restart can't duplicate it.

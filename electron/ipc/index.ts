@@ -217,6 +217,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return services.agentInstance.getActiveSessionCountForRepo(repoPath);
   });
 
+  ipcMain.handle(IPC.REPO_GET_RUNNING_SESSION_COUNT, async (_, repoPath: string) => {
+    return services.agentInstance.getRunningSessionCountForRepo(repoPath);
+  });
+
   // Workspaces (Epic A / story A1)
   ipcMain.handle(IPC.WORKSPACE_LIST, async () => services.workspace.list());
   ipcMain.handle(IPC.WORKSPACE_GET, async (_, id: string) => services.workspace.get(id));
@@ -448,18 +452,27 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     return await services.agentInstance.deleteSessionById(sessionId, repoPath);
   });
 
-  ipcMain.handle(IPC.INSTANCE_DELETE_SAFETY_CHECK, async (_, sessionId: string) => {
-    return services.agentInstance.getDeleteSafetyInfo(sessionId);
+  ipcMain.handle(IPC.INSTANCE_DELETE_SAFETY_CHECK, async (
+    _,
+    sessionId: string,
+    hints?: { repoPath?: string; branchName?: string }
+  ) => {
+    return services.agentInstance.getDeleteSafetyInfo(sessionId, hints);
   });
 
-  ipcMain.handle(IPC.INSTANCE_DELETE_WITH_CLEANUP, async (_, sessionId: string, options: {
-    deleteWorktree?: boolean;
-    deleteLocalBranch?: boolean;
-    deleteRemoteBranch?: boolean;
-  }) => {
+  ipcMain.handle(IPC.INSTANCE_DELETE_WITH_CLEANUP, async (
+    _,
+    sessionId: string,
+    options: {
+      deleteWorktree?: boolean;
+      deleteLocalBranch?: boolean;
+      deleteRemoteBranch?: boolean;
+    },
+    hints?: { repoPath?: string; branchName?: string; worktreePath?: string }
+  ) => {
     // Stop watcher before deleting
     await services.watcher.stop(sessionId).catch(() => {});
-    return await services.agentInstance.deleteInstanceWithCleanup(sessionId, options);
+    return await services.agentInstance.deleteInstanceWithCleanup(sessionId, options, hints);
   });
 
   ipcMain.handle(IPC.INSTANCE_RESTART, async (_, sessionId: string, sessionData?: {
@@ -498,6 +511,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
 
   ipcMain.handle(IPC.INSTANCE_UPDATE_BASE_BRANCH, async (_, sessionId: string, newBaseBranch: string) => {
     return services.agentInstance.updateBaseBranch(sessionId, newBaseBranch);
+  });
+
+  ipcMain.handle(IPC.INSTANCE_REPAIR_STALE_REBASE, async (_, instanceId: string) => {
+    return services.agentInstance.repairStaleRebase(instanceId);
   });
 
   ipcMain.handle(IPC.RECENT_REPOS_LIST, async () => {
@@ -1289,6 +1306,7 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     deleteLocalBranch?: boolean;
     deleteRemoteBranch?: boolean;
     worktreePath?: string;
+    skipCiGate?: boolean;
   }) => {
     return services.merge.executeMerge(repoPath, sourceBranch, targetBranch, options);
   });

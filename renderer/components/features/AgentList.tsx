@@ -488,6 +488,9 @@ function SessionRow({
         <DeleteSessionDialog
           sessionId={session.sessionId}
           sessionName={session.name || session.branchName || session.sessionId}
+          repoPath={session.repoPath}
+          branchName={session.branchName}
+          worktreePath={session.worktreePath}
           onClose={() => setShowDeleteDialog(false)}
           onDeleted={() => {
             removeReportedSession(session.sessionId);

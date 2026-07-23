@@ -70,6 +70,10 @@ export const IPC = {
   REPO_GET_WORKTREE_MODE: 'repo:get-worktree-mode',
   REPO_SET_WORKTREE_MODE: 'repo:set-worktree-mode',
   REPO_GET_ACTIVE_SESSION_COUNT: 'repo:get-active-session-count',
+  /** Truly-running session count (agent attached). Distinct from
+   * REPO_GET_ACTIVE_SESSION_COUNT which is lifecycle-broad (includes
+   * `waiting`) for the Single-Session Mode guard. */
+  REPO_GET_RUNNING_SESSION_COUNT: 'repo:get-running-session-count',
 
   // Workspaces (Epic A — multi-workspace, multi-repo discovery)
   WORKSPACE_LIST: 'workspace:list',
@@ -172,6 +176,10 @@ export const IPC = {
   INSTANCE_GET_LAST_CHANGE: 'instance:get-last-change', // Real last-change time (activity/commit/file mtime)
   INSTANCE_CLEAR_ALL: 'instance:clear-all',
   INSTANCE_UPDATE_BASE_BRANCH: 'instance:update-base-branch',
+  // Abort an interrupted rebase in the instance's worktree after backing up
+  // HEAD + ORIG_HEAD to backup/<sessionId>-* branches. Used by the stale-rebase
+  // banner; safe to call even if `staleRebase` was already cleared.
+  INSTANCE_REPAIR_STALE_REBASE: 'instance:repair-stale-rebase',
   RECENT_REPOS_LIST: 'recent-repos:list',
   RECENT_REPOS_ADD: 'recent-repos:add',
   RECENT_REPOS_REMOVE: 'recent-repos:remove',
@@ -548,6 +556,7 @@ export const REQUEST_CHANNELS = [
   IPC.REPO_GET_WORKTREE_MODE,
   IPC.REPO_SET_WORKTREE_MODE,
   IPC.REPO_GET_ACTIVE_SESSION_COUNT,
+  IPC.REPO_GET_RUNNING_SESSION_COUNT,
   IPC.WORKSPACE_LIST,
   IPC.WORKSPACE_GET,
   IPC.WORKSPACE_ADD,

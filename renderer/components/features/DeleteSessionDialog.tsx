@@ -19,6 +19,10 @@ interface DeleteSafetyInfo {
 interface DeleteSessionDialogProps {
   sessionId: string;
   sessionName: string;
+  /** Pass repoPath + branchName so deletes survive stale sessionIds (post-restart sessions whose AgentInstance map entry no longer matches the SessionReport sessionId). */
+  repoPath?: string;
+  branchName?: string;
+  worktreePath?: string;
   onClose: () => void;
   onDeleted: () => void;
 }
@@ -26,6 +30,9 @@ interface DeleteSessionDialogProps {
 export function DeleteSessionDialog({
   sessionId,
   sessionName,
+  repoPath,
+  branchName,
+  worktreePath,
   onClose,
   onDeleted,
 }: DeleteSessionDialogProps): React.ReactElement {
@@ -42,7 +49,7 @@ export function DeleteSessionDialog({
   // Load safety info on mount
   useEffect(() => {
     setLoading(true);
-    window.api?.instance?.deleteSafetyCheck?.(sessionId)
+    window.api?.instance?.deleteSafetyCheck?.(sessionId, { repoPath, branchName })
       .then((result) => {
         if (result?.success && result.data) {
           setSafety(result.data);
@@ -62,11 +69,11 @@ export function DeleteSessionDialog({
     setIsDeleting(true);
     setError(null);
     try {
-      const result = await window.api?.instance?.deleteWithCleanup?.(sessionId, {
-        deleteWorktree,
-        deleteLocalBranch,
-        deleteRemoteBranch,
-      });
+      const result = await window.api?.instance?.deleteWithCleanup?.(
+        sessionId,
+        { deleteWorktree, deleteLocalBranch, deleteRemoteBranch },
+        { repoPath, branchName, worktreePath }
+      );
       if (result?.success) {
         onDeleted();
       } else {
