@@ -51,6 +51,7 @@ async function execaCmd(cmd: string, args: string[], options?: { cwd?: string; t
 }
 import { KANVAS_PATHS, FILE_COORDINATION_PATHS, DEVOPS_KIT_DIR } from '../../shared/agent-protocol';
 import { getAgentInstructions, generateClaudePrompt, generateCodexPrompt, InstructionVars } from '../../shared/agent-instructions';
+import { resolveUnpushedCount } from '../../shared/unpushed-count';
 import type {
   AgentType,
   AgentInstance,
@@ -2367,11 +2368,13 @@ ${DEVOPS_KIT_DIR}/
     const resolved = this.resolveInstanceForDelete(sessionId, hints);
     let repoPath: string;
     let branchName: string;
+    let baseBranch: string;
     let worktreePath: string | null;
 
     if (resolved) {
       repoPath = resolved.instance.config.repoPath;
       branchName = resolved.instance.config.branchName;
+      baseBranch = (resolved.instance.config.baseBranch || 'main').replace(/^origin\//, '');
       worktreePath = resolved.instance.worktreePath && resolved.instance.worktreePath !== repoPath
         ? resolved.instance.worktreePath : null;
     } else if (hints?.repoPath && hints?.branchName) {
@@ -2381,6 +2384,7 @@ ${DEVOPS_KIT_DIR}/
       // here — the cleanup call will derive it from the worktree registry.
       repoPath = hints.repoPath;
       branchName = hints.branchName;
+      baseBranch = 'main';
       worktreePath = null;
     } else {
       return { success: false, error: { code: 'NOT_FOUND', message: 'Session not found and no (repoPath, branchName) hint provided. Re-open the session list and try again.' } };
@@ -2391,6 +2395,10 @@ ${DEVOPS_KIT_DIR}/
     let hasRemoteBranch = false;
 
     const checkPath = worktreePath || repoPath;
+    // Count against the worktree (where the branch is actually checked out) so
+    // HEAD resolves to the session branch even when the main repo is on a
+    // different branch.
+    const countPath = worktreePath || repoPath;
 
     try {
       // Check uncommitted changes
@@ -2398,11 +2406,54 @@ ${DEVOPS_KIT_DIR}/
       hasUncommittedChanges = statusOut.stdout.trim().length > 0;
     } catch { /* ignore */ }
 
-    try {
-      // Check unpushed commits
-      const aheadOut = await execaCmd('git', ['rev-list', '--count', `origin/${branchName}..${branchName}`], { cwd: repoPath });
-      unpushedCommitCount = parseInt(aheadOut.stdout.trim(), 10) || 0;
-    } catch { /* branch may not track remote */ }
+    // ------------------------------------------------------------------
+    // Unpushed / at-risk commit count.
+    //
+    // FIX: the old metric `origin/<branch>..<branch>` (no fetch, compared
+    // against the branch's OWN remote ref) massively over-reported after a
+    // rebase — a real dialog warned "322 unpushed commits will be lost" when
+    // only 1 commit was truly at risk (the rest were patch-present on
+    // origin/main). We now:
+    //   1. FETCH the branch's remote ref + the base branch so we compare
+    //      against fresh state.
+    //   2. Compute a PATCH-EQUIVALENCE-AWARE count (--cherry-pick) against
+    //      BOTH origin/<branch> and origin/<baseBranch>, and take the MIN —
+    //      work present on either baseline is not lost when we delete locally.
+    // ------------------------------------------------------------------
+
+    // Best-effort fetch (short timeout, never fatal — offline / no-remote is fine).
+    await execaCmd('git', ['fetch', 'origin', branchName], { cwd: repoPath, timeout: 15_000 }).catch(() => {});
+    await execaCmd('git', ['fetch', 'origin', baseBranch], { cwd: repoPath, timeout: 15_000 }).catch(() => {});
+
+    const cherryCount = async (base: string): Promise<number | null> => {
+      try {
+        const out = await execaCmd(
+          'git',
+          ['rev-list', '--count', '--cherry-pick', '--right-only', `${base}...HEAD`],
+          { cwd: countPath }
+        );
+        const n = parseInt(out.stdout.trim(), 10);
+        return Number.isFinite(n) ? n : null;
+      } catch {
+        return null; // base ref doesn't exist / not comparable
+      }
+    };
+
+    const vsRemoteBranch = await cherryCount(`origin/${branchName}`);
+    const vsBaseBranch = await cherryCount(`origin/${baseBranch}`);
+
+    let totalCommits: number | undefined;
+    if (vsRemoteBranch === null && vsBaseBranch === null) {
+      // No comparable baseline at all — fall back to raw commit count so a
+      // brand-new never-pushed branch still warns about its real work.
+      try {
+        const out = await execaCmd('git', ['rev-list', '--count', 'HEAD'], { cwd: countPath });
+        const n = parseInt(out.stdout.trim(), 10);
+        if (Number.isFinite(n)) totalCommits = n;
+      } catch { /* ignore */ }
+    }
+
+    unpushedCommitCount = resolveUnpushedCount({ vsRemoteBranch, vsBaseBranch }, totalCommits);
 
     try {
       // Check if remote branch exists
