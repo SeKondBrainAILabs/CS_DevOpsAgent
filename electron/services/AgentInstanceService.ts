@@ -2263,6 +2263,35 @@ ${DEVOPS_KIT_DIR}/
    * Reaps orphan instances first so we don't try to re-register sessions whose
    * worktree directory was removed off-app (typically by a merge cleanup).
    */
+  /**
+   * v2.7.4 — Register an OLD sessionId in the MCP binder as an alias pointing
+   * at a live instance's worktree. Called by restart paths so an agent client
+   * holding a stale ID (they don't observe our internal restart) still resolves
+   * to the current worktree. Delegates to onSessionCreated /
+   * onMultiRepoSessionCreated so aliases go through the same registration
+   * hooks as fresh sessions.
+   */
+  private aliasOldSessionInBinder(oldSessionId: string, newInstance: AgentInstance): void {
+    if (!oldSessionId || oldSessionId === newInstance.sessionId) return;
+    if (newInstance.multiRepoEntries && newInstance.multiRepoEntries.length > 0) {
+      if (this.onMultiRepoSessionCreated) {
+        this.onMultiRepoSessionCreated(
+          oldSessionId,
+          newInstance.multiRepoEntries.map(r => ({
+            repoName: r.repoName,
+            worktreePath: r.worktreePath,
+            role: r.role,
+          }))
+        );
+      }
+    } else {
+      const worktree = newInstance.worktreePath || newInstance.config?.repoPath;
+      if (worktree && this.onSessionCreated) {
+        this.onSessionCreated(oldSessionId, worktree);
+      }
+    }
+  }
+
   registerExistingSessionsWithBinder(): void {
     this.reapOrphanInstances();
 
@@ -2274,25 +2303,34 @@ ${DEVOPS_KIT_DIR}/
 
       if (instance.multiRepoEntries && instance.multiRepoEntries.length > 0) {
         if (this.onMultiRepoSessionCreated) {
-          this.onMultiRepoSessionCreated(
-            instance.sessionId,
-            instance.multiRepoEntries.map(r => ({
-              repoName: r.repoName,
-              worktreePath: r.worktreePath,
-              role: r.role,
-            }))
-          );
+          const repos = instance.multiRepoEntries.map(r => ({
+            repoName: r.repoName,
+            worktreePath: r.worktreePath,
+            role: r.role,
+          }));
+          this.onMultiRepoSessionCreated(instance.sessionId, repos);
+          // v2.7.4 — also register every predecessor sessionId as an alias so
+          // MCP clients holding an old ID (from before a KIT restart) still
+          // resolve to the current worktree. Without this, kit_get_session_info
+          // returned "Unknown session" after every restart even though the
+          // work was intact — see the koofcrf39 incident.
+          for (const oldId of instance.predecessorSessionIds || []) {
+            this.onMultiRepoSessionCreated(oldId, repos);
+          }
           count++;
         }
       } else {
         if (this.onSessionCreated) {
           this.onSessionCreated(instance.sessionId, worktree);
+          for (const oldId of instance.predecessorSessionIds || []) {
+            this.onSessionCreated(oldId, worktree);
+          }
           count++;
         }
       }
     }
     if (count > 0) {
-      console.log(`[AgentInstanceService] Re-registered ${count} existing session(s) with MCP binder`);
+      console.log(`[AgentInstanceService] Re-registered ${count} existing session(s) with MCP binder (including predecessor aliases)`);
     }
   }
 
@@ -2925,6 +2963,12 @@ ${DEVOPS_KIT_DIR}/
           // the chain is just the immediate predecessor.
           this.recordPredecessor(newInstance.data, sessionId);
 
+          // v2.7.4 — Alias the outgoing sessionId in the MCP binder so any
+          // agent client still holding the old ID (Claude Code / Codex don't
+          // observe our internal restart) resolves to the new worktree
+          // without needing to be told the new ID.
+          this.aliasOldSessionInBinder(sessionId, newInstance.data);
+
           // Transfer database records (commits, activity logs) from old session to new
           if (newInstance.data.sessionId) {
             const transferred = databaseService.transferSessionData(sessionId, newInstance.data.sessionId);
@@ -3012,6 +3056,14 @@ ${DEVOPS_KIT_DIR}/
         // and add the just-replaced sessionId. Persists immediately so the
         // record survives a crash mid-restart.
         this.recordPredecessor(newInstance.data, sessionId, inheritedPredecessors);
+
+        // v2.7.4 — Alias the outgoing sessionId AND the full inherited chain
+        // in the MCP binder so any agent client holding any prior ID still
+        // resolves to the new worktree.
+        this.aliasOldSessionInBinder(sessionId, newInstance.data);
+        for (const oldId of inheritedPredecessors) {
+          this.aliasOldSessionInBinder(oldId, newInstance.data);
+        }
 
         // Transfer database records (commits, activity logs) from old session to new
         if (newInstance.data.sessionId) {
