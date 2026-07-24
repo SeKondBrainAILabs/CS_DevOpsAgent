@@ -708,26 +708,32 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
                 </svg>
                 {syncing ? 'Syncing...' : 'Sync (rebase)'}
               </button>
-              {/* v2.7.2 — Push button. Shows the ahead-of-upstream count in
-                  brackets. Hidden when count is 0 so the header doesn't carry
-                  dead UI on a clean branch. */}
-              {unpushedCount > 0 && (
-                <button
-                  onClick={handlePush}
-                  disabled={pushing}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors
-                    ${pushing
-                      ? 'bg-blue-500 text-white cursor-wait'
+              {/* v2.7.2 / 2.7.3 — Push button always visible so the feature
+                  is discoverable. Disabled when count is 0 (nothing to push).
+                  Shows count in brackets when there is work to send. */}
+              <button
+                onClick={handlePush}
+                disabled={pushing || unpushedCount === 0}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors
+                  ${pushing
+                    ? 'bg-blue-500 text-white cursor-wait'
+                    : unpushedCount === 0
+                      ? 'bg-surface-secondary text-text-secondary/60 cursor-not-allowed'
                       : 'bg-surface-secondary text-text-primary hover:bg-blue-50 hover:text-blue-600'
-                    }`}
-                  title={pushing ? 'Pushing…' : `Push ${unpushedCount} commit${unpushedCount === 1 ? '' : 's'} to origin`}
-                >
-                  <svg className={`w-4 h-4 ${pushing ? 'animate-pulse' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                  </svg>
-                  {pushing ? 'Pushing…' : `Push (${unpushedCount})`}
-                </button>
-              )}
+                  }`}
+                title={
+                  pushing
+                    ? 'Pushing…'
+                    : unpushedCount === 0
+                      ? 'Nothing to push — session branch is up to date with origin'
+                      : `Push ${unpushedCount} commit${unpushedCount === 1 ? '' : 's'} to origin`
+                }
+              >
+                <svg className={`w-4 h-4 ${pushing ? 'animate-pulse' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                </svg>
+                {pushing ? 'Pushing…' : `Push${unpushedCount > 0 ? ` (${unpushedCount})` : ''}`}
+              </button>
               {pushResult && (
                 <span className={`text-xs max-w-[200px] truncate ${pushResult.success ? 'text-green-600' : 'text-red-500'}`} title={pushResult.message}>
                   {pushResult.message}
