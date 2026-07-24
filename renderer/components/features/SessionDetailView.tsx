@@ -134,6 +134,13 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
   const [showRestartConfirm, setShowRestartConfirm] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<{ success: boolean; message: string } | null>(null);
+  // v2.7.2 — Push button state. `unpushedCount` is the ahead-of-upstream count
+  // from `git rev-list --left-right --count origin/<branch>...HEAD` (via the
+  // existing getStatus IPC). Cached against the LOCAL origin/<branch> ref, so
+  // the number can lag behind a background push — a fresh Sync refreshes it.
+  const [unpushedCount, setUnpushedCount] = useState<number>(0);
+  const [pushing, setPushing] = useState(false);
+  const [pushResult, setPushResult] = useState<{ success: boolean; message: string } | null>(null);
   const [showErrorPopup, setShowErrorPopup] = useState(false);
   // Prompt shown before sync/rebase when the worktree has uncommitted changes.
   const [dirtyRebasePrompt, setDirtyRebasePrompt] = useState<{ count: number; repoPath: string; baseBranch: string } | null>(null);
@@ -227,6 +234,44 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
       clearTimeout(safetyTimer);
       setRestartError(error instanceof Error ? error.message : 'Failed to restart session');
       setRestarting(false);
+    }
+  };
+
+  // Poll the ahead-of-upstream count so the Push button label stays fresh.
+  // 15s interval strikes a balance between responsiveness after a `kit_commit`
+  // and not spamming git. Refreshes immediately on session change.
+  useEffect(() => {
+    if (!session.sessionId) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const r = await window.api?.git?.getStatus?.(session.sessionId);
+        if (cancelled || !r?.success) return;
+        setUnpushedCount(r.data?.ahead ?? 0);
+      } catch { /* silent — button just shows 0 */ }
+    };
+    refresh();
+    const interval = setInterval(refresh, 15_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [session.sessionId]);
+
+  const handlePush = async () => {
+    if (pushing || unpushedCount === 0) return;
+    setPushing(true);
+    setPushResult(null);
+    try {
+      const r = await window.api?.git?.push?.(session.sessionId);
+      if (r?.success) {
+        setPushResult({ success: true, message: `Pushed ${unpushedCount} commit${unpushedCount === 1 ? '' : 's'}` });
+        setUnpushedCount(0);
+      } else {
+        setPushResult({ success: false, message: r?.error?.message || 'Push failed' });
+      }
+    } catch (err) {
+      setPushResult({ success: false, message: err instanceof Error ? err.message : 'Push failed' });
+    } finally {
+      setPushing(false);
+      setTimeout(() => setPushResult(null), 3000);
     }
   };
 
@@ -663,6 +708,31 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
                 </svg>
                 {syncing ? 'Syncing...' : 'Sync (rebase)'}
               </button>
+              {/* v2.7.2 — Push button. Shows the ahead-of-upstream count in
+                  brackets. Hidden when count is 0 so the header doesn't carry
+                  dead UI on a clean branch. */}
+              {unpushedCount > 0 && (
+                <button
+                  onClick={handlePush}
+                  disabled={pushing}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors
+                    ${pushing
+                      ? 'bg-blue-500 text-white cursor-wait'
+                      : 'bg-surface-secondary text-text-primary hover:bg-blue-50 hover:text-blue-600'
+                    }`}
+                  title={pushing ? 'Pushing…' : `Push ${unpushedCount} commit${unpushedCount === 1 ? '' : 's'} to origin`}
+                >
+                  <svg className={`w-4 h-4 ${pushing ? 'animate-pulse' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                  </svg>
+                  {pushing ? 'Pushing…' : `Push (${unpushedCount})`}
+                </button>
+              )}
+              {pushResult && (
+                <span className={`text-xs max-w-[200px] truncate ${pushResult.success ? 'text-green-600' : 'text-red-500'}`} title={pushResult.message}>
+                  {pushResult.message}
+                </span>
+              )}
             </div>
 
             {onRestart && !showRestartConfirm && !restarting && (
