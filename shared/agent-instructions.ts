@@ -214,8 +214,8 @@ EOF
 ### Available MCP Tools
 | Tool | Parameters | Description |
 |------|-----------|-------------|
-| \`kit_commit\` | session_id, message, **cwd**, push (optional) | Stage + commit + record + push |
-| \`kit_commit_all\` | session_id, message, **cwd**, push (optional) | Commit across all repos (multi-repo) |
+| \`kit_commit\` | session_id, message, **cwd**, push (default true) | Stage + commit + push (default). Pass push=false for local-only WIP. |
+| \`kit_commit_all\` | session_id, message, **cwd**, push (default true) | Commit + push across all repos (multi-repo). |
 | \`kit_get_session_info\` | session_id | Session config and metadata |
 | \`kit_log_activity\` | session_id, type, message | Log to KIT dashboard timeline |
 | \`kit_lock_file\` | session_id, files, **cwd** | Declare file edit intent |

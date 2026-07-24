@@ -610,7 +610,7 @@ export function registerTools(
       session_id: z.string().describe('The KIT session ID'),
       message: z.string().describe('Commit message (conventional commits format preferred)'),
       cwd: z.string().describe('Your current shell working directory (run `pwd`). REQUIRED. The commit is rejected if this is not the session worktree, so your work is never silently committed to the wrong place.'),
-      push: z.boolean().optional().default(false).describe('Push to remote after commit'),
+      push: z.boolean().optional().default(true).describe('Push to remote after commit. Defaults to TRUE — commits ship to origin so CI runs and other collaborators can see them. Pass push=false ONLY when you explicitly want a local-only commit (rare — mostly for WIP work you plan to squash before pushing).'),
       repo: z.string().optional().describe('Target repo name (multi-repo mode). Omit for primary repo.'),
       force: z.boolean().optional().default(false).describe('Bypass the pre-commit sanity gate (diff-size warning + parser check). Set to true ONLY after re-reading any flagged file and confirming the change is intentional. Parser errors block even with force=true — they always mean the on-disk file is broken.'),
     },
@@ -747,7 +747,7 @@ export function registerTools(
       session_id: z.string().describe('The KIT session ID'),
       message: z.string().describe('Commit message (conventional commits format preferred)'),
       cwd: z.string().describe('Your current shell working directory (run `pwd`). REQUIRED — must be the session\'s primary worktree, or the call is rejected.'),
-      push: z.boolean().optional().default(false).describe('Push to remote after each commit'),
+      push: z.boolean().optional().default(true).describe('Push each per-repo commit to its remote. Defaults to TRUE — every repo\'s commit ships to origin so CI runs. Pass push=false only when you want a local-only multi-repo commit (rare).'),
       force: z.boolean().optional().default(false).describe('Bypass the pre-commit sanity gate (diff-size warning) for ALL repos in this multi-repo commit. Parser errors still block even with force=true.'),
     },
     withCallLog('kit_commit_all', async ({ session_id, message, cwd, push, force }) => {
