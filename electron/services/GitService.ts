@@ -335,11 +335,20 @@ export class GitService extends BaseService {
     }, 'GIT_COMMIT_FAILED');
   }
 
-  async push(sessionId: string, repoName?: string): Promise<IpcResult<void>> {
+  async push(
+    sessionId: string,
+    repoName?: string,
+    options?: { forceWithLease?: boolean }
+  ): Promise<IpcResult<void>> {
     return this.wrap(async () => {
       const cwd = this.getWorkingDir(sessionId, repoName);
       const branch = await this.git(['branch', '--show-current'], cwd);
-      await this.git(['push', '-u', 'origin', branch], cwd);
+      const args = ['push', '-u', 'origin', branch];
+      // v2.7.5 — force-with-lease when a post-commit rebase rewrote history.
+      // Regular push would fail "not fast-forward"; --force-with-lease is
+      // safe (refuses if someone else pushed since our last fetch).
+      if (options?.forceWithLease) args.push('--force-with-lease');
+      await this.git(args, cwd);
     }, 'GIT_PUSH_FAILED');
   }
 

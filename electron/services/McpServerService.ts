@@ -58,7 +58,7 @@ async function getSseTransport() {
 export interface McpServiceDeps {
   gitService?: {
     commit: (sessionId: string, message: string, repoName?: string) => Promise<any>;
-    push: (sessionId: string, repoName?: string) => Promise<any>;
+    push: (sessionId: string, repoName?: string, options?: { forceWithLease?: boolean }) => Promise<any>;
     getStatus: (sessionId: string) => Promise<any>;
     getCommitHistory: (repoPath: string, baseBranch?: string, limit?: number) => Promise<any>;
     // Current branch of a worktree path, TRI-STATE: branch name | 'HEAD' (detached)
@@ -123,7 +123,14 @@ export interface McpServiceDeps {
    * required — omitting it just means MCP commits skip the post-commit
    * remote sync (same behavior as pre-v2.6.92). Wired in services/index.ts.
    */
-  postCommitRebase?: (sessionId: string, repoName?: string) => Promise<void>;
+  postCommitRebase?: (sessionId: string, repoName?: string) => Promise<{
+    ok: boolean;
+    rewrote: boolean;     // true when the rebase added replayed commits (needs force-with-lease)
+    commitsIntegrated: number;
+    baseBranch?: string;
+    message: string;      // human-readable summary for the activity feed / agent response
+    conflictFiles?: string[]; // when ok=false due to conflicts
+  }>;
   /** v2.6.95 — expose merge to agents. Same code path as the UI merge modal,
    *  same S9N-6394 CI gate. force=true maps to skipCiGate=true and requires
    *  the agent to have explicit user authorization (per the prompt rule). */

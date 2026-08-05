@@ -683,16 +683,40 @@ export function registerTools(
           });
         }
 
-        // 4. Optional push — capture failure reason so agent knows exactly what went wrong
+        // 4. Post-commit rebase (v2.7.5) — runs BEFORE push so the commit
+        //    lands on top of the latest base. Awaited (not fire-and-forget)
+        //    so failures are visible to the agent and can block the push.
+        //    If the rebase fails, the branch is left at pre-rebase state
+        //    and push is skipped so we don't publish a stale-base commit.
+        let rebaseInfo: {
+          ok: boolean;
+          rewrote: boolean;
+          commitsIntegrated: number;
+          baseBranch?: string;
+          message: string;
+          conflictFiles?: string[];
+        } | undefined;
+        try {
+          rebaseInfo = await deps.postCommitRebase?.(session_id, repo);
+        } catch (err) {
+          rebaseInfo = { ok: false, rewrote: false, commitsIntegrated: 0, message: err instanceof Error ? err.message : 'Rebase threw' };
+        }
+
+        // 5. Push — only when rebase either succeeded or wasn't needed.
+        //    Force-with-lease if the rebase rewrote history (replayed local
+        //    commits on top of new base ⇒ non-fast-forward push otherwise).
         let pushed = false;
         let pushError: string | undefined;
-        if (push) {
+        const rebaseFailed = rebaseInfo && !rebaseInfo.ok;
+        if (push && !rebaseFailed) {
           try {
-            const pushResult = await deps.gitService.push(session_id, repo);
+            const pushResult = await deps.gitService.push(
+              session_id,
+              repo,
+              rebaseInfo?.rewrote ? { forceWithLease: true } : undefined,
+            );
             pushed = pushResult.success === true;
-            if (!pushed) {
-              pushError = pushResult.error?.message || 'Push returned failure';
-            }
+            if (!pushed) pushError = pushResult.error?.message || 'Push returned failure';
           } catch (err) {
             pushError = err instanceof Error ? err.message : 'Push threw an error';
           }
@@ -702,17 +726,12 @@ export function registerTools(
               { commitHash: hash, pushError, repo, source: 'mcp' }
             );
           }
+        } else if (push && rebaseFailed) {
+          pushError = 'Push skipped — post-commit rebase failed. Fix conflicts then run kit_rebase.';
         }
 
-        // 5. Emit commit event so renderer CommitsTab updates in real-time
+        // 6. Emit commit event so renderer CommitsTab updates in real-time.
         deps.emitCommitCompleted?.(session_id, hash, commitMessage, filesChanged);
-
-        // 6. On-demand post-commit rebase (fire-and-forget). Wired from
-        // services/index.ts to WatcherService.attemptPostCommitRebase — same
-        // logic the .commit-msg-file path fires. Before v2.6.92 this was
-        // silently skipped for MCP commits so agent-driven sessions never got
-        // the "on-demand" rebase they were configured for.
-        deps.postCommitRebase?.(session_id, repo).catch(() => { /* non-fatal */ });
 
         // 7. Post-commit contract check (fire-and-forget)
         triggerContractCheck(session_id, worktree, hash).catch(() => {});
@@ -727,6 +746,19 @@ export function registerTools(
         };
         // Always tell the agent why push failed — it needs this to decide next steps
         if (pushError) result.pushError = pushError;
+        // v2.7.5 — surface rebase outcome so the agent knows whether the
+        // commit is on top of the latest base and can retry via kit_rebase
+        // when a conflict blocked us.
+        if (rebaseInfo) {
+          result.rebase = {
+            ok: rebaseInfo.ok,
+            rewrote: rebaseInfo.rewrote,
+            commitsIntegrated: rebaseInfo.commitsIntegrated,
+            baseBranch: rebaseInfo.baseBranch,
+            message: rebaseInfo.message,
+            conflictFiles: rebaseInfo.conflictFiles,
+          };
+        }
 
         return { content: [{ type: 'text', text: JSON.stringify(result) }] };
       } catch (err) {
@@ -822,12 +854,27 @@ export function registerTools(
             });
           }
 
-          // Optional push — capture failure reason
+          // v2.7.5 — Post-commit rebase awaited BEFORE push (same rationale
+          // as kit_commit). Failure blocks the push so no stale-base commit
+          // ships to origin.
+          let rebaseInfo: { ok: boolean; rewrote: boolean; commitsIntegrated: number; baseBranch?: string; message: string; conflictFiles?: string[]; } | undefined;
+          try {
+            rebaseInfo = await deps.postCommitRebase?.(session_id, repo.repoName);
+          } catch (err) {
+            rebaseInfo = { ok: false, rewrote: false, commitsIntegrated: 0, message: err instanceof Error ? err.message : 'Rebase threw' };
+          }
+
+          // Push (only after rebase succeeded or was not needed).
           let pushed = false;
           let pushError: string | undefined;
-          if (push) {
+          const rebaseFailed = rebaseInfo && !rebaseInfo.ok;
+          if (push && !rebaseFailed) {
             try {
-              const pushResult = await deps.gitService.push(session_id, repoName);
+              const pushResult = await deps.gitService.push(
+                session_id,
+                repoName,
+                rebaseInfo?.rewrote ? { forceWithLease: true } : undefined,
+              );
               pushed = pushResult.success === true;
               if (!pushed) pushError = pushResult.error?.message || 'Push returned failure';
             } catch (err) {
@@ -839,16 +886,16 @@ export function registerTools(
                 { commitHash: hash, pushError, repo: repo.repoName, source: 'mcp' }
               );
             }
+          } else if (push && rebaseFailed) {
+            pushError = 'Push skipped — post-commit rebase failed. Fix conflicts then run kit_rebase.';
           }
-
-          // On-demand post-commit rebase (fire-and-forget) — see kit_commit.
-          deps.postCommitRebase?.(session_id, repo.repoName).catch(() => { /* non-fatal */ });
 
           // Post-commit contract check
           triggerContractCheck(session_id, repo.worktreePath, hash).catch(() => {});
 
           const repoResult: Record<string, unknown> = { repoName: repo.repoName, commitHash: hash, filesChanged, pushed };
           if (pushError) repoResult.pushError = pushError;
+          if (rebaseInfo) repoResult.rebase = { ok: rebaseInfo.ok, rewrote: rebaseInfo.rewrote, commitsIntegrated: rebaseInfo.commitsIntegrated, baseBranch: rebaseInfo.baseBranch, message: rebaseInfo.message, conflictFiles: rebaseInfo.conflictFiles };
           results.push(repoResult as any);
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : 'Failed';
