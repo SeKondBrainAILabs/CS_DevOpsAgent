@@ -10,6 +10,7 @@ import { FixedSizeList as List } from 'react-window';
 import type { SessionReport } from '../../../shared/agent-protocol';
 import type { AgentInstance, ContractType, Contract, ActivityLogEntry, DiscoveredFeature } from '../../../shared/types';
 import { computeFeatureFileStats, getFeatureRelativePath, getFileTooltip } from '../../../shared/feature-utils';
+import { formatDateTime } from '../../../shared/format-datetime';
 import { useAgentStore } from '../../store/agentStore';
 import { useContractStore } from '../../store/contractStore';
 import { useConflictStore } from '../../store/conflictStore';
@@ -1119,13 +1120,7 @@ function ActivityTab({ sessionId, repoPath, baseBranch, branchName }: { sessionI
   // Legacy: for display calculations
   const allActivity = historicalLogs;
 
-  const formatTime = (timestamp: string): string => {
-    return new Date(timestamp).toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-  };
+  const formatTime = (timestamp: string): string => formatDateTime(timestamp);
 
   const formatDate = (timestamp: string): string => {
     return new Date(timestamp).toLocaleDateString('en-US', {
@@ -1724,13 +1719,7 @@ function FilesTab({ session }: { session: SessionReport }): React.ReactElement {
     }
   };
 
-  const formatTime = (timestamp: string): string => {
-    return new Date(timestamp).toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-  };
+  const formatTime = (timestamp: string): string => formatDateTime(timestamp);
 
   // Group files by git state
   const uncommittedFiles = gitFiles.filter(f => f.gitState !== 'committed');
@@ -5396,8 +5385,8 @@ function TerminalTab({ sessionId }: { sessionId: string }): React.ReactElement {
                   <div className={`flex items-start gap-2 py-1 hover:bg-gray-800 rounded px-1 ${
                     isHistorical ? 'opacity-60' : ''
                   }`}>
-                    <span className="text-gray-500 flex-shrink-0 w-20">
-                      {new Date(log.timestamp).toLocaleTimeString()}
+                    <span className="text-gray-500 flex-shrink-0 w-36">
+                      {formatDateTime(log.timestamp)}
                     </span>
                     <span className={`flex-shrink-0 w-5 h-5 rounded flex items-center justify-center text-xs font-bold ${style.bg} ${style.text}`}>
                       {style.icon}
@@ -5432,7 +5421,7 @@ function TerminalTab({ sessionId }: { sessionId: string }): React.ReactElement {
                       <div className="flex items-center gap-2">
                         <div className="flex-1 h-px bg-kanvas-blue/50" />
                         <span className="text-xs text-kanvas-blue font-medium px-2">
-                          Session resumed {new Date(sessionResumeTime).toLocaleTimeString()}
+                          Session resumed {formatDateTime(sessionResumeTime)}
                         </span>
                         <div className="flex-1 h-px bg-kanvas-blue/50" />
                       </div>

@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { formatDateTime } from '../../../shared/format-datetime';
 
 interface McpCallEntry {
   timestamp: string;
@@ -100,13 +101,7 @@ export function McpTab({ sessionId }: McpTabProps): React.ReactElement {
     }
   }, []);
 
-  const formatTime = (ts: string) => {
-    try {
-      return new Date(ts).toLocaleTimeString();
-    } catch {
-      return ts;
-    }
-  };
+  const formatTime = (ts: string) => formatDateTime(ts);
 
   const formatDuration = (ms: number) => {
     if (ms < 1000) return `${ms}ms`;
