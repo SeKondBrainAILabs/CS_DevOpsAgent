@@ -641,17 +641,27 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
             {/* Base Branch Selector + Sync Button */}
             <div className="flex items-center gap-1">
               {editingBaseBranch ? (
-                <>
                   <select
                     value={session.baseBranch || 'main'}
                     onChange={(e) => {
                       if (e.target.value === '__advanced__') {
+                        // Open the full-branch dialog and leave inline-edit mode.
+                        // The dialog is rendered OUTSIDE this block (below), so it
+                        // is not torn down when editingBaseBranch flips to false.
+                        setEditingBaseBranch(false);
                         setShowAdvancedBranches(true);
                       } else {
                         handleBaseBranchChange(e.target.value);
                       }
                     }}
-                    onBlur={() => setEditingBaseBranch(false)}
+                    onBlur={() => {
+                      // Defer the close so a click on an <option> (which fires
+                      // onChange, then blurs the native select) is not swallowed
+                      // by an immediate unmount. Without this, choosing a branch —
+                      // or "Advanced…" — could close the editor before the change
+                      // was applied.
+                      setTimeout(() => setEditingBaseBranch(false), 200);
+                    }}
                     autoFocus
                     className="px-2 py-1.5 rounded-full text-xs font-mono bg-surface-tertiary border border-[rgba(0,0,0,0.10)] text-text-primary focus:outline-none focus:ring-1 focus:ring-blue-500 max-w-[140px]"
                   >
@@ -661,24 +671,6 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
                     <option disabled>──────────</option>
                     <option value="__advanced__">Advanced…</option>
                   </select>
-                  {/* Advanced branch dialog */}
-                  {showAdvancedBranches && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20" onClick={() => setShowAdvancedBranches(false)}>
-                      <div className="bg-white rounded-2xl shadow-xl border border-[rgba(0,0,0,0.10)] p-4 w-72 max-h-96 overflow-y-auto" onClick={e => e.stopPropagation()}>
-                        <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">All branches</p>
-                        {allBranches.map(branch => (
-                          <button
-                            key={branch}
-                            onClick={() => { setShowAdvancedBranches(false); handleBaseBranchChange(branch); }}
-                            className="w-full text-left px-3 py-2 text-sm font-mono rounded-lg hover:bg-surface-secondary transition-colors text-text-primary"
-                          >
-                            {branch}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
 
               ) : (
                 <button
@@ -692,6 +684,31 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                   </svg>
                 </button>
+              )}
+              {/* Advanced branch dialog — rendered independently of inline-edit
+                  mode so the native <select> blur cannot unmount it before it
+                  appears. Reachable via the "Advanced…" option or the current
+                  branches list; lists ALL local branches, not just primaries. */}
+              {showAdvancedBranches && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20" onClick={() => setShowAdvancedBranches(false)}>
+                  <div className="bg-white rounded-2xl shadow-xl border border-[rgba(0,0,0,0.10)] p-4 w-72 max-h-96 overflow-y-auto" onClick={e => e.stopPropagation()}>
+                    <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">All branches</p>
+                    {allBranches.length === 0 && (
+                      <p className="text-sm text-text-secondary px-1 py-2">No other local branches found.</p>
+                    )}
+                    {allBranches.map(branch => (
+                      <button
+                        key={branch}
+                        onClick={() => { setShowAdvancedBranches(false); handleBaseBranchChange(branch); }}
+                        className={`w-full text-left px-3 py-2 text-sm font-mono rounded-lg hover:bg-surface-secondary transition-colors ${
+                          branch === (session.baseBranch || 'main') ? 'text-blue-600 font-semibold' : 'text-text-primary'
+                        }`}
+                      >
+                        {branch}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               )}
               <button
                 onClick={handleSync}
