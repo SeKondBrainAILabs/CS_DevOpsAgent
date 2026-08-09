@@ -174,6 +174,30 @@ export function registerTools(
   // Cast to any to avoid TS compiler OOM from complex zod+MCP generic inference
   const srv: any = server;
 
+  // ---------------------------------------------------------------------------
+  // Session → AgentInstance resolution (predecessor-aware).
+  //
+  // After a KIT restart a session is re-created with a fresh id and the old id
+  // is recorded on the new instance's `predecessorSessionIds`. Agents keep
+  // calling with the id they were launched with — i.e. the OLD, now-predecessor
+  // id. The MCP binder registers predecessors as aliases (v2.7.4), so tools that
+  // resolve via the binder (kit_commit, kit_get_session_info's worktree/repos)
+  // work with a predecessor id. But three call sites looked the instance up by
+  // EXACT `sessionId` match — kit_get_session_info's extraInfo, kit_merge, and
+  // kit_rebase — so for a predecessor id they silently found nothing:
+  // kit_get_session_info dropped branchName/baseBranch, and kit_merge/kit_rebase
+  // failed with "Could not resolve source branch or repo path" for a session
+  // every other tool resolved fine. One helper so the git tools resolve a
+  // session exactly like the worktree tools and can't drift again.
+  const resolveInstance = (session_id: string): any => {
+    const listed = deps.agentInstanceService?.listInstances();
+    if (!listed?.success || !listed.data) return undefined;
+    return listed.data.find((i: any) =>
+      i.sessionId === session_id ||
+      (Array.isArray(i.predecessorSessionIds) && i.predecessorSessionIds.includes(session_id))
+    );
+  };
+
   // Tools that change state — their calls are logged to the session activity feed
   const STATE_CHANGING_TOOLS = new Set([
     'kit_commit', 'kit_commit_all', 'kit_lock_file', 'kit_unlock_file', 'kit_request_review',
@@ -923,12 +947,13 @@ export function registerTools(
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown session', session_id }) }] };
       }
 
-      // Try to get richer info from agentInstanceService
+      // Try to get richer info from agentInstanceService (predecessor-aware, so
+      // branchName/baseBranch still resolve when called with a post-restart
+      // predecessor id — the same id kit_merge/kit_rebase must resolve).
       let extraInfo: Record<string, unknown> = {};
       if (deps.agentInstanceService) {
-        const instances = deps.agentInstanceService.listInstances();
-        if (instances.success && instances.data) {
-          const match = instances.data.find((i: any) => i.sessionId === session_id);
+        {
+          const match = resolveInstance(session_id);
           if (match) {
             extraInfo = {
               agentType: match.config?.agentType,
@@ -1208,8 +1233,10 @@ export function registerTools(
       if (divergence) return divergenceResponse(session_id, 'kit_merge', divergence);
 
       // Resolve source branch + target from the instance config.
-      const instances = deps.agentInstanceService?.listInstances();
-      const inst = instances?.success && instances.data ? instances.data.find((i: any) => i.sessionId === session_id) : undefined;
+      // Predecessor-aware (see resolveInstance) — a post-restart session id is a
+      // predecessor, and an exact-match find would miss it here even though the
+      // binder resolved the worktree above.
+      const inst = resolveInstance(session_id);
       const sourceBranch = inst?.config?.branchName;
       const resolvedTarget = target_branch || inst?.config?.baseBranch || 'main';
       const repoPath = inst?.config?.repoPath;
@@ -1273,8 +1300,7 @@ export function registerTools(
       const divergence = await checkDivergence(session_id, undefined, cwd);
       if (divergence) return divergenceResponse(session_id, 'kit_rebase', divergence);
 
-      const instances = deps.agentInstanceService?.listInstances();
-      const inst = instances?.success && instances.data ? instances.data.find((i: any) => i.sessionId === session_id) : undefined;
+      const inst = resolveInstance(session_id);
       const resolvedBase = base_branch || inst?.config?.baseBranch || 'main';
       const repoPath = inst?.config?.repoPath;
       if (!repoPath) {
