@@ -10,6 +10,7 @@ import { FixedSizeList as List } from 'react-window';
 import type { SessionReport } from '../../../shared/agent-protocol';
 import type { AgentInstance, ContractType, Contract, ActivityLogEntry, DiscoveredFeature } from '../../../shared/types';
 import { computeFeatureFileStats, getFeatureRelativePath, getFileTooltip } from '../../../shared/feature-utils';
+import { formatDateTime } from '../../../shared/format-datetime';
 import { useAgentStore } from '../../store/agentStore';
 import { useContractStore } from '../../store/contractStore';
 import { useConflictStore } from '../../store/conflictStore';
@@ -640,17 +641,27 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
             {/* Base Branch Selector + Sync Button */}
             <div className="flex items-center gap-1">
               {editingBaseBranch ? (
-                <>
                   <select
                     value={session.baseBranch || 'main'}
                     onChange={(e) => {
                       if (e.target.value === '__advanced__') {
+                        // Open the full-branch dialog and leave inline-edit mode.
+                        // The dialog is rendered OUTSIDE this block (below), so it
+                        // is not torn down when editingBaseBranch flips to false.
+                        setEditingBaseBranch(false);
                         setShowAdvancedBranches(true);
                       } else {
                         handleBaseBranchChange(e.target.value);
                       }
                     }}
-                    onBlur={() => setEditingBaseBranch(false)}
+                    onBlur={() => {
+                      // Defer the close so a click on an <option> (which fires
+                      // onChange, then blurs the native select) is not swallowed
+                      // by an immediate unmount. Without this, choosing a branch —
+                      // or "Advanced…" — could close the editor before the change
+                      // was applied.
+                      setTimeout(() => setEditingBaseBranch(false), 200);
+                    }}
                     autoFocus
                     className="px-2 py-1.5 rounded-full text-xs font-mono bg-surface-tertiary border border-[rgba(0,0,0,0.10)] text-text-primary focus:outline-none focus:ring-1 focus:ring-blue-500 max-w-[140px]"
                   >
@@ -660,24 +671,6 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
                     <option disabled>──────────</option>
                     <option value="__advanced__">Advanced…</option>
                   </select>
-                  {/* Advanced branch dialog */}
-                  {showAdvancedBranches && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20" onClick={() => setShowAdvancedBranches(false)}>
-                      <div className="bg-white rounded-2xl shadow-xl border border-[rgba(0,0,0,0.10)] p-4 w-72 max-h-96 overflow-y-auto" onClick={e => e.stopPropagation()}>
-                        <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">All branches</p>
-                        {allBranches.map(branch => (
-                          <button
-                            key={branch}
-                            onClick={() => { setShowAdvancedBranches(false); handleBaseBranchChange(branch); }}
-                            className="w-full text-left px-3 py-2 text-sm font-mono rounded-lg hover:bg-surface-secondary transition-colors text-text-primary"
-                          >
-                            {branch}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
 
               ) : (
                 <button
@@ -691,6 +684,31 @@ export function SessionDetailView({ session, onBack, onDelete, onRestart }: Sess
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                   </svg>
                 </button>
+              )}
+              {/* Advanced branch dialog — rendered independently of inline-edit
+                  mode so the native <select> blur cannot unmount it before it
+                  appears. Reachable via the "Advanced…" option or the current
+                  branches list; lists ALL local branches, not just primaries. */}
+              {showAdvancedBranches && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20" onClick={() => setShowAdvancedBranches(false)}>
+                  <div className="bg-white rounded-2xl shadow-xl border border-[rgba(0,0,0,0.10)] p-4 w-72 max-h-96 overflow-y-auto" onClick={e => e.stopPropagation()}>
+                    <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">All branches</p>
+                    {allBranches.length === 0 && (
+                      <p className="text-sm text-text-secondary px-1 py-2">No other local branches found.</p>
+                    )}
+                    {allBranches.map(branch => (
+                      <button
+                        key={branch}
+                        onClick={() => { setShowAdvancedBranches(false); handleBaseBranchChange(branch); }}
+                        className={`w-full text-left px-3 py-2 text-sm font-mono rounded-lg hover:bg-surface-secondary transition-colors ${
+                          branch === (session.baseBranch || 'main') ? 'text-blue-600 font-semibold' : 'text-text-primary'
+                        }`}
+                      >
+                        {branch}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               )}
               <button
                 onClick={handleSync}
@@ -1119,13 +1137,7 @@ function ActivityTab({ sessionId, repoPath, baseBranch, branchName }: { sessionI
   // Legacy: for display calculations
   const allActivity = historicalLogs;
 
-  const formatTime = (timestamp: string): string => {
-    return new Date(timestamp).toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-  };
+  const formatTime = (timestamp: string): string => formatDateTime(timestamp);
 
   const formatDate = (timestamp: string): string => {
     return new Date(timestamp).toLocaleDateString('en-US', {
@@ -1724,13 +1736,7 @@ function FilesTab({ session }: { session: SessionReport }): React.ReactElement {
     }
   };
 
-  const formatTime = (timestamp: string): string => {
-    return new Date(timestamp).toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-  };
+  const formatTime = (timestamp: string): string => formatDateTime(timestamp);
 
   // Group files by git state
   const uncommittedFiles = gitFiles.filter(f => f.gitState !== 'committed');
@@ -5396,8 +5402,8 @@ function TerminalTab({ sessionId }: { sessionId: string }): React.ReactElement {
                   <div className={`flex items-start gap-2 py-1 hover:bg-gray-800 rounded px-1 ${
                     isHistorical ? 'opacity-60' : ''
                   }`}>
-                    <span className="text-gray-500 flex-shrink-0 w-20">
-                      {new Date(log.timestamp).toLocaleTimeString()}
+                    <span className="text-gray-500 flex-shrink-0 w-36">
+                      {formatDateTime(log.timestamp)}
                     </span>
                     <span className={`flex-shrink-0 w-5 h-5 rounded flex items-center justify-center text-xs font-bold ${style.bg} ${style.text}`}>
                       {style.icon}
@@ -5432,7 +5438,7 @@ function TerminalTab({ sessionId }: { sessionId: string }): React.ReactElement {
                       <div className="flex items-center gap-2">
                         <div className="flex-1 h-px bg-kanvas-blue/50" />
                         <span className="text-xs text-kanvas-blue font-medium px-2">
-                          Session resumed {new Date(sessionResumeTime).toLocaleTimeString()}
+                          Session resumed {formatDateTime(sessionResumeTime)}
                         </span>
                         <div className="flex-1 h-px bg-kanvas-blue/50" />
                       </div>
