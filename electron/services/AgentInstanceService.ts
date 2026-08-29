@@ -77,6 +77,7 @@ import { symlink, lstat } from 'fs/promises';
 import type { TerminalLogService } from './TerminalLogService';
 import type { ConfigService } from './ConfigService';
 import { MCP_CONFIG_FILE, CONTRACTS_PATHS } from '../../shared/agent-protocol';
+import { getWorktreeBaseDir } from '../../shared/worktree-path';
 
 /**
  * Compute the worktree base dir for a repo. Worktrees live OUTSIDE the source
@@ -86,15 +87,13 @@ import { MCP_CONFIG_FILE, CONTRACTS_PATHS } from '../../shared/agent-protocol';
  *   <repo_parent>/<repo_name>           ← source repo
  *   <repo_parent>/KIT-DevOps-<repo_name>/<branchName>   ← worktrees go here
  *
- * Git tracks worktrees by absolute path in `.git/worktrees/<id>/`, so this
- * layout works transparently for `git status`, `commit`, `log`, merges, etc.
- * Exported (module-scope `function`) so other modules can reproduce the path.
+ * The implementation now lives in `shared/worktree-path.ts`, which owns both
+ * directions of this layout — the reverse mapping (worktree → source repo) is
+ * needed by WatcherService today and by three later stories. Re-exported here
+ * so existing importers of `AgentInstanceService.getWorktreeBaseDir` keep
+ * working unchanged.
  */
-export function getWorktreeBaseDir(repoPath: string): string {
-  const parent = dirname(repoPath);
-  const name = basename(repoPath);
-  return join(parent, `KIT-DevOps-${name}`);
-}
+export { getWorktreeBaseDir };
 
 interface SessionState {
   sessionId: string;
