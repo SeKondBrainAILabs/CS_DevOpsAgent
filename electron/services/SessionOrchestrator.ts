@@ -83,6 +83,28 @@ export interface CloseSessionOptions {
   callerSessionId?: string;
 }
 
+export interface CloseSelector {
+  sessionIds?: string[];
+  parentSessionId?: string;
+  includeDescendants?: boolean;
+  repoPath?: string;
+  createdBy?: 'ui' | 'mcp' | 'adopted' | 'any';
+  status?: string[];
+  olderThanMinutes?: number;
+  excludeSessionIds?: string[];
+  limit?: number;
+  dryRun?: boolean;
+}
+
+export interface BulkCloseResult {
+  dryRun: boolean;
+  matched: number;
+  hasMore: boolean;
+  closed: Array<{ sessionId: string; branch?: string; worktreeDeleted: boolean }>;
+  skipped: Array<{ sessionId: string; reasonCode: string }>;
+  failed: Array<{ sessionId: string; errorCode: string; message: string }>;
+}
+
 export interface CloseResult {
   sessionId: string;
   alreadyClosed: boolean;
@@ -473,6 +495,149 @@ export class SessionOrchestrator {
         preserved,
       },
     };
+  }
+
+  /**
+   * Close many sessions at once — typically everything one orchestrator spawned.
+   *
+   * Selectors AND together and require a SCOPE ANCHOR (`sessionIds`,
+   * `parentSessionId` or `repoPath`). Without one, `{createdBy: 'mcp'}` alone
+   * would match every agent session on the machine, which is a very easy thing
+   * for an agent to type by accident.
+   *
+   * `createdBy` defaults to 'mcp' so a bulk close can never sweep up sessions a
+   * human created in the UI, even with a broad anchor.
+   *
+   * Partial failure is normal and reported per session; the batch does not
+   * abort. `ok` stays true because the batch did what it could — a false there
+   * is reserved for a selector or permission error that produced no work at all.
+   */
+  async closeSessions(
+    selector: CloseSelector,
+    opts: CloseSessionOptions = {}
+  ): Promise<IpcResult<BulkCloseResult>> {
+    const hasAnchor =
+      (selector.sessionIds && selector.sessionIds.length > 0) ||
+      Boolean(selector.parentSessionId) ||
+      Boolean(selector.repoPath);
+
+    if (!hasAnchor) {
+      const anyFilter =
+        selector.createdBy || selector.status || selector.olderThanMinutes !== undefined;
+      return {
+        success: false,
+        error: {
+          code: anyFilter ? 'SELECTOR_TOO_BROAD' : 'NO_SELECTOR',
+          message: anyFilter
+            ? 'Refusing an unanchored bulk close. Add session_ids, parent_session_id ' +
+              'or repo_path — filters alone would match every matching session on the machine.'
+            : 'No selector given. Pass session_ids, parent_session_id or repo_path.',
+        } as any,
+      };
+    }
+
+    const createdBy = selector.createdBy ?? 'mcp';
+    const limit = selector.limit ?? 50;
+    const exclude = new Set(selector.excludeSessionIds ?? []);
+    // A caller never closes itself in a bulk sweep — it would tear down the
+    // session issuing the request half way through.
+    if (opts.callerSessionId) exclude.add(opts.callerSessionId);
+
+    // Alias-expand the anchors. A child spawned before its parent restarted
+    // still carries the parent's OLD id, so matching the live id alone would
+    // return nothing — which is exactly the call this epic is built around.
+    const explicit = new Set<string>();
+    for (const id of selector.sessionIds ?? []) {
+      for (const alias of this.expandSessionAliases(id)) explicit.add(alias);
+    }
+
+    const subtree = selector.parentSessionId
+      ? new Set(
+          selector.includeDescendants === false
+            ? this.directChildSessionIds(selector.parentSessionId)
+            : this.descendantSessionIds(selector.parentSessionId)
+        )
+      : undefined;
+
+    const now = Date.now();
+    const candidates = this.listSessions().filter((inst) => {
+      const sid = inst.sessionId;
+      if (!sid || exclude.has(sid)) return false;
+      if (explicit.size > 0 && !explicit.has(sid)) return false;
+      if (subtree && !subtree.has(sid)) return false;
+      if (selector.repoPath && inst.config?.repoPath !== selector.repoPath) return false;
+
+      const origin = (inst.config as { createdBy?: string })?.createdBy ?? 'ui';
+      if (createdBy !== 'any' && origin !== createdBy) return false;
+
+      if (selector.status && !selector.status.includes(inst.status as string)) return false;
+
+      if (selector.olderThanMinutes !== undefined) {
+        const age = (now - new Date(inst.createdAt).getTime()) / 60000;
+        if (age < selector.olderThanMinutes) return false;
+      }
+      return true;
+    });
+
+    const result: BulkCloseResult = {
+      dryRun: Boolean(selector.dryRun),
+      matched: candidates.length,
+      // Surfaced explicitly rather than truncating silently: at a fan-out of
+      // 200 an orchestrator cannot otherwise tell "all done" from "capped".
+      hasMore: candidates.length > limit,
+      closed: [],
+      skipped: [],
+      failed: [],
+    };
+
+    const batch = candidates.slice(0, limit);
+    for (const inst of candidates.slice(limit)) {
+      result.skipped.push({ sessionId: inst.sessionId!, reasonCode: 'LIMIT_REACHED' });
+    }
+
+    if (selector.dryRun) {
+      for (const inst of batch) {
+        result.skipped.push({ sessionId: inst.sessionId!, reasonCode: 'DRY_RUN' });
+      }
+      return { success: true, data: result };
+    }
+
+    for (const inst of batch) {
+      const sid = inst.sessionId!;
+      const one = await this.closeSession(sid, opts);
+      if (one.success && one.data) {
+        if (one.data.alreadyClosed) {
+          result.skipped.push({ sessionId: sid, reasonCode: 'ALREADY_CLOSED' });
+        } else {
+          result.closed.push({
+            sessionId: sid,
+            branch: inst.config?.branchName,
+            worktreeDeleted: one.data.actions.worktreeDeleted,
+          });
+        }
+      } else {
+        result.failed.push({
+          sessionId: sid,
+          errorCode: one.error?.code ?? 'INTERNAL',
+          message: one.error?.message ?? 'close failed',
+        });
+      }
+    }
+
+    return { success: true, data: result };
+  }
+
+  /** Direct children only, alias-expanded. */
+  directChildSessionIds(sessionId: string): string[] {
+    const roots = new Set(this.expandSessionAliases(sessionId));
+    const out = new Set<string>();
+    for (const session of this.listSessions()) {
+      const parent = (session.config as { parentSessionId?: string })?.parentSessionId;
+      if (parent && roots.has(parent) && session.sessionId) {
+        for (const alias of this.expandSessionAliases(session.sessionId)) out.add(alias);
+      }
+    }
+    return [...out];
   }
 
   /**

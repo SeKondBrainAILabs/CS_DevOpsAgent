@@ -95,6 +95,8 @@ export interface McpServiceDeps {
     resolveSessionId: (instanceOrSessionId: string) => string | undefined;
     closeSession: (sessionId: string, opts?: any) => Promise<any>;
     descendantSessionIds: (sessionId: string) => string[];
+    closeSessions: (selector: any, opts?: any) => Promise<any>;
+    directChildSessionIds: (sessionId: string) => string[];
   };
   agentInstanceService?: {
     listInstances: () => { success: boolean; data?: any[] };

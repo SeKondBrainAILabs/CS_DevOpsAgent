@@ -791,3 +791,213 @@ describe('SessionOrchestrator.closeSession', () => {
     });
   });
 });
+
+// ─── closeSessions: bulk (M3) ────────────────────────────────────────────────
+describe('SessionOrchestrator.closeSessions', () => {
+  const child = (n: number, parent = 'sess_me', over: Partial<AgentInstance> = {}) =>
+    instance({
+      id: `inst_${n}`,
+      sessionId: `sess_c${n}`,
+      config: {
+        ...baseConfig({ branchName: `b${n}` }),
+        createdBy: 'mcp',
+        parentSessionId: parent,
+      } as any,
+      ...over,
+    });
+
+  function bulkDeps(instances: AgentInstance[]) {
+    const base = makeDeps({ instances });
+    return {
+      ...base,
+      deps: {
+        ...base.deps,
+        agentInstance: {
+          ...base.deps.agentInstance,
+          markSessionClosed: jest.fn(() => ({ success: true })) as any,
+          getDeleteSafetyInfo: jest.fn(async () => ({
+            success: true,
+            data: { hasUncommittedChanges: false, unpushedCommitCount: 0, hasRemoteBranch: true },
+          })) as any,
+          deleteInstanceWithCleanup: jest.fn(async () => ({ success: true })) as any,
+        },
+      },
+    };
+  }
+
+  describe('selector safety', () => {
+    it('refuses with no selector at all', async () => {
+      const { deps } = bulkDeps([]);
+      const r = await new SessionOrchestrator(deps).closeSessions({});
+      expect(r.error?.code).toBe('NO_SELECTOR');
+    });
+
+    it('refuses filters with no scope anchor', async () => {
+      // {created_by:'mcp'} alone would match every agent session on the
+      // machine — far too easy for an agent to type by accident.
+      const { deps } = bulkDeps([]);
+      const r = await new SessionOrchestrator(deps).closeSessions({ createdBy: 'mcp' });
+      expect(r.error?.code).toBe('SELECTOR_TOO_BROAD');
+    });
+  });
+
+  describe('subtree matching', () => {
+    it('closes every child of a parent', async () => {
+      const { deps } = bulkDeps([child(1), child(2), child(3)]);
+      const r = await new SessionOrchestrator(deps).closeSessions(
+        { parentSessionId: 'sess_me' },
+        { callerSessionId: 'sess_me' }
+      );
+      expect(r.data?.closed).toHaveLength(3);
+    });
+
+    it('STILL MATCHES after a restart re-ids the parent', async () => {
+      // The sentence this whole epic is built on. A child created before the
+      // parent restarted carries the parent's OLD id; without alias expansion
+      // kit_close_sessions(parent_session_id=self) returns matched: 0.
+      const parent = instance({
+        id: 'inst_p',
+        sessionId: 'sess_me_new',
+        predecessorSessionIds: ['sess_me'],
+        config: { ...baseConfig(), createdBy: 'mcp' } as any,
+      });
+      const { deps } = bulkDeps([parent, child(1, 'sess_me'), child(2, 'sess_me')]);
+
+      const r = await new SessionOrchestrator(deps).closeSessions(
+        { parentSessionId: 'sess_me_new' },
+        { callerSessionId: 'sess_me_new' }
+      );
+
+      expect(r.data?.matched).toBe(2);
+      expect(r.data?.closed).toHaveLength(2);
+    });
+
+    it('reaches grandchildren by default and not with include_descendants false', async () => {
+      const grandchild = child(9, 'sess_c1');
+      const all = [child(1), grandchild];
+
+      const deep = await new SessionOrchestrator(bulkDeps(all).deps).closeSessions({
+        parentSessionId: 'sess_me',
+      });
+      expect(deep.data?.matched).toBe(2);
+
+      const shallow = await new SessionOrchestrator(bulkDeps(all).deps).closeSessions({
+        parentSessionId: 'sess_me',
+        includeDescendants: false,
+      });
+      expect(shallow.data?.matched).toBe(1);
+    });
+  });
+
+  describe('never sweeps up a human', () => {
+    it('excludes UI-created sessions by default', async () => {
+      const human = instance({
+        id: 'inst_h',
+        sessionId: 'sess_human',
+        config: { ...baseConfig(), createdBy: 'ui', parentSessionId: 'sess_me' } as any,
+      });
+      const { deps } = bulkDeps([child(1), human]);
+
+      const r = await new SessionOrchestrator(deps).closeSessions(
+        { parentSessionId: 'sess_me' },
+        { callerSessionId: 'sess_me' }
+      );
+
+      expect(r.data?.matched).toBe(1);
+      expect(r.data?.closed.map((c) => c.sessionId)).toEqual(['sess_c1']);
+    });
+
+    it('reports a permission failure rather than closing, if one is explicitly targeted', async () => {
+      const human = instance({
+        id: 'inst_h',
+        sessionId: 'sess_human',
+        config: { ...baseConfig(), createdBy: 'ui' } as any,
+      });
+      const { deps } = bulkDeps([human]);
+
+      const r = await new SessionOrchestrator(deps).closeSessions(
+        { sessionIds: ['sess_human'], createdBy: 'any' },
+        { callerSessionId: 'sess_me' }
+      );
+
+      expect(r.data?.closed).toHaveLength(0);
+      expect(r.data?.failed[0]?.errorCode).toBe('NOT_PERMITTED');
+    });
+  });
+
+  describe('self-exclusion and limits', () => {
+    it('never closes the caller', async () => {
+      // Closing yourself half way through a sweep tears down the session
+      // issuing the request.
+      const me = instance({
+        id: 'inst_me',
+        sessionId: 'sess_me',
+        config: { ...baseConfig(), createdBy: 'mcp', parentSessionId: 'sess_root' } as any,
+      });
+      const { deps } = bulkDeps([me, child(1, 'sess_root')]);
+
+      const r = await new SessionOrchestrator(deps).closeSessions(
+        { parentSessionId: 'sess_root' },
+        { callerSessionId: 'sess_me', allowForeign: true }
+      );
+
+      expect(r.data?.closed.map((c) => c.sessionId)).toEqual(['sess_c1']);
+    });
+
+    it('caps the batch and says so rather than truncating silently', async () => {
+      // At a fan-out of 200 an orchestrator cannot otherwise distinguish
+      // "all done" from "capped".
+      const { deps } = bulkDeps([child(1), child(2), child(3)]);
+      const r = await new SessionOrchestrator(deps).closeSessions(
+        { parentSessionId: 'sess_me', limit: 2 },
+        { callerSessionId: 'sess_me' }
+      );
+
+      expect(r.data?.closed).toHaveLength(2);
+      expect(r.data?.hasMore).toBe(true);
+      expect(r.data?.skipped.some((s) => s.reasonCode === 'LIMIT_REACHED')).toBe(true);
+    });
+  });
+
+  describe('dry run', () => {
+    it('closes nothing and reports what it would have closed', async () => {
+      const d = bulkDeps([child(1), child(2)]);
+      const r = await new SessionOrchestrator(d.deps).closeSessions({
+        parentSessionId: 'sess_me',
+        dryRun: true,
+      });
+
+      expect(r.data?.matched).toBe(2);
+      expect(r.data?.closed).toHaveLength(0);
+      expect(d.stopAll).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('partial failure', () => {
+    it('does not abort the batch when one session fails its gate', async () => {
+      const d = bulkDeps([child(1), child(2)]);
+      let call = 0;
+      (d.deps.agentInstance as any).getDeleteSafetyInfo = jest.fn(async () => {
+        call += 1;
+        return {
+          success: true,
+          data: {
+            hasUncommittedChanges: call === 1,
+            unpushedCommitCount: 0,
+            hasRemoteBranch: true,
+          },
+        };
+      });
+
+      const r = await new SessionOrchestrator(d.deps).closeSessions(
+        { parentSessionId: 'sess_me' },
+        { deleteWorktree: true, callerSessionId: 'sess_me' }
+      );
+
+      expect(r.success).toBe(true);
+      expect(r.data?.failed).toHaveLength(1);
+      expect(r.data?.failed[0].errorCode).toBe('DIRTY_REFUSED');
+      expect(r.data?.closed).toHaveLength(1);
+    });
+  });
+});

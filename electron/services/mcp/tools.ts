@@ -1572,6 +1572,146 @@ export function registerTools(
     })
   );
 
+  srv.tool(
+    'kit_close_sessions',
+    'Close many KIT sessions at once — typically everything you spawned. Same SAFE default and same per-session refusals as kit_close_session; failures are reported per session and never abort the batch. Requires a scope: session_ids, parent_session_id or repo_path.',
+    {
+      session_ids: z.array(z.string()).optional().describe('Explicit list of sessions to close.'),
+      parent_session_id: z.string().optional().describe('Close the children of this session. Pass your own id to clean up everything you spawned. Restart-predecessor ids are matched too.'),
+      include_descendants: z.boolean().optional().describe('With parent_session_id, also close grandchildren. Default true.'),
+      repo_path: z.string().optional().describe('Only sessions in this repository.'),
+      created_by: z.enum(['mcp', 'ui', 'adopted', 'any']).optional().describe('Only sessions created this way. Defaults to "mcp" so a bulk close can never sweep up sessions a human created.'),
+      status: z.array(z.string()).optional().describe('Only sessions currently in one of these statuses, e.g. ["waiting"] to reap agents that never connected.'),
+      older_than_minutes: z.number().optional().describe('Only sessions created more than N minutes ago.'),
+      exclude_session_ids: z.array(z.string()).optional().describe('Never close these. Your own id is always excluded.'),
+      limit: z.number().optional().describe('Cap on how many to close in one call. Default 50; extras are reported as skipped and has_more is set.'),
+      dry_run: z.boolean().optional().describe('Return exactly which sessions WOULD be closed without closing anything. Do this first with a broad selector.'),
+      caller_session_id: z.string().optional().describe('YOUR session id, for ownership checks and self-exclusion.'),
+      reason: z.string().optional().describe('Recorded on every closed session.'),
+      delete_worktree: z.boolean().optional().describe('DESTRUCTIVE, applied per session.'),
+      delete_local_branch: z.boolean().optional().describe('DESTRUCTIVE, applied per session.'),
+      delete_remote_branch: z.boolean().optional().describe('DESTRUCTIVE, applied per session.'),
+      force_dirty: z.boolean().optional().describe('DISCARDS UNCOMMITTED WORK in every matched session.'),
+      force_unpushed: z.boolean().optional().describe('DISCARDS UNPUSHED COMMITS in every matched session.'),
+      allow_foreign: z.boolean().optional().describe("Permit closing other agents' sessions. Never permits closing a human's."),
+    },
+    withCallLog('kit_close_sessions', async (args: any) => {
+      if (!deps.sessionOrchestrator?.closeSessions) return notAvailable('sessionOrchestrator');
+
+      const result = await deps.sessionOrchestrator.closeSessions(
+        {
+          sessionIds: args.session_ids,
+          parentSessionId: args.parent_session_id,
+          includeDescendants: args.include_descendants,
+          repoPath: args.repo_path,
+          createdBy: args.created_by,
+          status: args.status,
+          olderThanMinutes: args.older_than_minutes,
+          excludeSessionIds: args.exclude_session_ids,
+          limit: args.limit,
+          dryRun: args.dry_run,
+        },
+        {
+          reason: args.reason,
+          deleteWorktree: args.delete_worktree,
+          deleteLocalBranch: args.delete_local_branch,
+          deleteRemoteBranch: args.delete_remote_branch,
+          forceDirty: args.force_dirty,
+          forceUnpushed: args.force_unpushed,
+          allowForeign: args.allow_foreign,
+          callerSessionId: args.caller_session_id,
+        }
+      );
+
+      if (!result?.success) {
+        const err = result?.error ?? { code: 'INTERNAL', message: 'Bulk close failed' };
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error_code: err.code, message: err.message }) }] };
+      }
+
+      const d = result.data;
+      return {
+        content: [{ type: 'text', text: JSON.stringify({
+          ok: true,
+          dry_run: d.dryRun,
+          matched: d.matched,
+          has_more: d.hasMore,
+          closed_count: d.closed.length,
+          closed: d.closed.map((c: any) => ({ session_id: c.sessionId, branch: c.branch, worktree_deleted: c.worktreeDeleted })),
+          skipped: d.skipped.map((x: any) => ({ session_id: x.sessionId, reason_code: x.reasonCode })),
+          failed: d.failed.map((f: any) => ({ session_id: f.sessionId, error_code: f.errorCode, message: f.message })),
+        }) }],
+      };
+    })
+  );
+
+  srv.tool(
+    'kit_list_sessions',
+    'List KIT sessions with lineage, origin and runtime state. Use it to find what you spawned, or to re-adopt after a restart.',
+    {
+      repo_path: z.string().optional().describe('Only sessions in this repository.'),
+      parent_session_id: z.string().optional().describe('Only children of this session (restart-predecessor ids are matched too).'),
+      include_descendants: z.boolean().optional().describe('With parent_session_id, include the whole subtree. Default false.'),
+      created_by: z.enum(['mcp', 'ui', 'adopted', 'any']).optional().describe('Filter by who created the session. Default any.'),
+      status: z.array(z.string()).optional().describe('Only these statuses.'),
+      include_closed: z.boolean().optional().describe('Include closed/completed/failed sessions. Default false.'),
+      limit: z.number().optional().describe('Maximum sessions returned. Default 100.'),
+    },
+    withCallLog('kit_list_sessions', async (args: any) => {
+      if (!deps.sessionOrchestrator?.listSessions) return notAvailable('sessionOrchestrator');
+
+      const createdBy = args.created_by ?? 'any';
+      const includeClosed = args.include_closed ?? false;
+      const limit = args.limit ?? 100;
+
+      const subtree = args.parent_session_id
+        ? new Set(
+            args.include_descendants
+              ? deps.sessionOrchestrator.descendantSessionIds(args.parent_session_id)
+              : (deps.sessionOrchestrator as any).directChildSessionIds?.(args.parent_session_id) ?? []
+          )
+        : undefined;
+
+      const all = deps.sessionOrchestrator.listSessions().filter((inst: any) => {
+        if (!inst.sessionId) return false;
+        if (subtree && !subtree.has(inst.sessionId)) return false;
+        if (args.repo_path && inst.config?.repoPath !== args.repo_path) return false;
+        const origin = inst.config?.createdBy ?? 'ui';
+        if (createdBy !== 'any' && origin !== createdBy) return false;
+        if (args.status && !args.status.includes(inst.status)) return false;
+        if (!includeClosed && ['closed', 'completed', 'failed'].includes(inst.status)) return false;
+        return true;
+      });
+
+      const sessions = all.slice(0, limit).map((inst: any) => ({
+        session_id: inst.sessionId,
+        instance_id: inst.id,
+        status: inst.status,
+        created_by: inst.config?.createdBy ?? 'ui',
+        parent_session_id: inst.config?.parentSessionId ?? null,
+        predecessor_session_ids: inst.predecessorSessionIds ?? [],
+        agent_type: inst.config?.agentType,
+        repo_path: inst.config?.repoPath,
+        worktree_path: inst.worktreePath ?? null,
+        worktree_status: inst.worktreeStatus ?? null,
+        branch: inst.config?.branchName,
+        base_branch: inst.config?.baseBranch,
+        task: inst.config?.taskDescription,
+        created_at: inst.createdAt,
+        closed_at: inst.closedAt ?? null,
+        close_reason: inst.closeReason ?? null,
+        // Together these expose the leak class this epic closed: a binder entry
+        // with no watcher, or a watcher with no binder entry.
+        mcp_registered: Boolean(binder.getSession?.(inst.sessionId)),
+      }));
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify({
+          ok: true, count: sessions.length, truncated: all.length > limit, sessions,
+        }) }],
+      };
+    })
+  );
+
   // ==========================================================================
   // v2.5 additions (merged in at v2.7.0 from origin/main track) —
   // Workspace / repo state / auto-commit guard. Read-heavy tools that let
