@@ -8,7 +8,7 @@
 
 import { spawn } from 'child_process';
 import { mkdir, writeFile, readFile, readdir, stat, access } from 'fs/promises';
-import { existsSync, constants } from 'fs';
+import { existsSync, constants, lstatSync, readlinkSync, statSync } from 'fs';
 import { dirname, join, basename } from 'path';
 import { homedir } from 'os';
 import { BrowserWindow } from 'electron';
@@ -85,6 +85,10 @@ import {
   type WorktreeStatus,
 } from '../../shared/worktree-outcome';
 import { isObserverSession, refuseDestructiveForObserver } from '../../shared/observer-session';
+import {
+  planNodeModules,
+  type NodeModulesSetting,
+} from '../../shared/node-modules-plan';
 
 /**
  * Compute the worktree base dir for a repo. Worktrees live OUTSIDE the source
@@ -909,6 +913,95 @@ ${DEVOPS_KIT_DIR}/
    * new location.
    */
   /**
+   * Give a new worktree a node_modules directory (story KIT-MCP-A5).
+   *
+   * `git worktree add` is fast; node_modules is the real cost of a session, and
+   * KIT has never provisioned it — a fresh worktree simply has none and the
+   * agent finds out when its first build fails.
+   *
+   * Strategy comes from the pure planner. Everything here is best-effort: a
+   * failure to provision must never fail a session, because a session without
+   * node_modules still works for anything that is not a build.
+   *
+   * DEFAULT IS 'skip'. The ladder is measured but unproven at scale on this
+   * codebase, and the shared rungs let an agent's `npm install` mutate the
+   * user's own repository. Opt in via worktree.node_modules_strategy once the
+   * cost is worth the risk on a given machine.
+   */
+  private async provisionNodeModules(
+    repoPath: string,
+    worktreeDir: string
+  ): Promise<{ strategy: string; warning?: string } | null> {
+    const setting = (databaseService.getSetting(
+      'worktree.node_modules_strategy',
+      'skip'
+    ) ?? 'skip') as NodeModulesSetting;
+
+    if (setting === 'skip') return null;
+
+    const source = join(repoPath, 'node_modules');
+    let sourceExists = false;
+    let sourceIsSymlink = false;
+    let sourceSymlinkTarget: string | undefined;
+    let sameFilesystem = true;
+
+    try {
+      const st = lstatSync(source);
+      sourceExists = true;
+      sourceIsSymlink = st.isSymbolicLink();
+      if (sourceIsSymlink) sourceSymlinkTarget = readlinkSync(source);
+    } catch {
+      sourceExists = false;
+    }
+
+    if (sourceExists && !sourceIsSymlink) {
+      try {
+        // A worktree normally sits beside its repo, but nothing guarantees it.
+        // A cross-device clone silently degrades to a full byte copy.
+        sameFilesystem = statSync(repoPath).dev === statSync(dirname(worktreeDir)).dev;
+      } catch {
+        sameFilesystem = false;
+      }
+    }
+
+    const plan = planNodeModules({
+      setting,
+      platform: process.platform,
+      sourceExists,
+      sourceIsSymlink,
+      sourceSymlinkTarget,
+      sameFilesystem,
+      // Assume CoW where the platform commonly has it; the copy itself errors
+      // rather than silently degrading, so a wrong guess costs one failed
+      // command and falls through to a warning.
+      supportsCow: process.platform === 'darwin' || process.platform === 'linux',
+    });
+
+    const target = join(worktreeDir, 'node_modules');
+    try {
+      if (plan.strategy === 'none' || plan.strategy === 'skipped') {
+        return { strategy: plan.strategy };
+      }
+      if (plan.strategy === 'symlink') {
+        await symlink(sourceSymlinkTarget ?? source, target, 'dir');
+      } else if (plan.strategy === 'junction') {
+        await symlink(source, target, 'junction');
+      } else if (plan.strategy === 'clone' && plan.command) {
+        await execaCmd(plan.command[0], [...plan.command.slice(1), source, target]);
+      }
+      console.log(
+        `[AgentInstanceService] node_modules provisioned via ${plan.strategy}: ${plan.reason}`
+      );
+      return { strategy: plan.strategy, warning: plan.agentWarning };
+    } catch (error) {
+      // Never fatal. A session without node_modules is still a usable session.
+      const detail = error instanceof Error ? error.message : String(error);
+      console.warn(`[AgentInstanceService] node_modules provisioning failed: ${detail}`);
+      return { strategy: 'skipped', warning: `node_modules not provisioned: ${detail}` };
+    }
+  }
+
+  /**
    * Create (or adopt) the session's worktree.
    *
    * Split into a FATAL half and a BEST-EFFORT half. Previously both lived in
@@ -1033,6 +1126,10 @@ ${DEVOPS_KIT_DIR}/
     await provision('install pre-commit hook', () =>
       this.installPreCommitHookIntoWorktree(config.repoPath, worktreeDir)
     );
+    await provision('provision node_modules', async () => {
+      const result = await this.provisionNodeModules(config.repoPath, worktreeDir);
+      if (result?.warning) warnings.push(result.warning);
+    });
 
     return { path: worktreeDir, status, warnings };
   }

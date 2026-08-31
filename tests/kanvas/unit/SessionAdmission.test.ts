@@ -303,6 +303,7 @@ describe('readSessionLimits', () => {
       maxConcurrentGlobal: 'mcp.session_create.max_concurrent_global',
       maxConcurrentPerRepo: 'mcp.session_create.max_concurrent_per_repo',
       allowRemoteBranchDelete: 'mcp.session_close.allow_remote_branch_delete',
+      nodeModulesStrategy: 'worktree.node_modules_strategy',
     });
   });
 });
