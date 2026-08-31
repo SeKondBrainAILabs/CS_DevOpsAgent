@@ -62,6 +62,7 @@ function makeDeps(over: {
   startWithPath?: (...a: unknown[]) => Promise<IpcResult<void>>;
   stopAll?: (...a: unknown[]) => Promise<IpcResult<void>>;
   stopWatching?: (...a: unknown[]) => Promise<IpcResult<void>>;
+  unregisterSession?: (id: string) => void;
 } = {}) {
   const createInstance = jest.fn(
     over.createInstance ?? (async () => ok(instance()))
@@ -73,6 +74,9 @@ function makeDeps(over: {
   const stopWatching = jest.fn(
     over.stopWatching ?? (async () => ({ success: true }))
   ) as any;
+  const unregisterSession = jest.fn(
+    over.unregisterSession ?? (() => undefined)
+  ) as any;
   const listInstances = jest.fn(() => ({
     success: true,
     data: over.instances ?? [],
@@ -83,11 +87,13 @@ function makeDeps(over: {
       agentInstance: { createInstance, listInstances },
       watcher: { startWithPath, stopAll },
       rebaseWatcher: { stopWatching },
+      binder: { unregisterSession },
     },
     createInstance,
     startWithPath,
     stopAll,
     stopWatching,
+    unregisterSession,
     listInstances,
   };
 }
@@ -454,5 +460,109 @@ describe('SessionOrchestrator.resolveSessionId', () => {
   it('returns undefined for an id it cannot place', () => {
     const { deps } = makeDeps({ instances: [inst] });
     expect(new SessionOrchestrator(deps).resolveSessionId('inst_gone')).toBeUndefined();
+  });
+});
+
+// ─── teardownSession: MCP binder unregistration (H2) ─────────────────────────
+describe('SessionOrchestrator.teardownSession — MCP binder', () => {
+  // sess_old -> sess_mid -> sess_live, chain stored oldest-first on the live one.
+  const chained = instance({
+    id: 'inst_live',
+    sessionId: 'sess_live',
+    predecessorSessionIds: ['sess_old', 'sess_mid'],
+  });
+
+  it('unregisters the session from the binder by default', async () => {
+    // McpSessionBinder.unregisterSession had ZERO production callers, so a
+    // deleted session stayed MCP-resolvable until the app restarted and
+    // kit_commit kept working against it.
+    const { deps, unregisterSession } = makeDeps({
+      instances: [instance({ sessionId: 'sess_solo' })],
+    });
+
+    await new SessionOrchestrator(deps).teardownSession('sess_solo');
+
+    expect(unregisterSession).toHaveBeenCalledWith('sess_solo');
+  });
+
+  it('unregisters every predecessor alias, not just the current id', async () => {
+    // registerExistingSessionsWithBinder registers each predecessor as its OWN
+    // binder entry (AgentInstanceService:2317). Unregistering only the current
+    // id would leave live aliases behind, and kit_commit under an old id would
+    // still resolve to a closed session.
+    const { deps, unregisterSession } = makeDeps({ instances: [chained] });
+
+    await new SessionOrchestrator(deps).teardownSession('sess_live');
+
+    const unregistered = unregisterSession.mock.calls.map((c: string[]) => c[0]);
+    expect(new Set(unregistered)).toEqual(
+      new Set(['sess_live', 'sess_mid', 'sess_old'])
+    );
+  });
+
+  it('reports how many aliases it cleared', async () => {
+    const { deps } = makeDeps({ instances: [chained] });
+    const actions = await new SessionOrchestrator(deps).teardownSession('sess_live');
+
+    expect(actions.mcpUnregistered).toBe(true);
+    expect(actions.aliasesUnregistered).toBe(3);
+  });
+
+  describe('unbindMcp: false — the restart path', () => {
+    // IPC.INSTANCE_RESTART tears down BEFORE restartInstance runs. Restart then
+    // re-aliases the old session id onto the new worktree
+    // (aliasOldSessionInBinder, :2274). Unbinding in between opens a window
+    // where the old id resolves to nothing — any in-flight kit_commit from a
+    // subagent launched with that id gets "Unknown session", and if the
+    // createInstance half then fails the break is permanent.
+    it('does not touch the binder', async () => {
+      const { deps, unregisterSession } = makeDeps({ instances: [chained] });
+
+      await new SessionOrchestrator(deps).teardownSession('sess_live', {
+        unbindMcp: false,
+      });
+
+      expect(unregisterSession).not.toHaveBeenCalled();
+    });
+
+    it('still stops watchers and the rebase watcher — the flag gates only the binder', async () => {
+      const { deps, stopAll, stopWatching } = makeDeps({ instances: [chained] });
+
+      const actions = await new SessionOrchestrator(deps).teardownSession('sess_live', {
+        unbindMcp: false,
+      });
+
+      expect(stopAll).toHaveBeenCalledWith('sess_live');
+      expect(stopWatching).toHaveBeenCalledWith('sess_live');
+      expect(actions.watchersStopped).toBe(true);
+      expect(actions.mcpUnregistered).toBe(false);
+      expect(actions.aliasesUnregistered).toBe(0);
+    });
+  });
+
+  it('a throwing binder does not prevent watcher teardown, and is reported', async () => {
+    const { deps, stopAll, stopWatching } = makeDeps({
+      instances: [chained],
+      unregisterSession: () => {
+        throw new Error('binder exploded');
+      },
+    });
+
+    const actions = await new SessionOrchestrator(deps).teardownSession('sess_live');
+
+    expect(stopAll).toHaveBeenCalled();
+    expect(stopWatching).toHaveBeenCalled();
+    expect(actions.mcpUnregistered).toBe(false);
+    expect(actions.errors.some((e) => e.step === 'mcpBinder')).toBe(true);
+  });
+
+  it('unregisters the given id even when it matches no live instance', async () => {
+    // Ghost-mode deletes operate on sessions with no in-memory record; the
+    // binder may still hold an entry from before a reap.
+    const { deps, unregisterSession } = makeDeps({ instances: [] });
+
+    await new SessionOrchestrator(deps).teardownSession('sess_ghost');
+
+    expect(unregisterSession).toHaveBeenCalledWith('sess_ghost');
   });
 });

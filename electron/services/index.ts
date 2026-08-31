@@ -179,17 +179,6 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // Connect rebaseWatcher to watcher for post-commit rebase
   watcher.setRebaseWatcher(rebaseWatcher);
 
-  // Single funnel for session lifecycle. Both the IPC layer and the MCP tool
-  // layer go through this so neither reimplements the compose step —
-  // createInstance() does not start the file watcher, and the delete paths
-  // each tore down a different subset of a session's background resources.
-  // Constructed here rather than beside agentInstance because it composes
-  // rebaseWatcher, which is created above. See SessionOrchestrator's header.
-  const sessionOrchestrator = new SessionOrchestrator({
-    agentInstance,
-    watcher,
-    rebaseWatcher,
-  });
 
   // Connect terminalLog to watcher for terminal view logging
   watcher.setTerminalLogService(terminalLog);
@@ -422,6 +411,22 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
 
   // Connect contract services to watcher for post-commit contract auto-checks
   watcher.setContractServices(contractDetection, contractGeneration);
+
+  // Single funnel for session lifecycle. Both the IPC layer and the MCP tool
+  // layer go through this so neither reimplements the compose step —
+  // createInstance() does not start the file watcher, and the delete paths
+  // each tore down a different subset of a session's background resources.
+  //
+  // Constructed HERE, immediately before the services object, because it
+  // composes several services created at different points above (watcher,
+  // rebaseWatcher, mcpServer's binder). Keep it last so adding a dependency
+  // does not mean moving it again.
+  const sessionOrchestrator = new SessionOrchestrator({
+    agentInstance,
+    watcher,
+    rebaseWatcher,
+    binder: mcpServer.sessionBinder,
+  });
 
   services = {
     session,

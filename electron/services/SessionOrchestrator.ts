@@ -73,16 +73,38 @@ export interface OrchestratorRebaseWatcherService {
   stopWatching(sessionId: string): Promise<IpcResult<void>>;
 }
 
+/** The slice of McpSessionBinder the orchestrator needs. */
+export interface OrchestratorSessionBinder {
+  unregisterSession(kitSessionId: string): void;
+}
+
 export interface SessionOrchestratorDeps {
   agentInstance: OrchestratorAgentInstanceService;
   watcher: OrchestratorWatcherService;
   rebaseWatcher: OrchestratorRebaseWatcherService;
+  binder: OrchestratorSessionBinder;
+}
+
+export interface TeardownOptions {
+  /**
+   * Unregister the session from the MCP binder. Defaults to true.
+   *
+   * The restart path passes `false`. Restart tears down first, then re-aliases
+   * the OLD session id onto the NEW worktree (`aliasOldSessionInBinder`,
+   * `AgentInstanceService:2274`). Unbinding in between opens a window where the
+   * old id resolves to nothing — any in-flight `kit_commit` from a subagent
+   * launched with that id gets "Unknown session", and if the createInstance
+   * half then fails the break is permanent, because the re-alias never runs.
+   */
+  unbindMcp?: boolean;
 }
 
 /** What a teardown actually managed to do. */
 export interface TeardownActions {
   watchersStopped: boolean;
   rebaseWatcherStopped: boolean;
+  mcpUnregistered: boolean;
+  aliasesUnregistered: number;
   errors: Array<{ step: string; message: string }>;
 }
 
@@ -156,10 +178,16 @@ export class SessionOrchestrator {
    * `WatcherService:383` when the session has none. Releasing locks for a
    * watcher-less session is leak 8c and belongs to H6, not here.
    */
-  async teardownSession(sessionId: string): Promise<TeardownActions> {
+  async teardownSession(
+    sessionId: string,
+    opts: TeardownOptions = {}
+  ): Promise<TeardownActions> {
+    const { unbindMcp = true } = opts;
     const actions: TeardownActions = {
       watchersStopped: false,
       rebaseWatcherStopped: false,
+      mcpUnregistered: false,
+      aliasesUnregistered: 0,
       errors: [],
     };
 
@@ -194,6 +222,26 @@ export class SessionOrchestrator {
     actions.rebaseWatcherStopped = await step('rebaseWatcher', () =>
       this.deps.rebaseWatcher.stopWatching(sessionId)
     );
+
+    if (unbindMcp) {
+      // Unregister every id this session answers to, not just the current one.
+      // `registerExistingSessionsWithBinder` gives each predecessor its own
+      // binder entry (AgentInstanceService:2317), so clearing only the live id
+      // leaves working aliases behind and kit_commit under an old id would
+      // still resolve to a session the user has closed.
+      //
+      // Computed here rather than after deletion because every IPC path calls
+      // teardownSession BEFORE deleteInstance, so the record is still present.
+      actions.mcpUnregistered = await step('mcpBinder', async () => {
+        const aliases = this.expandSessionAliases(sessionId);
+        for (const alias of aliases) {
+          this.deps.binder.unregisterSession(alias);
+        }
+        actions.aliasesUnregistered = aliases.length;
+        return { success: true };
+      });
+      if (!actions.mcpUnregistered) actions.aliasesUnregistered = 0;
+    }
 
     return actions;
   }

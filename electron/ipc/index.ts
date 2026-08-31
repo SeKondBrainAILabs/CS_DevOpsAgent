@@ -500,7 +500,15 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     // Tear down the outgoing session's background resources. Note this stops
     // the rebase watcher too, which the old inline `watcher.stop()` did not —
     // a restarted session used to leave its previous rebase interval running.
-    await services.sessionOrchestrator.teardownSession(sessionId);
+    //
+    // unbindMcp:false is load-bearing. restartInstance re-aliases the OLD
+    // session id onto the NEW worktree a few steps later
+    // (aliasOldSessionInBinder, AgentInstanceService:2274). Unbinding here
+    // would open a window in which the old id resolves to nothing, so an
+    // in-flight kit_commit from a subagent launched with that id would get
+    // "Unknown session" — permanently, if the create half then fails and the
+    // re-alias never runs.
+    await services.sessionOrchestrator.teardownSession(sessionId, { unbindMcp: false });
 
     const result = await services.agentInstance.restartInstance(sessionId, sessionData, commitChanges);
 
