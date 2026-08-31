@@ -1124,6 +1124,63 @@ export class DatabaseService extends BaseService {
    * stranded under an earlier sessionId by previous releases that didn't
    * include mcp_calls in `transferSessionData`.
    */
+  /**
+   * Delete a session's disposable telemetry when the session itself is deleted.
+   *
+   * Telemetry goes: `activity_logs`, `terminal_logs`, `mcp_calls`.
+   * History stays: `commits` and `session_history`. `commits` is the only
+   * KIT-side hash -> session link, and `backfillMcpCallsByLineage` exists
+   * specifically to rescue history across restarts, so a blanket purge would
+   * be working against it. Ageing those two out is a separate story (H4b) and
+   * needs a dry run first — on a long-lived install a naive 30-day sweep would
+   * remove nearly everything on the first launch after upgrade.
+   *
+   * Pass EVERY id the session has answered to, including
+   * `predecessorSessionIds`: rows written before a restart are keyed to the old
+   * id, and purging only the live one orphans them permanently.
+   *
+   * Called on DELETE, not on a safe close. A safe close marks the session
+   * closed without removing it, and the session reaper (R1) reads `mcp_calls`
+   * to decide liveness — purging there would blind it.
+   *
+   * All three deletes run in one transaction so a failure cannot leave a
+   * session half-purged.
+   */
+  purgeSessionTelemetry(sessionIds: string[]): {
+    activity: number;
+    terminal: number;
+    mcp: number;
+  } {
+    const empty = { activity: 0, terminal: 0, mcp: 0 };
+    // Guard the empty case explicitly: a carelessly built `IN ()` can degrade
+    // into a full-table delete.
+    if (!this.db || sessionIds.length === 0) return empty;
+
+    try {
+      const placeholders = sessionIds.map(() => '?').join(',');
+      const del = (table: string): number =>
+        this.db!
+          .prepare(`DELETE FROM ${table} WHERE session_id IN (${placeholders})`)
+          .run(...sessionIds).changes;
+
+      const run = this.db.transaction(() => ({
+        activity: del('activity_logs'),
+        terminal: del('terminal_logs'),
+        mcp: del('mcp_calls'),
+      }));
+
+      const result = run();
+      console.log(
+        `[DatabaseService] Purged telemetry for ${sessionIds.length} session id(s): ` +
+          `${result.activity} activity, ${result.terminal} terminal, ${result.mcp} mcp_calls`
+      );
+      return result;
+    } catch (error) {
+      console.error('[DatabaseService] Failed to purge session telemetry:', error);
+      return empty;
+    }
+  }
+
   transferMcpCalls(oldSessionId: string, newSessionId: string): number {
     if (!this.db) return 0;
     try {

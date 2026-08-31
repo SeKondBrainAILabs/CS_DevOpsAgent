@@ -2628,6 +2628,19 @@ ${DEVOPS_KIT_DIR}/
       // Clear session state
       if (instance.sessionId) {
         this.clearSessionState(instance.sessionId);
+
+        // Drop the session's disposable telemetry. Passes every id the session
+        // ever answered to: rows written before a restart are keyed to the
+        // predecessor id, so purging only the live one orphans them forever.
+        //
+        // Deliberately here and not on a safe close — a safe close marks the
+        // session closed without deleting it, and the session reaper reads
+        // mcp_calls to decide liveness. `commits` and `session_history` are
+        // left alone; they are history, not telemetry.
+        databaseService.purgeSessionTelemetry([
+          instance.sessionId,
+          ...(instance.predecessorSessionIds ?? []),
+        ]);
       }
 
       // Decrement the agent count for this repo in recent repos
