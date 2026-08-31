@@ -22,15 +22,22 @@ export function Sidebar(): React.ReactElement {
   const setSelectedSession = useAgentStore((state) => state.setSelectedSession);
   const removeReportedSession = useAgentStore((state) => state.removeReportedSession);
 
-  // Filter out terminal-state sessions from the tree — the user reads the
-  // sidebar as "what's alive to work with", not "everything KIT has ever
-  // seen". Before this filter, sessions with status='closed' (e.g. l63a on
-  // agent_memory_vault, closed 4 months ago) still rendered and inflated
-  // the repo-level count above what the agent-type group actually showed.
-  // Backend reaping doesn't remove them from the SessionReport store — it
-  // just flips `status`. So filtering here is the correct fix.
-  const allSessions = Array.from(reportedSessions.values()).filter(
-    (session) => session.status !== 'closed'
+  // Terminal-state sessions are hidden from the tree by default — the user
+  // reads the sidebar as "what's alive to work with", not "everything KIT has
+  // ever seen", and reaping only flips `status` rather than removing the
+  // record.
+  //
+  // But hiding them outright is wrong now that a SAFE close exists. A safe
+  // close deliberately KEEPS the worktree and branch, so a session that
+  // vanishes from the sidebar leaves real work on disk with no way to find it
+  // — which at agent fan-out is a directory per closed session. Those are
+  // surfaced under a collapsible group instead.
+  const everySession = Array.from(reportedSessions.values());
+  const allSessions = everySession.filter((session) => session.status !== 'closed');
+
+  // Closed but still holding a worktree: the user has cleanup to finish.
+  const retainedSessions = everySession.filter(
+    (session) => session.status === 'closed' && Boolean(session.worktreePath)
   );
   const sessions = selectedAgentId
     ? allSessions.filter((session) => session.agentId === selectedAgentId)
@@ -357,6 +364,40 @@ function SessionList({ sessions, selectedSessionId, onSelectSession, onDeleteSes
           {sessions.length} total
         </span>
       </div>
+
+      {retainedSessions.length > 0 && (
+        <details className="rounded-md border border-[rgba(0,0,0,0.10)]">
+          <summary className="px-3 py-2 text-xs text-text-secondary cursor-pointer select-none">
+            {retainedSessions.length} closed &middot; worktree retained
+          </summary>
+          <div className="px-3 pb-2 space-y-1">
+            <p className="text-[11px] text-text-secondary/80 leading-snug">
+              These sessions were closed safely, so their worktree and branch are
+              still on disk. Delete them from the session view when the work is
+              merged or abandoned.
+            </p>
+            {retainedSessions.map((session) => (
+              <div
+                key={session.sessionId}
+                className="flex items-center justify-between gap-2 text-xs py-0.5"
+                title={session.worktreePath}
+              >
+                <span className="truncate text-text-secondary">
+                  {session.branchName || session.sessionId}
+                </span>
+                {session.createdBy === 'mcp' && (
+                  <span
+                    className="shrink-0 text-[10px] px-1.5 py-px rounded-full border border-accent/40 text-accent"
+                    title="Created by an agent over MCP"
+                  >
+                    agent
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
 
       {repoNames.map((repoName) => {
         const { repoPath, sessions: repoSessions } = sessionsByRepo[repoName];

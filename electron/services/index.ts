@@ -33,6 +33,7 @@ import { AutoUpdateService } from './AutoUpdateService';
 import { WorkerBridgeService } from './WorkerBridgeService';
 import { McpServerService } from './McpServerService';
 import { SeedDataExecutionService } from './SeedDataExecutionService';
+import { SessionOrchestrator } from './SessionOrchestrator';
 import { databaseService } from './DatabaseService';
 import {
   initializeAnalysisServices,
@@ -58,6 +59,7 @@ export interface Services {
   activity: ActivityService;
   agentListener: AgentListenerService;
   agentInstance: AgentInstanceService;
+  sessionOrchestrator: SessionOrchestrator;
   sessionRecovery: SessionRecoveryService;
   repoCleanup: RepoCleanupService;
   contractDetection: ContractDetectionService;
@@ -177,6 +179,7 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // Connect rebaseWatcher to watcher for post-commit rebase
   watcher.setRebaseWatcher(rebaseWatcher);
 
+
   // Connect terminalLog to watcher for terminal view logging
   watcher.setTerminalLogService(terminalLog);
 
@@ -295,7 +298,20 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   mcpServer.setActivityService(activity);
   mcpServer.setLockService(lock);
   mcpServer.setAgentInstanceService(agentInstance);
-  mcpServer.setDatabaseService(databaseService);
+  // Deliberately a narrowed façade rather than the service itself. Passing
+  // `databaseService` wholesale would keep `setSetting` and `setSessionLimits`
+  // reachable at runtime from the MCP tool layer — the type would forbid it,
+  // but a cast would not, and an agent that can write settings can raise its
+  // own concurrency cap or switch the kill switch back on. This makes the
+  // read-only boundary real rather than advisory.
+  mcpServer.setDatabaseService({
+    recordCommit: (hash, sessionId, message, timestamp, stats) =>
+      databaseService.recordCommit(hash, sessionId, message, timestamp, stats),
+    recordSessionEvent: (sessionId, type, details, commitHash) =>
+      databaseService.recordSessionEvent(sessionId, type as any, details, commitHash),
+    getSetting: (key, defaultValue) => databaseService.getSetting(key, defaultValue),
+    getSessionLimits: () => databaseService.getSessionLimits(),
+  });
   mcpServer.setMcpCallDb(databaseService);
   mcpServer.setDebugLogDep(debugLog);
   // v2.5 additions — expose workspace / config / project-group services to MCP
@@ -409,6 +425,36 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // Connect contract services to watcher for post-commit contract auto-checks
   watcher.setContractServices(contractDetection, contractGeneration);
 
+  // Single funnel for session lifecycle. Both the IPC layer and the MCP tool
+  // layer go through this so neither reimplements the compose step —
+  // createInstance() does not start the file watcher, and the delete paths
+  // each tore down a different subset of a session's background resources.
+  //
+  // Constructed HERE, immediately before the services object, because it
+  // composes several services created at different points above (watcher,
+  // rebaseWatcher, mcpServer's binder). Keep it last so adding a dependency
+  // does not mean moving it again.
+  const sessionOrchestrator = new SessionOrchestrator({
+    agentInstance,
+    watcher,
+    rebaseWatcher,
+    binder: mcpServer.sessionBinder,
+  });
+
+  // Give the MCP tool layer the same lifecycle funnel the IPC layer uses.
+  mcpServer.setMcpUrlProvider(() => mcpServer.getUrl());
+  mcpServer.setSessionOrchestrator({
+    startSession: (config) => sessionOrchestrator.startSession(config),
+    listSessions: () => sessionOrchestrator.listSessions(),
+    expandSessionAliases: (sessionId) => sessionOrchestrator.expandSessionAliases(sessionId),
+    teardownSession: (sessionId, opts) => sessionOrchestrator.teardownSession(sessionId, opts),
+    resolveSessionId: (id) => sessionOrchestrator.resolveSessionId(id),
+    closeSession: (sessionId, opts) => sessionOrchestrator.closeSession(sessionId, opts),
+    descendantSessionIds: (id) => sessionOrchestrator.descendantSessionIds(id),
+    closeSessions: (sel, opts) => sessionOrchestrator.closeSessions(sel, opts),
+    directChildSessionIds: (id) => sessionOrchestrator.directChildSessionIds(id),
+  });
+
   services = {
     session,
     git,
@@ -421,6 +467,7 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     activity,
     agentListener,
     agentInstance,
+    sessionOrchestrator,
     sessionRecovery,
     repoCleanup,
     contractDetection,
@@ -525,6 +572,7 @@ export { AutoUpdateService } from './AutoUpdateService';
 export { WorkerBridgeService } from './WorkerBridgeService';
 export { McpServerService } from './McpServerService';
 export { SeedDataExecutionService } from './SeedDataExecutionService';
+export { SessionOrchestrator } from './SessionOrchestrator';
 export { databaseService } from './DatabaseService';
 // Analysis services (Phase 1 + Phase 2 + Phase 3)
 export {

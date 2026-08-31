@@ -183,7 +183,15 @@ describe('MCP Tools', () => {
 
       const data = parseResult(result);
       expect(data.pushed).toBe(true);
-      expect(mockGitService.push).toHaveBeenCalledWith('sess_test_123', undefined);
+      // GitService.push gained a third `options` param ({ forceWithLease }).
+      // This assertion still expected the two-argument call and had been
+      // failing since before the MCP session-lifecycle epic began — a stale
+      // test, not a defect in the tool.
+      expect(mockGitService.push).toHaveBeenCalledWith(
+        'sess_test_123',
+        undefined,
+        undefined
+      );
     });
 
     it('should not push by default', async () => {
@@ -476,7 +484,14 @@ describe('MCP Tools', () => {
       const data = parseResult(result);
       expect(data.unlocked).toBe(true);
       expect(data.files).toBe('all');
-      expect(mockLockService.releaseFiles).toHaveBeenCalledWith('sess_test_123');
+      // KIT-MCP-H6: releaseFiles is now keyed by SOURCE REPO ROOT as well as
+      // session. Locks live in <repo>/.S9N_KIT_DevOpsAgent/locks.json, so a
+      // release without the repo would target a store nothing writes to —
+      // which is exactly the bug that made cross-session locking a no-op.
+      expect(mockLockService.releaseFiles).toHaveBeenCalledWith(
+        expect.any(String),
+        'sess_test_123'
+      );
     });
 
     it('should return error for unknown session', async () => {

@@ -589,6 +589,14 @@ export interface AgentInstanceConfig {
   taskDescription: string;
   branchName: string;
   baseBranch: string;
+  /**
+   * @deprecated Derived from `isolation` as of the MCP session-lifecycle epic.
+   * Still required and still written for one release: it is non-optional
+   * today, constructed by the wizard and by restartInstance, and
+   * `migrateUseWorktreeFlag` rewrites drifted rows on every launch. Removing
+   * it in the same change as the isolation work would have meant touching all
+   * of those at once.
+   */
   useWorktree: boolean;
   autoCommit: boolean;
   commitInterval: number;
@@ -602,6 +610,27 @@ export interface AgentInstanceConfig {
   customMcpEnabled?: boolean;
   // Optional: fire a GitHub Action when this session is merged (see MergeActionConfig).
   mergeAction?: MergeActionConfig;
+  /**
+   * Who created this session. Absent means a record written before the field
+   * existed, i.e. a human's — so it is treated as 'ui' everywhere, which keeps
+   * legacy sessions out of the agent concurrency budget and out of reach of an
+   * agent's close permissions.
+   *
+   * (A1 adds the rest of the lineage/isolation fields; this one lands with G1
+   * because the admission guard is its first consumer.)
+   */
+  createdBy?: 'ui' | 'mcp' | 'adopted';
+  /** The session that asked for this one, when an agent spawned it. */
+  parentSessionId?: string;
+  /**
+   * 'observer' sessions own NO worktree — they borrow `observedPath` and every
+   * write tool refuses for them. Absent means 'worktree' (a normal session).
+   */
+  isolation?: 'worktree' | 'observer';
+  /** Observer only: the directory being borrowed. Never a worktree it owns. */
+  observedPath?: string;
+  /** Observer only: the session whose worktree is borrowed, if any. */
+  observerOfSessionId?: string;
 }
 
 /**
@@ -639,6 +668,18 @@ export interface AgentInstance {
    * v2.6.59 — no recovery is possible for those without lineage data.
    */
   predecessorSessionIds?: string[];
+  /**
+   * How this session's worktree was obtained. 'failed' means worktree creation
+   * did not succeed and the session is running directly in the source repo —
+   * previously indistinguishable from a normal session.
+   */
+  worktreeStatus?: 'created' | 'reused' | 'legacy' | 'observer' | 'failed';
+  /**
+   * Non-fatal problems hit while provisioning the worktree (env symlink,
+   * pre-commit hook, KIT directory). Previously swallowed to console.warn and
+   * invisible to any headless caller.
+   */
+  worktreeWarnings?: string[];
   /**
    * Set by `detectStaleRebases` startup scan when the worktree's gitdir has a
    * `rebase-merge` or `rebase-apply` directory older than the stale threshold

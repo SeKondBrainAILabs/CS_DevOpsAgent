@@ -479,6 +479,9 @@ export const IPC = {
   MCP_INSTALL_CLAUDE_DESKTOP: 'mcp:install-claude-desktop',
   MCP_UNINSTALL_CLAUDE_DESKTOP: 'mcp:uninstall-claude-desktop',
   MCP_CHECK_CLAUDE_DESKTOP_CONFIG: 'mcp:check-claude-desktop-config',
+  MCP_GET_AGENT_SESSION_POLICY: 'mcp:get-agent-session-policy',
+  MCP_SET_AGENT_SESSION_POLICY: 'mcp:set-agent-session-policy',
+  MCP_GET_AGENT_SESSION_COUNT: 'mcp:get-agent-session-count',
   // Events (main → renderer)
   MCP_SERVER_STARTED: 'mcp:server-started',
   MCP_TOOL_CALLED: 'mcp:tool-called',
@@ -671,6 +674,9 @@ export const REQUEST_CHANNELS = [
   // MCP server channels
   IPC.MCP_SERVER_STATUS,
   IPC.MCP_GET_CALL_LOG,
+  IPC.MCP_GET_AGENT_SESSION_POLICY,
+  IPC.MCP_SET_AGENT_SESSION_POLICY,
+  IPC.MCP_GET_AGENT_SESSION_COUNT,
   // Seed data channels
   IPC.SEED_GENERATE_FEATURE,
   IPC.SEED_GENERATE_ALL,
