@@ -399,17 +399,12 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   // Create and manage agent instances from Kanvas dashboard
   // ==========================================================================
   ipcMain.handle(IPC.INSTANCE_CREATE, async (_, config) => {
-    const result = await services.agentInstance.createInstance(config);
-
-    // Auto-start file watcher for the new session (use worktree if available)
-    if (result.success && result.data?.sessionId) {
-      const watchPath = result.data.worktreePath || config.repoPath;
-      services.watcher.startWithPath(result.data.sessionId, watchPath).catch((err) => {
-        console.warn('[IPC] Failed to start watcher for new session:', err);
-      });
-    }
-
-    return result;
+    // Delegates to SessionOrchestrator, which owns the compose step
+    // (createInstance + start the file watcher). createInstance alone does not
+    // start a watcher, so every caller has to remember to — this used to be
+    // inline here, and the MCP tool layer now shares the same path instead of
+    // duplicating it.
+    return services.sessionOrchestrator.startSession(config);
   });
 
   ipcMain.handle(IPC.INSTANCE_VALIDATE_REPO, async (_, path: string) => {
@@ -483,6 +478,21 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     agentType?: string;
     task?: string;
   }, commitChanges?: boolean) => {
+    // SECOND COMPOSE SITE — still inline, deliberately.
+    //
+    // INSTANCE_CREATE now goes through SessionOrchestrator.startSession, but
+    // restart also composes a session (stop old watcher -> restartInstance ->
+    // start new watcher) and is NOT yet routed through the orchestrator. It is
+    // moved in M5 (kit_restart_session), which has to solve a problem create
+    // does not: restart must tear down WITHOUT unbinding MCP, because H2 makes
+    // teardown unregister every predecessor alias and restart re-aliases them
+    // immediately afterwards (AgentInstanceService:3063). Unbinding here would
+    // break any in-flight kit_commit in that window, permanently if the
+    // create half then fails.
+    //
+    // Until M5 lands, this is the only place other than the orchestrator and
+    // the startup rehydration loop that starts a watcher.
+
     // Stop old watcher
     await services.watcher.stop(sessionId).catch(() => {});
 

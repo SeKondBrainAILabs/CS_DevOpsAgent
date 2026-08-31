@@ -33,6 +33,7 @@ import { AutoUpdateService } from './AutoUpdateService';
 import { WorkerBridgeService } from './WorkerBridgeService';
 import { McpServerService } from './McpServerService';
 import { SeedDataExecutionService } from './SeedDataExecutionService';
+import { SessionOrchestrator } from './SessionOrchestrator';
 import { databaseService } from './DatabaseService';
 import {
   initializeAnalysisServices,
@@ -58,6 +59,7 @@ export interface Services {
   activity: ActivityService;
   agentListener: AgentListenerService;
   agentInstance: AgentInstanceService;
+  sessionOrchestrator: SessionOrchestrator;
   sessionRecovery: SessionRecoveryService;
   repoCleanup: RepoCleanupService;
   contractDetection: ContractDetectionService;
@@ -144,6 +146,12 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // Initialize Agent Instance service
   // For creating new agent instances from Kanvas dashboard
   const agentInstance = new AgentInstanceService();
+
+  // Single funnel for session lifecycle. Both the IPC layer and the MCP tool
+  // layer go through this so neither reimplements the compose step —
+  // createInstance() does not start the file watcher, and three separate IPC
+  // sites did it inline. See SessionOrchestrator's header.
+  const sessionOrchestrator = new SessionOrchestrator({ agentInstance, watcher });
 
   // Initialize Session Recovery service
   // For recovering orphaned sessions from repository .kanvas directories
@@ -421,6 +429,7 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     activity,
     agentListener,
     agentInstance,
+    sessionOrchestrator,
     sessionRecovery,
     repoCleanup,
     contractDetection,
@@ -525,6 +534,7 @@ export { AutoUpdateService } from './AutoUpdateService';
 export { WorkerBridgeService } from './WorkerBridgeService';
 export { McpServerService } from './McpServerService';
 export { SeedDataExecutionService } from './SeedDataExecutionService';
+export { SessionOrchestrator } from './SessionOrchestrator';
 export { databaseService } from './DatabaseService';
 // Analysis services (Phase 1 + Phase 2 + Phase 3)
 export {
