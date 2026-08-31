@@ -589,6 +589,14 @@ export interface AgentInstanceConfig {
   taskDescription: string;
   branchName: string;
   baseBranch: string;
+  /**
+   * @deprecated Derived from `isolation` as of the MCP session-lifecycle epic.
+   * Still required and still written for one release: it is non-optional
+   * today, constructed by the wizard and by restartInstance, and
+   * `migrateUseWorktreeFlag` rewrites drifted rows on every launch. Removing
+   * it in the same change as the isolation work would have meant touching all
+   * of those at once.
+   */
   useWorktree: boolean;
   autoCommit: boolean;
   commitInterval: number;
@@ -651,6 +659,18 @@ export interface AgentInstance {
    * v2.6.59 — no recovery is possible for those without lineage data.
    */
   predecessorSessionIds?: string[];
+  /**
+   * How this session's worktree was obtained. 'failed' means worktree creation
+   * did not succeed and the session is running directly in the source repo —
+   * previously indistinguishable from a normal session.
+   */
+  worktreeStatus?: 'created' | 'reused' | 'legacy' | 'observer' | 'failed';
+  /**
+   * Non-fatal problems hit while provisioning the worktree (env symlink,
+   * pre-commit hook, KIT directory). Previously swallowed to console.warn and
+   * invisible to any headless caller.
+   */
+  worktreeWarnings?: string[];
   /**
    * Set by `detectStaleRebases` startup scan when the worktree's gitdir has a
    * `rebase-merge` or `rebase-apply` directory older than the stale threshold

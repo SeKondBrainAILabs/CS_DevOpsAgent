@@ -79,6 +79,10 @@ import { MCP_CONFIG_FILE, CONTRACTS_PATHS } from '../../shared/agent-protocol';
 import { getWorktreeBaseDir } from '../../shared/worktree-path';
 import { KeyedMutex } from '../../shared/async-mutex';
 import { reserveSession } from './SessionReservation';
+import {
+  evaluateWorktreeOutcome,
+  type WorktreeStatus,
+} from '../../shared/worktree-outcome';
 
 /**
  * Compute the worktree base dir for a repo. Worktrees live OUTSIDE the source
@@ -640,6 +644,14 @@ ${DEVOPS_KIT_DIR}/
         sessionId,
       };
 
+      // Record how the worktree was obtained. 'failed' now survives on the
+      // instance instead of being invisible, so the renderer can flag a
+      // session that is silently running in the source repo.
+      instance.worktreeStatus = worktreeOutcome.status;
+      if (worktreeOutcome.warnings.length > 0) {
+        instance.worktreeWarnings = worktreeOutcome.warnings;
+      }
+
       // The slot was already claimed under the lock; this rewrites that
       // placeholder with the fully-populated instance (instructions, prompt).
       this.instances.set(id, instance);
@@ -669,7 +681,23 @@ ${DEVOPS_KIT_DIR}/
       // fan-out latency this epic exists to remove — worktree creation is the
       // slow part, so eight sessions in one repo would queue behind each other
       // for seconds. Left parallel unless a real failure is observed.
-      const worktreePath = await this.createWorktreeIfNeeded(config);
+      const worktreeOutcome = await this.createWorktreeIfNeeded(config);
+      const worktreePath = worktreeOutcome.path;
+
+      // An agent cannot see a silent fallback happen, and N agents sharing the
+      // user's real checkout overwrite each other. Refuse loudly instead — and
+      // release the slot we claimed under the admission lock, or the cap would
+      // leak by one on every failure.
+      const verdict = evaluateWorktreeOutcome(
+        worktreeOutcome.status,
+        config.createdBy,
+        worktreeOutcome.error
+      );
+      if (verdict.fatal) {
+        this.instances.delete(id);
+        this.saveInstances();
+        return { success: false, error: verdict.error };
+      }
 
       // Update instance with worktree path
       instance.worktreePath = worktreePath;
@@ -855,21 +883,45 @@ ${DEVOPS_KIT_DIR}/
    * we honor it (backward compat). Only newly-created worktrees go to the
    * new location.
    */
-  private async createWorktreeIfNeeded(config: AgentInstanceConfig): Promise<string> {
+  /**
+   * Create (or adopt) the session's worktree.
+   *
+   * Split into a FATAL half and a BEST-EFFORT half. Previously both lived in
+   * one try/catch, so a failure provisioning the worktree — a missing `.env`
+   * to symlink, an unreadable hook — was indistinguishable from `git worktree
+   * add` itself failing, and both silently returned the SOURCE REPO path.
+   *
+   * That mattered in both directions. An agent fan-out could land twenty
+   * sessions in the user's real checkout without anyone noticing; and a
+   * caller that hard-failed on the old return value would have destroyed a
+   * perfectly good worktree because a symlink threw.
+   *
+   * Note `installPreCommitHookIntoWorktree` already DOCUMENTED itself as
+   * "best-effort — failure here doesn't block worktree creation", but sat
+   * inside the try and so did exactly that. It is genuinely best-effort now.
+   */
+  private async createWorktreeIfNeeded(
+    config: AgentInstanceConfig
+  ): Promise<{ path: string; status: WorktreeStatus; warnings: string[]; error?: string }> {
+    const warnings: string[] = [];
+    let worktreeDir: string;
+    let status: WorktreeStatus;
+
+    // ── FATAL half: getting a worktree at all ────────────────────────────
     try {
       const legacyDir = join(config.repoPath, 'local_deploy', config.branchName);
       const newWorktreeBaseDir = getWorktreeBaseDir(config.repoPath);
-      const worktreeDir = join(newWorktreeBaseDir, config.branchName);
+      worktreeDir = join(newWorktreeBaseDir, config.branchName);
 
       // Honor an existing legacy worktree (created before v2.6.54) rather than
       // making a duplicate. Same for the new path.
       if (existsSync(legacyDir)) {
         console.log(`[AgentInstanceService] Worktree already exists at legacy path ${legacyDir} — honoring it`);
-        return legacyDir;
+        return { path: legacyDir, status: 'legacy', warnings };
       }
       if (existsSync(worktreeDir)) {
         console.log(`[AgentInstanceService] Worktree already exists at ${worktreeDir}`);
-        return worktreeDir;
+        return { path: worktreeDir, status: 'reused', warnings };
       }
 
       // Ensure the sibling base dir exists (e.g. `.../KIT-DevOps-<repo_name>/`).
@@ -904,12 +956,35 @@ ${DEVOPS_KIT_DIR}/
         await execaCmd('git', ['checkout', '-B', config.branchName, baseBranch], { cwd: worktreeDir });
       }
       console.log(`[AgentInstanceService] Created worktree at ${worktreeDir} for branch ${config.branchName}`);
+      status = 'created';
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.warn(`[AgentInstanceService] Could not create worktree: ${detail}`);
+      // The caller decides what this means — fatal for an agent-created
+      // session, degrade-and-continue for a human's. See evaluateWorktreeOutcome.
+      return { path: config.repoPath, status: 'failed', warnings, error: detail };
+    }
 
-      // Initialize .S9N_KIT_DevOpsAgent in the worktree
-      await this.initializeKanvasDirectory(worktreeDir);
+    // ── BEST-EFFORT half: provisioning what is inside it ─────────────────
+    // A failure here leaves a perfectly usable worktree. Each step is caught
+    // separately and surfaced as a warning so a headless caller can see it —
+    // these used to be swallowed to console.warn and were invisible to MCP.
+    const provision = async (label: string, run: () => Promise<unknown>) => {
+      try {
+        await run();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        console.warn(`[AgentInstanceService] ${label} failed for ${worktreeDir}: ${detail}`);
+        warnings.push(`${label}: ${detail}`);
+      }
+    };
 
-      // C6: link the main repo's .env into the worktree so the agent inherits env vars.
-      await this.linkEnvIntoWorktree(config.repoPath, worktreeDir);
+    await provision('initialize KIT directory', () =>
+      this.initializeKanvasDirectory(worktreeDir)
+    );
+    await provision('link .env into worktree', () =>
+      this.linkEnvIntoWorktree(config.repoPath, worktreeDir)
+    );
 
       // Propagate the source repo's pre-commit hook to the worktree's gitdir so
       // every KIT-initiated commit fires the project's existing hygiene. Worktree
@@ -920,14 +995,11 @@ ${DEVOPS_KIT_DIR}/
       // commits ran `git commit` in a worktree gitdir with no pre-commit hook
       // physically present, so the project's parser/format/EOF checks silently
       // didn't run. Best-effort — failure here doesn't block worktree creation.
-      await this.installPreCommitHookIntoWorktree(config.repoPath, worktreeDir);
+    await provision('install pre-commit hook', () =>
+      this.installPreCommitHookIntoWorktree(config.repoPath, worktreeDir)
+    );
 
-      return worktreeDir;
-    } catch (error) {
-      console.warn(`[AgentInstanceService] Could not create worktree: ${error}`);
-      // Fall back to using main repo path
-      return config.repoPath;
-    }
+    return { path: worktreeDir, status, warnings };
   }
 
   /**
