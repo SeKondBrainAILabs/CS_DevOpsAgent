@@ -602,6 +602,18 @@ export interface AgentInstanceConfig {
   customMcpEnabled?: boolean;
   // Optional: fire a GitHub Action when this session is merged (see MergeActionConfig).
   mergeAction?: MergeActionConfig;
+  /**
+   * Who created this session. Absent means a record written before the field
+   * existed, i.e. a human's — so it is treated as 'ui' everywhere, which keeps
+   * legacy sessions out of the agent concurrency budget and out of reach of an
+   * agent's close permissions.
+   *
+   * (A1 adds the rest of the lineage/isolation fields; this one lands with G1
+   * because the admission guard is its first consumer.)
+   */
+  createdBy?: 'ui' | 'mcp' | 'adopted';
+  /** The session that asked for this one, when an agent spawned it. */
+  parentSessionId?: string;
 }
 
 /**

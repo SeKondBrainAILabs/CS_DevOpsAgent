@@ -70,7 +70,6 @@ function generateAgentPrompt(agentType: AgentType, vars: InstructionVars): strin
   return undefined;
 }
 import { generateSecondaryBranchName } from '../../shared/types';
-import { evaluateSingleSessionGuard } from '../../shared/single-session-guard';
 import { isActiveInstance, isRunningInstance } from '../../shared/instance-status';
 import { planEnvSymlink } from '../../shared/env-symlink-plan';
 import { symlink, lstat } from 'fs/promises';
@@ -78,6 +77,8 @@ import type { TerminalLogService } from './TerminalLogService';
 import type { ConfigService } from './ConfigService';
 import { MCP_CONFIG_FILE, CONTRACTS_PATHS } from '../../shared/agent-protocol';
 import { getWorktreeBaseDir } from '../../shared/worktree-path';
+import { KeyedMutex } from '../../shared/async-mutex';
+import { reserveSession } from './SessionReservation';
 
 /**
  * Compute the worktree base dir for a repo. Worktrees live OUTSIDE the source
@@ -94,6 +95,16 @@ import { getWorktreeBaseDir } from '../../shared/worktree-path';
  * working unchanged.
  */
 export { getWorktreeBaseDir };
+
+/**
+ * Guards the check-and-reserve section in `createInstance`
+ * (ADMISSION_LOCK_KEY), so two concurrent creates cannot both pass the same
+ * guard and both claim a slot.
+ *
+ * Only that section is locked. Worktree creation is deliberately left parallel
+ * — see the note at its call site.
+ */
+const sessionMutex = new KeyedMutex();
 
 interface SessionState {
   sessionId: string;
@@ -531,7 +542,17 @@ ${DEVOPS_KIT_DIR}/
   /**
    * Create a new agent instance
    */
-  async createInstance(config: AgentInstanceConfig): Promise<IpcResult<AgentInstance>> {
+  async createInstance(
+    config: AgentInstanceConfig,
+    /**
+     * Internal only — never persisted. `isRestart` exempts the call from the
+     * concurrency caps and the kill switch, because a restart re-creates an
+     * existing session rather than adding a new one. It stays subject to
+     * branch-in-use and single-session mode, which are about correctness and
+     * the checkout rather than capacity.
+     */
+    opts: { isRestart?: boolean } = {}
+  ): Promise<IpcResult<AgentInstance>> {
     try {
       // Normalize baseBranch — strip any remote-tracking prefix so git ops never
       // double up (e.g. 'origin/main' → 'main').
@@ -557,37 +578,39 @@ ${DEVOPS_KIT_DIR}/
         }
       }
 
-      // Check if branch name is already in use by an active session
-      const existingSession = Array.from(this.instances.values()).find(
-        inst => inst.config.branchName === config.branchName &&
-                inst.config.repoPath === config.repoPath &&
-                inst.status !== 'completed' &&
-                inst.status !== 'closed'
-      );
-      if (existingSession) {
-        return {
-          success: false,
-          error: {
-            code: 'BRANCH_IN_USE',
-            message: `Branch "${config.branchName}" is already in use by an active session. Please use a different branch name.`,
+      // Admission + slot reservation, atomically.
+      //
+      // These used to be three separate steps with awaits between them: the
+      // branch check read the map here, the single-session guard read it
+      // again, and `instances.set` claimed the slot forty lines later. Both
+      // awaits above (validateRepository, initializeKanvasDirectory) yield the
+      // event loop, so two concurrent creates passed every guard and both
+      // created. That was survivable when a human clicked a button; MCP
+      // fan-out makes concurrent creation the normal case.
+      //
+      // Everything slow stays outside the lock — worktree creation, agent
+      // environment, multi-repo setup all happen below.
+      const reservation = await reserveSession(
+        {
+          mutex: sessionMutex,
+          listInstances: () => Array.from(this.instances.values()),
+          reserve: (inst) => {
+            this.instances.set(inst.id, inst);
+            this.saveInstances();
           },
-        };
+          getWorktreeMode: (repoPath) =>
+            this.configService?.getRepoWorktreeMode(repoPath) ?? 'worktree',
+          getLimits: () => databaseService.getSessionLimits(),
+        },
+        config,
+        { isRestart: opts.isRestart }
+      );
+
+      if (!reservation.success || !reservation.data) {
+        return { success: false, error: reservation.error };
       }
 
-      // Single-Session Mode guard (Epic C / C5):
-      // when this repo has worktrees disabled, only ONE active session is allowed.
-      if (this.configService) {
-        const mode = this.configService.getRepoWorktreeMode(config.repoPath);
-        const activeCount = this.getActiveSessionsForRepo(config.repoPath).length;
-        const guard = evaluateSingleSessionGuard(mode, activeCount);
-        if (guard.blocked && guard.error) {
-          return { success: false, error: guard.error };
-        }
-      }
-
-      // Generate unique ID
-      const id = `inst_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const { id, sessionId } = reservation.data;
 
       // Generate instructions
       const instructionVars: InstructionVars = {
@@ -617,7 +640,8 @@ ${DEVOPS_KIT_DIR}/
         sessionId,
       };
 
-      // Save instance
+      // The slot was already claimed under the lock; this rewrites that
+      // placeholder with the fully-populated instance (instructions, prompt).
       this.instances.set(id, instance);
       this.saveInstances();
 
@@ -637,6 +661,14 @@ ${DEVOPS_KIT_DIR}/
       // switched the user's source-repo branch out from under any work they
       // had open (and could leave them stuck on the session branch if the
       // return checkout failed).
+      // NOT serialised, deliberately. An earlier draft of this story held a
+      // per-repo lock here on the theory that concurrent `git worktree add`
+      // contends on `.git/config.lock`. Measured against git 2.50.1: 40
+      // concurrent adds on one repo all succeeded, zero lock errors. The
+      // hazard does not reproduce, and serialising here would cost exactly the
+      // fan-out latency this epic exists to remove — worktree creation is the
+      // slow part, so eight sessions in one repo would queue behind each other
+      // for seconds. Left parallel unless a real failure is observed.
       const worktreePath = await this.createWorktreeIfNeeded(config);
 
       // Update instance with worktree path
@@ -2978,7 +3010,7 @@ ${DEVOPS_KIT_DIR}/
 
         // Create new instance with the config
         this.terminalLogService?.info(`Creating new session...`, sessionId, 'Restart');
-        const newInstance = await this.createInstance(config);
+        const newInstance = await this.createInstance(config, { isRestart: true });
 
         if (newInstance.success && newInstance.data) {
           // Record lineage so backfillMcpCallsByLineage can repatriate any
@@ -3073,7 +3105,7 @@ ${DEVOPS_KIT_DIR}/
 
       // Create new instance with same config (this generates new session ID)
       this.terminalLogService?.info(`Creating new session...`, sessionId, 'Restart');
-      const newInstance = await this.createInstance(config);
+      const newInstance = await this.createInstance(config, { isRestart: true });
 
       if (newInstance.success && newInstance.data) {
         // Carry the predecessor chain forward (inherited from targetInstance)
