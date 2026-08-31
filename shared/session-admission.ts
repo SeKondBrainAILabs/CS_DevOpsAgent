@@ -51,6 +51,75 @@ export const DEFAULT_SESSION_LIMITS: SessionLimits = {
   maxConcurrentPerRepo: 4,
 };
 
+/**
+ * Keys in the `settings` table.
+ *
+ * These live in the database rather than ConfigService because they are global
+ * machine-protection limits, not per-repo workspace preferences — and because
+ * `getSetting` is already exposed to the MCP layer, so tools can read them
+ * without new plumbing. `setSetting` deliberately is NOT exposed there: an
+ * agent must not be able to raise its own cap.
+ */
+export const SESSION_LIMIT_SETTING_KEYS = {
+  enabled: 'mcp.session_create.enabled',
+  maxConcurrentGlobal: 'mcp.session_create.max_concurrent_global',
+  maxConcurrentPerRepo: 'mcp.session_create.max_concurrent_per_repo',
+  allowRemoteBranchDelete: 'mcp.session_close.allow_remote_branch_delete',
+} as const;
+
+type SettingReader = (key: string, defaultValue?: unknown) => unknown;
+
+/**
+ * Coerce a persisted cap, falling back to the default for anything that is not
+ * a usable positive integer.
+ *
+ * The conservative direction matters: a corrupt or zero value must not be read
+ * as "no limit". Settings round-trip through JSON and are user-editable, so
+ * NaN, 0, negatives and non-numbers are all reachable.
+ */
+function readCap(raw: unknown, fallback: number): number {
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : fallback;
+}
+
+/** Settings round-trip through JSON, so a boolean can arrive as a string. */
+function readFlag(raw: unknown, fallback: boolean): boolean {
+  if (typeof raw === 'boolean') return raw;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  return fallback;
+}
+
+/**
+ * Build the limits from persisted settings, defaulting per key.
+ *
+ * Per-key defaulting is what makes the upgrade path work: an install that has
+ * only ever toggled the switch has no cap keys at all, and those must come back
+ * as the documented defaults rather than undefined.
+ */
+export function readSessionLimits(get: SettingReader): SessionLimits {
+  return {
+    enabled: readFlag(
+      get(SESSION_LIMIT_SETTING_KEYS.enabled, DEFAULT_SESSION_LIMITS.enabled),
+      DEFAULT_SESSION_LIMITS.enabled
+    ),
+    maxConcurrentGlobal: readCap(
+      get(
+        SESSION_LIMIT_SETTING_KEYS.maxConcurrentGlobal,
+        DEFAULT_SESSION_LIMITS.maxConcurrentGlobal
+      ),
+      DEFAULT_SESSION_LIMITS.maxConcurrentGlobal
+    ),
+    maxConcurrentPerRepo: readCap(
+      get(
+        SESSION_LIMIT_SETTING_KEYS.maxConcurrentPerRepo,
+        DEFAULT_SESSION_LIMITS.maxConcurrentPerRepo
+      ),
+      DEFAULT_SESSION_LIMITS.maxConcurrentPerRepo
+    ),
+  };
+}
+
 /** Enough about a live session for an agent to decide which to close. */
 export interface ActiveSessionSummary {
   session_id: string;

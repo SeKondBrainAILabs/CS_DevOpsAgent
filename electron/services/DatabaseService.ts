@@ -13,6 +13,11 @@ import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { BaseService } from './BaseService';
 import type { ActivityLogEntry, LogType, TerminalLogEntry, TerminalLogLevel, IpcResult } from '../../shared/types';
+import {
+  readSessionLimits,
+  SESSION_LIMIT_SETTING_KEYS,
+  type SessionLimits,
+} from '../../shared/session-admission';
 
 // Database file location
 const getDbPath = (): string => {
@@ -524,6 +529,44 @@ export class DatabaseService extends BaseService {
     `);
 
     stmt.run(key, JSON.stringify(value));
+  }
+
+  /**
+   * The agent-session policy: kill switch plus the two concurrency caps.
+   *
+   * Read through `readSessionLimits`, which defaults per key — an install that
+   * has only ever toggled the switch has no cap keys stored at all, and those
+   * must come back as the documented defaults rather than undefined.
+   */
+  getSessionLimits(): SessionLimits {
+    return readSessionLimits((key, dflt) => this.getSetting(key, dflt));
+  }
+
+  /**
+   * Update the agent-session policy. Only supplied fields change.
+   *
+   * Reachable from IPC (the Settings and MCP tabs) but deliberately NOT from
+   * the MCP tool layer — an agent must not be able to raise its own cap or
+   * switch its own kill switch back on. See McpServiceDeps.databaseService,
+   * which exposes getSessionLimits and no setter.
+   */
+  setSessionLimits(patch: Partial<SessionLimits>): SessionLimits {
+    if (patch.enabled !== undefined) {
+      this.setSetting(SESSION_LIMIT_SETTING_KEYS.enabled, patch.enabled);
+    }
+    if (patch.maxConcurrentGlobal !== undefined) {
+      this.setSetting(
+        SESSION_LIMIT_SETTING_KEYS.maxConcurrentGlobal,
+        patch.maxConcurrentGlobal
+      );
+    }
+    if (patch.maxConcurrentPerRepo !== undefined) {
+      this.setSetting(
+        SESSION_LIMIT_SETTING_KEYS.maxConcurrentPerRepo,
+        patch.maxConcurrentPerRepo
+      );
+    }
+    return this.getSessionLimits();
   }
 
   /**

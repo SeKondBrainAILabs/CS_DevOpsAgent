@@ -298,7 +298,20 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   mcpServer.setActivityService(activity);
   mcpServer.setLockService(lock);
   mcpServer.setAgentInstanceService(agentInstance);
-  mcpServer.setDatabaseService(databaseService);
+  // Deliberately a narrowed façade rather than the service itself. Passing
+  // `databaseService` wholesale would keep `setSetting` and `setSessionLimits`
+  // reachable at runtime from the MCP tool layer — the type would forbid it,
+  // but a cast would not, and an agent that can write settings can raise its
+  // own concurrency cap or switch the kill switch back on. This makes the
+  // read-only boundary real rather than advisory.
+  mcpServer.setDatabaseService({
+    recordCommit: (sessionId, hash, message, filesChanged) =>
+      databaseService.recordCommit(sessionId, hash, message, filesChanged),
+    recordSessionEvent: (sessionId, type, data) =>
+      databaseService.recordSessionEvent(sessionId, type as any, data),
+    getSetting: (key, defaultValue) => databaseService.getSetting(key, defaultValue),
+    getSessionLimits: () => databaseService.getSessionLimits(),
+  });
   mcpServer.setMcpCallDb(databaseService);
   mcpServer.setDebugLogDep(debugLog);
   // v2.5 additions — expose workspace / config / project-group services to MCP

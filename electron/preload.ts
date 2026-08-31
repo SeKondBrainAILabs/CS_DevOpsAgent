@@ -2309,6 +2309,27 @@ const api = {
     status: (): Promise<IpcResult<McpServerStatus>> =>
       ipcRenderer.invoke(IPC.MCP_SERVER_STATUS),
 
+    getAgentSessionPolicy: (): Promise<IpcResult<{
+      enabled: boolean;
+      maxConcurrentGlobal: number;
+      maxConcurrentPerRepo: number;
+    }>> => ipcRenderer.invoke(IPC.MCP_GET_AGENT_SESSION_POLICY),
+
+    setAgentSessionPolicy: (patch: {
+      enabled?: boolean;
+      maxConcurrentGlobal?: number;
+      maxConcurrentPerRepo?: number;
+    }): Promise<IpcResult<{
+      enabled: boolean;
+      maxConcurrentGlobal: number;
+      maxConcurrentPerRepo: number;
+    }>> => ipcRenderer.invoke(IPC.MCP_SET_AGENT_SESSION_POLICY, patch),
+
+    getAgentSessionCount: (): Promise<IpcResult<{
+      active: number;
+      limits: { enabled: boolean; maxConcurrentGlobal: number; maxConcurrentPerRepo: number };
+    }>> => ipcRenderer.invoke(IPC.MCP_GET_AGENT_SESSION_COUNT),
+
     getCallLog: (limit?: number): Promise<IpcResult<Array<{
       timestamp: string;
       toolName: string;

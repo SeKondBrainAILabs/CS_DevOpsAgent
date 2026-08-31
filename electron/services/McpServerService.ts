@@ -110,6 +110,17 @@ export interface McpServiceDeps {
     recordCommit: (sessionId: string, hash: string, message: string, filesChanged: number) => void;
     recordSessionEvent: (sessionId: string, type: string, data: Record<string, unknown>) => void;
     getSetting: (key: string, defaultValue?: any) => any;
+    /**
+     * Read-only. There is deliberately NO setSetting / setSessionLimits here:
+     * exposing a writer would let an agent raise its own concurrency cap or
+     * re-enable the kill switch the user just turned off. Writes go through
+     * IPC from the UI only.
+     */
+    getSessionLimits?: () => {
+      enabled: boolean;
+      maxConcurrentGlobal: number;
+      maxConcurrentPerRepo: number;
+    };
   };
   contractDetectionService?: {
     analyzeCommit: (worktreePath: string, commitHash: string) => Promise<any>;

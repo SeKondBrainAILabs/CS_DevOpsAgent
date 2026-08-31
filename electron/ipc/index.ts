@@ -1580,6 +1580,36 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
       : { success: false, error: { code: 'MCP_UNINSTALL_FAILED', message: result.error } };
   });
 
+  // Agent-session policy: kill switch + concurrency caps. Writes live here and
+  // deliberately NOT on the MCP tool surface — an agent must not be able to
+  // raise its own cap or re-enable a switch the user just turned off.
+  ipcMain.handle(IPC.MCP_GET_AGENT_SESSION_POLICY, () => {
+    return { success: true, data: databaseService.getSessionLimits() };
+  });
+
+  ipcMain.handle(IPC.MCP_SET_AGENT_SESSION_POLICY, (_, patch: {
+    enabled?: boolean;
+    maxConcurrentGlobal?: number;
+    maxConcurrentPerRepo?: number;
+  }) => {
+    return { success: true, data: databaseService.setSessionLimits(patch ?? {}) };
+  });
+
+  ipcMain.handle(IPC.MCP_GET_AGENT_SESSION_COUNT, () => {
+    const listed = services.agentInstance.listInstances();
+    const instances = listed.success && listed.data ? listed.data : [];
+    const active = instances.filter(
+      (i: any) => i.config?.createdBy === 'mcp' && isActiveInstance(i)
+    );
+    return {
+      success: true,
+      data: {
+        active: active.length,
+        limits: databaseService.getSessionLimits(),
+      },
+    };
+  });
+
   ipcMain.handle(IPC.MCP_CHECK_CLAUDE_DESKTOP_CONFIG, async () => {
     const data = await services.mcpServer.checkMcpConfig('claude-desktop');
     return { success: true, data };

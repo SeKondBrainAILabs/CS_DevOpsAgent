@@ -15,11 +15,15 @@
  */
 
 import { describe, it, expect } from '@jest/globals';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import {
   evaluateSessionAdmission,
   SESSION_LIMIT_ERROR_CODE,
   AGENT_SESSION_CREATION_DISABLED_CODE,
   DEFAULT_SESSION_LIMITS,
+  SESSION_LIMIT_SETTING_KEYS,
+  readSessionLimits,
   type SessionAdmissionInput,
 } from '../../../shared/session-admission';
 import { SINGLE_SESSION_MODE_ERROR_CODE } from '../../../shared/single-session-guard';
@@ -239,5 +243,112 @@ describe('rule ordering', () => {
     expect(evaluateSessionAdmission(capsAndSingle).error?.code).toBe(
       SESSION_LIMIT_ERROR_CODE
     );
+  });
+});
+
+// ─── Settings plumbing (KIT-MCP-G2) ──────────────────────────────────────────
+describe('readSessionLimits', () => {
+  const from = (store: Record<string, unknown>) =>
+    readSessionLimits((key: string, dflt?: unknown) =>
+      key in store ? store[key] : dflt
+    );
+
+  it('returns the documented defaults on a fresh install', () => {
+    // Nothing persisted yet — every key falls through to its default.
+    expect(from({})).toEqual(DEFAULT_SESSION_LIMITS);
+  });
+
+  it('reads persisted values', () => {
+    expect(
+      from({
+        [SESSION_LIMIT_SETTING_KEYS.enabled]: false,
+        [SESSION_LIMIT_SETTING_KEYS.maxConcurrentGlobal]: 3,
+        [SESSION_LIMIT_SETTING_KEYS.maxConcurrentPerRepo]: 2,
+      })
+    ).toEqual({ enabled: false, maxConcurrentGlobal: 3, maxConcurrentPerRepo: 2 });
+  });
+
+  it('falls back per key — an upgrade with only some keys set still works', () => {
+    // The realistic upgrade path: the switch was toggled once, the caps never
+    // touched. The missing caps must not come back as undefined.
+    const limits = from({ [SESSION_LIMIT_SETTING_KEYS.enabled]: false });
+    expect(limits.enabled).toBe(false);
+    expect(limits.maxConcurrentGlobal).toBe(8);
+    expect(limits.maxConcurrentPerRepo).toBe(4);
+  });
+
+  it('coerces a stringified boolean, since settings round-trip through JSON', () => {
+    expect(from({ [SESSION_LIMIT_SETTING_KEYS.enabled]: 'false' }).enabled).toBe(false);
+    expect(from({ [SESSION_LIMIT_SETTING_KEYS.enabled]: 'true' }).enabled).toBe(true);
+  });
+
+  it('ignores a corrupt cap rather than admitting an unbounded number', () => {
+    // A NaN or negative cap must not become "no limit". Falling back to the
+    // default is the conservative direction.
+    for (const bad of [NaN, -1, 0, 'lots', null]) {
+      const limits = from({ [SESSION_LIMIT_SETTING_KEYS.maxConcurrentGlobal]: bad });
+      expect(limits.maxConcurrentGlobal).toBe(8);
+    }
+  });
+
+  it('accepts a legitimately large cap', () => {
+    expect(
+      from({ [SESSION_LIMIT_SETTING_KEYS.maxConcurrentGlobal]: 64 }).maxConcurrentGlobal
+    ).toBe(64);
+  });
+
+  it('exposes the exact setting keys the spec names', () => {
+    expect(SESSION_LIMIT_SETTING_KEYS).toEqual({
+      enabled: 'mcp.session_create.enabled',
+      maxConcurrentGlobal: 'mcp.session_create.max_concurrent_global',
+      maxConcurrentPerRepo: 'mcp.session_create.max_concurrent_per_repo',
+      allowRemoteBranchDelete: 'mcp.session_close.allow_remote_branch_delete',
+    });
+  });
+});
+
+// ─── The MCP write boundary (KIT-MCP-G2) ─────────────────────────────────────
+describe('agents cannot write the session policy', () => {
+  const toolsSource = readFileSync(
+    join(__dirname, '../../../electron/services/mcp/tools.ts'),
+    'utf-8'
+  );
+  const wiringSource = readFileSync(
+    join(__dirname, '../../../electron/services/index.ts'),
+    'utf-8'
+  );
+
+  it('tools.ts never calls a settings writer', () => {
+    // The whole guardrail is worthless if an agent can raise its own cap.
+    expect(toolsSource).not.toMatch(/setSetting\s*\(/);
+    expect(toolsSource).not.toMatch(/setSessionLimits\s*\(/);
+    expect(toolsSource).not.toMatch(/deleteSetting\s*\(/);
+  });
+
+  it('no MCP tool takes a settings key as an input', () => {
+    // A tool that accepted an arbitrary key could reach the policy through a
+    // legitimate-looking parameter.
+    for (const key of Object.values(SESSION_LIMIT_SETTING_KEYS)) {
+      expect(toolsSource).not.toContain(key);
+    }
+  });
+
+  it('the MCP layer is handed a narrowed façade, not the database service', () => {
+    // Passing `databaseService` wholesale would leave setSetting reachable at
+    // runtime via a cast — the type would forbid it, a cast would not. The
+    // façade makes the read-only boundary real rather than advisory.
+    expect(wiringSource).not.toMatch(/setDatabaseService\(databaseService\)/);
+    expect(wiringSource).toMatch(/setDatabaseService\(\{/);
+  });
+
+  it('that façade exposes reads only', () => {
+    const facade = wiringSource.slice(
+      wiringSource.indexOf('setDatabaseService({'),
+      wiringSource.indexOf('setDatabaseService({') + 900
+    );
+    expect(facade).toMatch(/getSetting:/);
+    expect(facade).toMatch(/getSessionLimits:/);
+    expect(facade).not.toMatch(/setSetting:/);
+    expect(facade).not.toMatch(/setSessionLimits:/);
   });
 });
