@@ -3706,6 +3706,11 @@ ${DEVOPS_KIT_DIR}/
         created: instance.createdAt,
         updated: now,
         commitCount: 0,
+        // Lineage + origin, so the sidebar can distinguish an agent-created
+        // session from one the user made, and nest children under parents.
+        createdBy: instance.config.createdBy ?? 'ui',
+        parentSessionId: instance.config.parentSessionId,
+        worktreeStatus: instance.worktreeStatus,
       };
 
       // Create agent info

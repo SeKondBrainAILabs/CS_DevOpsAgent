@@ -91,16 +91,20 @@ describe('registry completeness', () => {
     expect(registered.filter((n) => !n.startsWith('kit_'))).toEqual([]);
   });
 
-  it('reports which declared tools are not yet implemented', () => {
-    // Informational while the session tools land. When this list empties, the
-    // registry is exactly the declaration — equality, reached without anyone
-    // having to remember to flip an assertion.
+  it('registers EXACTLY what it declares — no more, no less', () => {
+    // The end state this suite was built to reach. While the session tools
+    // were landing it asserted only "everything registered is declared", so
+    // CI stayed green through the phase; now that the declared set is fully
+    // implemented, the invariant is equality in both directions.
     const notYetBuilt = [...DECLARED].filter((n) => !registered.includes(n));
-    const sessionToolNames = new Set<string>(Object.values(MCP_SESSION_TOOLS));
+    expect(notYetBuilt).toEqual([]);
+    expect(new Set(registered)).toEqual(DECLARED);
+  });
 
-    // Anything unbuilt must be a session tool from this epic; a non-session
-    // tool going missing is a regression, not work in progress.
-    expect(notYetBuilt.filter((n) => !sessionToolNames.has(n))).toEqual([]);
+  it('registers all five session-lifecycle tools', () => {
+    for (const name of Object.values(MCP_SESSION_TOOLS)) {
+      expect(registered).toContain(name);
+    }
   });
 });
 

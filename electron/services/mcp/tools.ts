@@ -1712,6 +1712,102 @@ export function registerTools(
     })
   );
 
+  srv.tool(
+    'kit_get_session_status',
+    'Full state of one KIT session: config, lineage, git state and runtime health.',
+    {
+      session_id: z.string().describe('KIT session id. Restart-predecessor ids resolve too.'),
+      include_git: z.boolean().optional().describe('Include local git state for the worktree. Default true. Local only — no network.'),
+      include_remote: z.boolean().optional().describe('ALSO contact the remote to compute unpushed commits and whether the branch exists on origin. SLOW: two 15-second fetches plus an untimed ls-remote. Default false. Only worth it before a destructive close.'),
+      include_children: z.boolean().optional().describe('Include the sessions spawned from this one. Default true.'),
+    },
+    withCallLog('kit_get_session_status', async (args: any) => {
+      if (!deps.sessionOrchestrator?.listSessions) return notAvailable('sessionOrchestrator');
+
+      const aliases = deps.sessionOrchestrator.expandSessionAliases(args.session_id);
+      const inst = deps.sessionOrchestrator
+        .listSessions()
+        .find((i: any) => aliases.includes(i.sessionId));
+
+      if (!inst) {
+        return { content: [{ type: 'text', text: JSON.stringify({
+          ok: false, error_code: 'NOT_FOUND',
+          message: `No session ${args.session_id}. It may have been deleted; kit_list_sessions(include_closed=true) shows closed ones.`,
+        }) }] };
+      }
+
+      const worktree = inst.worktreePath ?? inst.config?.repoPath;
+      const out: any = {
+        ok: true,
+        session_id: inst.sessionId,
+        instance_id: inst.id,
+        status: inst.status,
+        created_by: inst.config?.createdBy ?? 'ui',
+        agent_type: inst.config?.agentType,
+        task: inst.config?.taskDescription,
+        repo_path: inst.config?.repoPath,
+        worktree_path: inst.worktreePath ?? null,
+        worktree_status: inst.worktreeStatus ?? null,
+        branch: inst.config?.branchName,
+        base_branch: inst.config?.baseBranch,
+        created_at: inst.createdAt,
+        closed_at: inst.closedAt ?? null,
+        close_reason: inst.closeReason ?? null,
+        lineage: {
+          parent: inst.config?.parentSessionId ?? null,
+          predecessors: inst.predecessorSessionIds ?? [],
+          aliases,
+        },
+        runtime: {
+          mcp_registered: Boolean(binder.getSession?.(inst.sessionId)),
+          stale_rebase: inst.staleRebase ?? null,
+        },
+        warnings: inst.worktreeWarnings ?? [],
+      };
+
+      if (args.include_children ?? true) {
+        const childIds = (deps.sessionOrchestrator as any).directChildSessionIds?.(inst.sessionId) ?? [];
+        out.lineage.children = deps.sessionOrchestrator
+          .listSessions()
+          .filter((i: any) => childIds.includes(i.sessionId))
+          .map((i: any) => ({ session_id: i.sessionId, status: i.status, branch: i.config?.branchName }));
+      }
+
+      if ((args.include_git ?? true) && worktree && deps.gitService?.getRepoStatus) {
+        try {
+          const st: any = await deps.gitService.getRepoStatus(worktree);
+          const data = st?.data ?? st;
+          out.git = {
+            current_branch: data?.branch ?? null,
+            on_expected_branch: data?.branch ? data.branch === inst.config?.branchName : null,
+            uncommitted: data?.uncommitted ?? null,
+          };
+        } catch (err) {
+          out.git = { error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+
+      // Off by default and gated explicitly, because this is the expensive part:
+      // two 15-second fetches plus an untimed ls-remote. An orchestrator polling
+      // twenty children would otherwise stall for minutes.
+      if (args.include_remote && deps.sessionOrchestrator) {
+        try {
+          const safety: any = await (deps.agentInstanceService as any)?.getDeleteSafetyInfo?.(inst.sessionId);
+          const info = safety?.data ?? {};
+          out.remote = {
+            unpushed_commits: info.unpushedCommitCount ?? null,
+            has_remote_branch: info.hasRemoteBranch ?? null,
+            uncommitted_changes: info.hasUncommittedChanges ?? null,
+          };
+        } catch (err) {
+          out.remote = { error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(out) }] };
+    })
+  );
+
   // ==========================================================================
   // v2.5 additions (merged in at v2.7.0 from origin/main track) —
   // Workspace / repo state / auto-commit guard. Read-heavy tools that let
