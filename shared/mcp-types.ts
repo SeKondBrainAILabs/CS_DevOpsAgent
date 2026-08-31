@@ -157,6 +157,33 @@ export const MCP_TOOL_LOG_TYPE: Readonly<Record<string, 'git' | 'info'>> = {
 };
 
 /**
+ * Tools an observer session may NOT call.
+ *
+ * An observer borrows a directory it does not own, so every write would land
+ * in someone else's tree — or, for the repo-policy tools, change a setting for
+ * everybody on the strength of a throwaway inspector.
+ *
+ * `kit_workspace_*` and `kit_project_group_add` are deliberately ALLOWED: they
+ * mutate KIT's own registry rather than any repository, and blocking them would
+ * make observers useless for exactly the discovery work they are best at.
+ *
+ * `kit_start_session` is here because an observer spawning sessions would make
+ * `max_observers_per_owner` meaningless and give a read-only session a way to
+ * obtain a writable one.
+ */
+export const MCP_OBSERVER_FORBIDDEN_TOOLS: ReadonlySet<string> = new Set<string>([
+  MCP_TOOLS.COMMIT,
+  MCP_TOOLS.COMMIT_ALL,
+  MCP_TOOLS.MERGE,
+  MCP_TOOLS.REBASE,
+  MCP_TOOLS.REQUEST_REVIEW,
+  MCP_TOOLS.LOCK_FILE,
+  MCP_TOOLS.UNLOCK_FILE,
+  MCP_TOOLS.SET_REPO_WORKTREE_MODE,
+  MCP_SESSION_TOOLS.START_SESSION,
+]);
+
+/**
  * The parameter naming the CALLER, per tool.
  *
  * `withCallLog` assumed `session_id` was always the caller. That holds for the

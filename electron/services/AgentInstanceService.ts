@@ -84,6 +84,7 @@ import {
   evaluateWorktreeOutcome,
   type WorktreeStatus,
 } from '../../shared/worktree-outcome';
+import { isObserverSession, refuseDestructiveForObserver } from '../../shared/observer-session';
 
 /**
  * Compute the worktree base dir for a repo. Worktrees live OUTSIDE the source
@@ -700,12 +701,19 @@ ${DEVOPS_KIT_DIR}/
         return { success: false, error: verdict.error };
       }
 
-      // Update instance with worktree path
-      instance.worktreePath = worktreePath;
+      const isObserver = isObserverSession(config);
 
-      // ALWAYS regenerate instructions with the actual working directory (worktree path)
-      // This ensures the agent works in the isolated worktree, not the main repo
-      const workingDirectory = worktreePath; // The agent should work HERE
+      // An observer's worktreePath stays UNDEFINED. Storing the borrowed path
+      // would make deleteInstanceWithCleanup's path-equality check truthy and
+      // send `git worktree remove --force` at the OWNER's working directory.
+      instance.worktreePath = isObserver ? undefined : worktreePath;
+
+      // ALWAYS regenerate instructions with the actual working directory.
+      // An observer works in the directory it borrows; a normal session in its
+      // own worktree.
+      const workingDirectory = isObserver
+        ? (config.observedPath ?? config.repoPath)
+        : worktreePath;
       console.log(`[AgentInstanceService] Working directory for agent: ${workingDirectory}`);
       console.log(`[AgentInstanceService] Main repo path: ${config.repoPath}`);
       console.log(`[AgentInstanceService] Worktree created: ${worktreePath !== config.repoPath}`);
@@ -725,8 +733,14 @@ ${DEVOPS_KIT_DIR}/
       this.instances.set(id, instance);
       this.saveInstances();
 
-      // Create session file so it appears in the dashboard (use worktree path)
-      await this.createSessionFile({ ...config, repoPath: config.repoPath }, sessionId, worktreePath);
+      // Create session file so it appears in the dashboard. Observers pass
+      // undefined: SessionReport.worktreePath feeds hints.worktreePath on the
+      // ghost-mode delete path, which goes straight to `git worktree remove`.
+      await this.createSessionFile(
+        { ...config, repoPath: config.repoPath },
+        sessionId,
+        isObserver ? undefined : worktreePath
+      );
 
       // Emit status change event
       this.emitStatusChange(instance);
@@ -734,8 +748,18 @@ ${DEVOPS_KIT_DIR}/
       console.log(`[AgentInstanceService] Created agent instance ${id} for ${config.agentType}`);
       console.log(`[AgentInstanceService] Agent should work in: ${workingDirectory}`);
 
-      // Setup agent environment (.agent-config, .vscode/settings.json)
-      await this.setupAgentEnvironment(id);
+      // Setup agent environment (.agent-config, .vscode/settings.json).
+      //
+      // SKIPPED ENTIRELY for observers. setupAgentEnvironment writes into
+      // `instance.worktreePath || config.repoPath`, and for an observer that is
+      // a directory belonging to someone else. It would plant a .agent-config
+      // carrying the OBSERVER's session id — repointing the owner's agent and
+      // corrupting its commit attribution — plus clobber the owner's .mcp.json
+      // and .claude/settings.json. An observer is configured in-band from
+      // kit_start_session's response instead.
+      if (!isObserver) {
+        await this.setupAgentEnvironment(id);
+      }
 
       // Register single-repo session with MCP binder so tools recognize it
       if (!config.multiRepo && this.onSessionCreated) {
@@ -904,6 +928,16 @@ ${DEVOPS_KIT_DIR}/
   private async createWorktreeIfNeeded(
     config: AgentInstanceConfig
   ): Promise<{ path: string; status: WorktreeStatus; warnings: string[]; error?: string }> {
+    // An observer owns no worktree. Returning its BORROWED path here would be
+    // actively dangerous: the caller assigns the result to instance.worktreePath,
+    // and deleteInstanceWithCleanup feeds a non-null worktreePath straight to
+    // `git worktree remove --force` — so closing the observer would destroy the
+    // owner's working directory. The empty path is never used; the caller
+    // leaves worktreePath undefined for observers.
+    if (isObserverSession(config)) {
+      return { path: '', status: 'observer', warnings: [] };
+    }
+
     const warnings: string[] = [];
     let worktreeDir: string;
     let status: WorktreeStatus;
@@ -2654,6 +2688,23 @@ ${DEVOPS_KIT_DIR}/
       console.log(`[AgentInstanceService] Ghost-mode delete for ${sessionId} (no in-memory instance) — operating on ${repoPath} branch ${branchName}`);
     } else {
       return { success: false, error: { code: 'NOT_FOUND', message: 'Session not found and no (repoPath, branchName) hint provided.' } };
+    }
+
+    // An observer owns NOTHING on disk — no worktree, no branch. Every
+    // destructive step below would therefore act on a directory or ref
+    // belonging to somebody else.
+    //
+    // Leaving worktreePath undefined already makes the path-equality check
+    // above produce null for observers, but that is a coincidence rather than
+    // a safety property: `resolveInstanceForDelete` can also reach here in
+    // ghost mode with hints supplied by the renderer. This is the explicit
+    // guard.
+    if (resolved && refuseDestructiveForObserver(resolved.instance.config ?? {})) {
+      console.log(
+        `[AgentInstanceService] ${sessionId} is an observer session — skipping all ` +
+          'worktree and branch cleanup; it owns nothing on disk.'
+      );
+      return instanceId ? this.deleteInstance(instanceId) : { success: true, data: undefined };
     }
 
     // 1. Remove worktree first (must happen before branch delete)

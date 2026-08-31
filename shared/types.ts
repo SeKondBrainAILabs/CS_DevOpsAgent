@@ -622,6 +622,15 @@ export interface AgentInstanceConfig {
   createdBy?: 'ui' | 'mcp' | 'adopted';
   /** The session that asked for this one, when an agent spawned it. */
   parentSessionId?: string;
+  /**
+   * 'observer' sessions own NO worktree — they borrow `observedPath` and every
+   * write tool refuses for them. Absent means 'worktree' (a normal session).
+   */
+  isolation?: 'worktree' | 'observer';
+  /** Observer only: the directory being borrowed. Never a worktree it owns. */
+  observedPath?: string;
+  /** Observer only: the session whose worktree is borrowed, if any. */
+  observerOfSessionId?: string;
 }
 
 /**

@@ -29,6 +29,7 @@ import { z } from 'zod';
 import {
   MCP_STATE_CHANGING_TOOLS,
   MCP_TOOL_LOG_TYPE,
+  MCP_OBSERVER_FORBIDDEN_TOOLS,
   actorSessionIdFor,
 } from '../../../shared/mcp-types';
 import { existsSync, realpathSync } from 'fs';
@@ -38,6 +39,7 @@ import {
   pickDefaultBaseBranch,
 } from '../../../shared/branch-naming';
 import { isKitWorktreePath } from '../../../shared/worktree-path';
+import { deriveObserverConfig } from '../../../shared/observer-session';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpSessionBinder } from './session-binder';
 import type { McpServiceDeps, McpCallLogEntry } from '../McpServerService';
@@ -521,6 +523,38 @@ export function registerTools(
       // the activity entry in its feed rather than the caller's, and drift-check
       // a worktree that may have just been removed.
       const sessionId = actorSessionIdFor(toolName, args as Record<string, unknown>);
+
+      // Read-only enforcement for observer sessions.
+      //
+      // Central rather than per-tool, for the same reason STATE_CHANGING_TOOLS
+      // is: a per-tool check is one `srv.tool(` block away from being forgotten
+      // by the next contributor, and the failure mode of forgetting is an
+      // observer committing into somebody else's worktree.
+      if (
+        sessionId !== 'unknown' &&
+        MCP_OBSERVER_FORBIDDEN_TOOLS.has(toolName) &&
+        (binder as any).isObserver?.(sessionId)
+      ) {
+        const bound = binder.getSession(sessionId);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: JSON.stringify({
+            error: 'OBSERVER_SESSION_READ_ONLY',
+            tool: toolName,
+            isolation: 'observer',
+            observed_path: bound?.worktreePath,
+            owner_session_id: (bound as any)?.ownerSessionId ?? null,
+            instruction:
+              'This is an OBSERVER session. It shares another session\'s working ' +
+              'directory and owns no branch, so all write operations are refused — ' +
+              'a commit here would land in someone else\'s worktree. Read tools ' +
+              '(kit_get_repo_status, kit_get_commit_history, kit_list_branches, ' +
+              'kit_get_session_info, kit_list_sessions) work normally. To make ' +
+              'changes, ask the orchestrator for a session with isolation=\'worktree\'. ' +
+              'To report findings, use kit_log_activity.',
+          }) }],
+        };
+      }
 
       // First MCP call from an agent flips the instance status from 'waiting'
       // (the post-create / post-restart default) to 'idle' so the
@@ -1380,6 +1414,8 @@ export function registerTools(
       task: z.string().min(1).describe('What this session is for, in one sentence. Shown in the KIT UI and embedded in the agent prompt.'),
       session_id: z.string().optional().describe('YOUR own KIT session id. The new session is recorded as its child so you can later close everything you spawned in one kit_close_sessions call.'),
       agent_type: z.enum(['claude', 'cursor', 'codex', 'copilot', 'aider', 'cline', 'warp', 'custom']).optional().describe('Which coding agent will run in this session. Defaults to claude.'),
+      isolation: z.enum(['worktree', 'observer']).optional().describe("\"worktree\" (default) gives the session its own branch and worktree directory with full read/write. \"observer\" gives it NO worktree: it borrows another session's directory (or a repo checkout) and every write tool — kit_commit, kit_merge, kit_rebase, kit_lock_file — is refused. Use observer for reviewers and analysts that must not mutate the tree; it costs no disk and no watcher."),
+      observe_session_id: z.string().optional().describe("With isolation=\"observer\": the session whose worktree to borrow. Omit to observe repo_path directly."),
       branch_name: z.string().optional().describe('Branch to create. Omit and KIT derives one in the same shape the UI uses.'),
       base_branch: z.string().optional().describe('Branch to cut from and merge back into. Omit and KIT uses the repo current branch, falling back to main/master/development.'),
       auto_commit: z.boolean().optional().describe('Run the KIT file watcher and auto-commit the worktree. Default true.'),
@@ -1414,6 +1450,106 @@ export function registerTools(
       }
 
       const agentType = args.agent_type ?? 'claude';
+      const isolation = args.isolation ?? 'worktree';
+
+      // ── Observer branch ───────────────────────────────────────────────
+      // No worktree, no branch, no watcher, no agent environment. It borrows a
+      // directory and every write tool refuses for it.
+      if (isolation === 'observer') {
+        let observedPath = repoPath;
+        let ownerIsObserver = false;
+
+        if (args.observe_session_id) {
+          const owner = deps.sessionOrchestrator!
+            .listSessions()
+            .find((i: any) => i.sessionId === args.observe_session_id);
+          if (!owner) {
+            return fail('NOT_FOUND', `No session ${args.observe_session_id} to observe.`);
+          }
+          ownerIsObserver = owner.config?.isolation === 'observer';
+          observedPath = owner.worktreePath ?? owner.config?.repoPath ?? repoPath;
+        }
+
+        const derived = deriveObserverConfig({
+          observedPath,
+          ownerSessionId: args.observe_session_id,
+          ownerIsObserver,
+        });
+        if (!derived.ok) {
+          return fail(derived.error!.code, derived.error!.message, {
+            instruction: derived.error!.instruction,
+          });
+        }
+
+        const observerConfig: any = {
+          ...derived.config,
+          agentType,
+          taskDescription: args.task,
+          baseBranch: 'main',
+          useWorktree: false,
+          // An observer must never auto-commit: the tree it watches is not its
+          // own, and the watcher is skipped for it entirely.
+          autoCommit: false,
+          commitInterval: 30,
+          rebaseFrequency: 'never',
+          systemPrompt: args.system_prompt ?? '',
+          contextPreservation: '',
+          createdBy: 'mcp',
+          parentSessionId: args.session_id,
+        };
+
+        if (args.dry_run) {
+          return { content: [{ type: 'text', text: JSON.stringify({
+            ok: true, dry_run: true,
+            plan: {
+              isolation: 'observer',
+              observed_path: derived.config!.observedPath,
+              repo_path: derived.config!.repoPath,
+              observer_of: args.observe_session_id ?? null,
+            },
+          }) }] };
+        }
+
+        const obs = await deps.sessionOrchestrator!.startSession(observerConfig);
+        if (!obs?.success || !obs.data) {
+          const e = obs?.error ?? { code: 'INTERNAL', message: 'Observer creation failed' };
+          return fail(e.code, e.message, { details: (e as any).details, instruction: (e as any).instruction });
+        }
+
+        // Registered as an observer so the read-only guard is O(1) per tool
+        // call, and so a destructive close of the owner can find it.
+        (binder as any).registerObserverSession?.(
+          obs.data.sessionId,
+          derived.config!.observedPath,
+          { ownerSessionId: args.observe_session_id }
+        );
+
+        return { content: [{ type: 'text', text: JSON.stringify({
+          ok: true,
+          session_id: obs.data.sessionId,
+          instance_id: obs.data.id,
+          isolation: 'observer',
+          created_by: 'mcp',
+          parent_session_id: args.session_id ?? null,
+          observer_of: args.observe_session_id ?? null,
+          observed_path: derived.config!.observedPath,
+          repo_path: derived.config!.repoPath,
+          worktree_path: null,
+          created_at: obs.data.createdAt,
+          watcher_started: false,
+          mcp: { url: deps.mcpUrl?.() ?? null, tool_prefix: 'kit_' },
+          launch: {
+            cwd: derived.config!.observedPath,
+            must_pass_session_id: obs.data.sessionId,
+          },
+          read_only: true,
+          instruction:
+            'This session is READ-ONLY. It borrows a directory it does not own, so ' +
+            'kit_commit, kit_merge, kit_rebase and kit_lock_file will be refused. ' +
+            'Do not edit files here. Report findings with kit_log_activity.',
+        }) }] };
+      }
+
       const branchName = args.branch_name ?? generateSessionBranchName(agentType);
 
       // Derive the base branch from the repo rather than hard-defaulting to
@@ -1943,6 +2079,10 @@ export function registerTools(
     {
       repo_path: z.string().describe('Absolute repo path'),
       mode: z.enum(['in-place', 'worktree']).describe('worktree = default; in-place = Single-Session Mode'),
+      // Present ONLY so the central observer guard in withCallLog can identify
+      // the caller. Without it this tool resolves to 'unknown' and a throwaway
+      // read-only inspector could flip a repo-wide policy for everybody.
+      session_id: z.string().optional().describe('YOUR session id. Observer sessions may not change repo policy.'),
     },
     withCallLog('kit_set_repo_worktree_mode', async ({ repo_path, mode }) => {
       if (!deps.configService?.setRepoWorktreeMode) return notAvailable('configService');

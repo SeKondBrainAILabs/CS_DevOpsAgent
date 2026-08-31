@@ -209,7 +209,14 @@ export class SessionOrchestrator {
   async startSession(config: AgentInstanceConfig): Promise<IpcResult<AgentInstance>> {
     const result = await this.deps.agentInstance.createInstance(config);
 
-    if (result.success && result.data?.sessionId) {
+    // An observer must NEVER get a file watcher. It borrows someone else's
+    // directory, so a watcher would auto-commit the OWNER's uncommitted work
+    // onto the owner's branch under the observer's session id — a second
+    // writer on a tree that already has one.
+    const isObserver =
+      (config as { isolation?: string }).isolation === 'observer';
+
+    if (!isObserver && result.success && result.data?.sessionId) {
       const watchPath = result.data.worktreePath || config.repoPath;
       this.deps.watcher
         .startWithPath(result.data.sessionId, watchPath)

@@ -360,3 +360,275 @@ describe('kit_start_session — refusals pass through verbatim', () => {
     expect(out.retryable).toBe(false);
   });
 });
+
+// ─── observer sessions (A2/A3/A4) ────────────────────────────────────────────
+describe('kit_start_session — observer isolation', () => {
+  function observerHarness(over: { sessions?: any[] } = {}) {
+    const handlers = new Map<string, Handler>();
+    const registerObserverSession = jest.fn() as any;
+    const observerIds = new Set<string>();
+    const bound = new Map<string, any>();
+
+    const server: any = {
+      tool: (name: string, _d: string, _s: unknown, h: Handler) => handlers.set(name, h),
+    };
+    const binder: any = {
+      getSession: (id: string) => bound.get(id),
+      getWorktreePath: () => undefined,
+      getWorktreePathForRepo: () => undefined,
+      getReposForSession: () => [],
+      getPrimaryRepoNameIfSecondary: () => undefined,
+      listSessions: () => [],
+      isObserver: (id: string) => observerIds.has(id),
+      registerObserverSession: (id: string, path: string, o: any) => {
+        registerObserverSession(id, path, o);
+        observerIds.add(id);
+        bound.set(id, { worktreePath: path, isolation: 'observer', ownerSessionId: o?.ownerSessionId });
+      },
+    };
+
+    const startSession = jest.fn(async (config: any) => ({
+      success: true,
+      data: {
+        id: 'inst_obs',
+        sessionId: 'sess_obs',
+        status: 'waiting',
+        createdAt: 'now',
+        // Critical: an observer gets NO worktreePath back.
+        worktreePath: config.isolation === 'observer' ? undefined : '/wt/x',
+        config,
+      },
+    })) as any;
+
+    const { registerTools } = require('../../../electron/services/mcp/tools');
+    registerTools(
+      server,
+      binder,
+      {
+        sessionOrchestrator: {
+          startSession,
+          listSessions: () => over.sessions ?? [],
+          expandSessionAliases: (id: string) => [id],
+          teardownSession: async () => ({}),
+          resolveSessionId: (id: string) => id,
+          directChildSessionIds: () => [],
+          descendantSessionIds: () => [],
+        },
+        gitService: { listBranchesForRepo: async () => ({ success: true, data: {} }) },
+        mcpUrl: () => 'http://127.0.0.1:39100/mcp',
+      },
+      undefined
+    );
+    return { handlers, startSession, registerObserverSession, binder };
+  }
+
+  it('creates an observer with NO worktree and NO watcher', async () => {
+    const h = observerHarness();
+    const out = parse(
+      await h.handlers.get('kit_start_session')!({
+        repo_path: repoDir,
+        task: 'review the diff',
+        isolation: 'observer',
+      })
+    );
+
+    expect(out.ok).toBe(true);
+    expect(out.isolation).toBe('observer');
+    expect(out.worktree_path).toBeNull();
+    expect(out.watcher_started).toBe(false);
+    expect(out.read_only).toBe(true);
+  });
+
+  it('never sets autoCommit for an observer', async () => {
+    // The tree it watches is not its own; auto-committing would land the
+    // owner's uncommitted work on the owner's branch.
+    const h = observerHarness();
+    await h.handlers.get('kit_start_session')!({
+      repo_path: repoDir,
+      task: 't',
+      isolation: 'observer',
+    });
+    expect(h.startSession.mock.calls[0][0].autoCommit).toBe(false);
+    expect(h.startSession.mock.calls[0][0].isolation).toBe('observer');
+  });
+
+  it('borrows a named session’s worktree and records the owner', async () => {
+    const owner = {
+      sessionId: 'sess_owner',
+      worktreePath: '/Users/x/Repos/KIT-DevOps-MyApp/claude-session-20260829-a1b2',
+      config: { repoPath: '/Users/x/Repos/MyApp' },
+    };
+    const h = observerHarness({ sessions: [owner] });
+
+    const out = parse(
+      await h.handlers.get('kit_start_session')!({
+        repo_path: repoDir,
+        task: 't',
+        isolation: 'observer',
+        observe_session_id: 'sess_owner',
+      })
+    );
+
+    expect(out.observed_path).toBe(owner.worktreePath);
+    expect(out.observer_of).toBe('sess_owner');
+    // repoPath resolves to the SOURCE repo, so KIT's own bookkeeping never
+    // lands inside the borrowed directory.
+    expect(out.repo_path).toBe('/Users/x/Repos/MyApp');
+  });
+
+  it('registers with the binder as an observer', async () => {
+    const h = observerHarness();
+    await h.handlers.get('kit_start_session')!({
+      repo_path: repoDir,
+      task: 't',
+      isolation: 'observer',
+    });
+    expect(h.registerObserverSession).toHaveBeenCalledWith(
+      'sess_obs',
+      expect.any(String),
+      expect.anything()
+    );
+  });
+
+  it('refuses to observe an observer', async () => {
+    const other = {
+      sessionId: 'sess_other_obs',
+      config: { isolation: 'observer', repoPath: '/r' },
+    };
+    const h = observerHarness({ sessions: [other] });
+
+    const out = parse(
+      await h.handlers.get('kit_start_session')!({
+        repo_path: repoDir,
+        task: 't',
+        isolation: 'observer',
+        observe_session_id: 'sess_other_obs',
+      })
+    );
+
+    expect(out.ok).toBe(false);
+    expect(out.error_code).toBe('OBSERVER_OF_OBSERVER_REFUSED');
+  });
+
+  it('refuses to observe a session that does not exist', async () => {
+    const h = observerHarness();
+    const out = parse(
+      await h.handlers.get('kit_start_session')!({
+        repo_path: repoDir,
+        task: 't',
+        isolation: 'observer',
+        observe_session_id: 'sess_ghost',
+      })
+    );
+    expect(out.error_code).toBe('NOT_FOUND');
+  });
+});
+
+describe('observer read-only enforcement (A4)', () => {
+  function guardHarness() {
+    const handlers = new Map<string, Handler>();
+    const observers = new Set<string>(['sess_obs']);
+    const server: any = {
+      tool: (name: string, _d: string, _s: unknown, h: Handler) => handlers.set(name, h),
+    };
+    const binder: any = {
+      getSession: (id: string) =>
+        observers.has(id)
+          ? { worktreePath: '/borrowed/wt', isolation: 'observer', ownerSessionId: 'sess_owner' }
+          : { worktreePath: '/own/wt' },
+      getWorktreePath: () => '/own/wt',
+      getWorktreePathForRepo: () => '/own/wt',
+      getReposForSession: () => [],
+      getPrimaryRepoNameIfSecondary: () => undefined,
+      listSessions: () => [],
+      isObserver: (id: string) => observers.has(id),
+    };
+    const { registerTools } = require('../../../electron/services/mcp/tools');
+    registerTools(server, binder, {}, undefined);
+    return handlers;
+  }
+
+  const FORBIDDEN = [
+    'kit_commit',
+    'kit_commit_all',
+    'kit_merge',
+    'kit_rebase',
+    'kit_request_review',
+    'kit_lock_file',
+    'kit_unlock_file',
+    'kit_set_repo_worktree_mode',
+    'kit_start_session',
+  ];
+
+  it.each(FORBIDDEN)('refuses %s for an observer', async (tool) => {
+    const handlers = guardHarness();
+    const result = await handlers.get(tool)!({
+      session_id: 'sess_obs',
+      repo_path: '/r',
+      mode: 'worktree',
+      message: 'x',
+      task: 't',
+    });
+
+    expect(result.isError).toBe(true);
+    const out = parse(result);
+    expect(out.error).toBe('OBSERVER_SESSION_READ_ONLY');
+    expect(out.tool).toBe(tool);
+  });
+
+  it('names the borrowed path and the owner so the agent can explain itself', async () => {
+    const handlers = guardHarness();
+    const out = parse(
+      await handlers.get('kit_commit')!({ session_id: 'sess_obs', message: 'x' })
+    );
+    expect(out.observed_path).toBe('/borrowed/wt');
+    expect(out.owner_session_id).toBe('sess_owner');
+    expect(out.instruction).toMatch(/kit_log_activity/);
+    expect(out.instruction).toMatch(/read tools/i);
+  });
+
+  it('covers kit_set_repo_worktree_mode, which had no session_id before', async () => {
+    // The guard reads the caller from args. This tool took only
+    // {repo_path, mode}, so it resolved to 'unknown' and a throwaway inspector
+    // could have flipped a repo-wide policy for everybody.
+    const handlers = guardHarness();
+    const result = await handlers.get('kit_set_repo_worktree_mode')!({
+      session_id: 'sess_obs',
+      repo_path: '/r',
+      mode: 'in-place',
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it('does NOT refuse those tools for a normal session', async () => {
+    // The guard is what is under test, not kit_commit's internals — a normal
+    // session falls through into the real divergence check, which this
+    // harness's binder stub does not satisfy. Either outcome is fine as long
+    // as it is not the observer refusal.
+    const handlers = guardHarness();
+    let out: any;
+    try {
+      out = parse(
+        await handlers.get('kit_commit')!({ session_id: 'sess_normal', message: 'x' })
+      );
+    } catch {
+      out = { error: 'threw-past-the-guard' };
+    }
+    expect(out.error).not.toBe('OBSERVER_SESSION_READ_ONLY');
+  });
+
+  it('allows read and registry tools for an observer', async () => {
+    // Blocking workspace/discovery tools would make observers useless for
+    // exactly the work they are best at.
+    const handlers = guardHarness();
+    for (const tool of ['kit_get_session_info', 'kit_log_activity', 'kit_workspace_list']) {
+      const result = await handlers.get(tool)!({
+        session_id: 'sess_obs',
+        type: 'info',
+        message: 'finding',
+      });
+      const out = parse(result);
+      expect(out.error).not.toBe('OBSERVER_SESSION_READ_ONLY');
+    }
+  });
+});
