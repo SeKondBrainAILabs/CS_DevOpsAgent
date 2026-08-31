@@ -305,10 +305,10 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // own concurrency cap or switch the kill switch back on. This makes the
   // read-only boundary real rather than advisory.
   mcpServer.setDatabaseService({
-    recordCommit: (sessionId, hash, message, filesChanged) =>
-      databaseService.recordCommit(sessionId, hash, message, filesChanged),
-    recordSessionEvent: (sessionId, type, data) =>
-      databaseService.recordSessionEvent(sessionId, type as any, data),
+    recordCommit: (hash, sessionId, message, timestamp, stats) =>
+      databaseService.recordCommit(hash, sessionId, message, timestamp, stats),
+    recordSessionEvent: (sessionId, type, details, commitHash) =>
+      databaseService.recordSessionEvent(sessionId, type as any, details, commitHash),
     getSetting: (key, defaultValue) => databaseService.getSetting(key, defaultValue),
     getSessionLimits: () => databaseService.getSessionLimits(),
   });

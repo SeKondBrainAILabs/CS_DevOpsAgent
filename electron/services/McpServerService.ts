@@ -77,8 +77,8 @@ export interface McpServiceDeps {
   };
   lockService?: {
     checkConflicts: (repoPath: string, files: string[], excludeSessionId?: string) => Promise<any>;
-    declareFiles: (sessionId: string, files: string[], operation: 'edit' | 'read' | 'delete') => Promise<any>;
-    releaseFiles: (sessionId: string) => Promise<any>;
+    declareFiles: (repoPath: string, sessionId: string, files: string[], operation: 'edit' | 'read' | 'delete') => Promise<any>;
+    releaseFiles: (repoPath: string, sessionId: string) => Promise<any>;
     forceReleaseLock: (repoPath: string, filePath: string) => Promise<any>;
   };
   /**
@@ -124,8 +124,33 @@ export interface McpServiceDeps {
     add: (input: { name: string; repoPaths: string[]; color?: string }) => any;
   };
   databaseService?: {
-    recordCommit: (sessionId: string, hash: string, message: string, filesChanged: number) => void;
-    recordSessionEvent: (sessionId: string, type: string, data: Record<string, unknown>) => void;
+    /**
+     * Matches DatabaseService.recordCommit exactly: (hash, sessionId, ...).
+     *
+     * This declaration previously read (sessionId, hash, message, filesChanged)
+     * — wrong order AND wrong arity. Every call site already passed the real
+     * five-argument shape, so the mismatch was invisible until the deps object
+     * became a narrowed façade that had to implement the declaration literally.
+     */
+    recordCommit: (
+      hash: string,
+      sessionId: string,
+      message: string,
+      timestamp: string,
+      stats?: {
+        filesChanged?: number;
+        additions?: number;
+        deletions?: number;
+        author?: string;
+        repoName?: string;
+      }
+    ) => void;
+    recordSessionEvent: (
+      sessionId: string,
+      type: string,
+      details?: Record<string, unknown>,
+      commitHash?: string
+    ) => void;
     getSetting: (key: string, defaultValue?: any) => any;
     /**
      * Read-only. There is deliberately NO setSetting / setSessionLimits here:

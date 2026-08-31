@@ -59,6 +59,21 @@ async function pumpAiStream(
  * Register all IPC handlers
  * Removes existing handlers first to support HMR during development
  */
+/**
+ * The repo root a session's locks are keyed by.
+ *
+ * Locks are stored per SOURCE REPO, never per worktree — the watcher's
+ * auto-locks always used the repo root, and anything keyed by worktree writes
+ * to a second file nothing reads.
+ */
+function lockRootForSession(services: Services, sessionId: string): string | undefined {
+  const listed = services.agentInstance.listInstances();
+  const inst = listed.success && listed.data
+    ? listed.data.find((i) => i.sessionId === sessionId)
+    : undefined;
+  return inst?.config?.repoPath;
+}
+
 export function registerIpcHandlers(services: Services, mainWindow: BrowserWindow): void {
   console.log('[IPC] Registering IPC handlers...');
   // Remove existing handlers first (for HMR support)
@@ -152,12 +167,23 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   // LOCK HANDLERS
   // ==========================================================================
   // Legacy lock API (session-based)
-  ipcMain.handle(IPC.LOCK_DECLARE, async (_, sessionId: string, files: string[], operation: string) => {
-    return services.lock.declareFiles(sessionId, files, operation as 'edit' | 'read' | 'delete');
+  // repoPath is now required: declarations live in the same repo-keyed store the
+  // watcher's auto-locks use, so a declaration without one would land nowhere
+  // anything reads. Resolved from the session when the caller omits it.
+  ipcMain.handle(IPC.LOCK_DECLARE, async (_, sessionId: string, files: string[], operation: string, repoPath?: string) => {
+    const root = repoPath ?? lockRootForSession(services, sessionId);
+    if (!root) {
+      return { success: false, error: { code: 'NOT_FOUND', message: `No repo for session ${sessionId}` } };
+    }
+    return services.lock.declareFiles(root, sessionId, files, operation as 'edit' | 'read' | 'delete');
   });
 
-  ipcMain.handle(IPC.LOCK_RELEASE, async (_, sessionId: string) => {
-    return services.lock.releaseFiles(sessionId);
+  ipcMain.handle(IPC.LOCK_RELEASE, async (_, sessionId: string, repoPath?: string) => {
+    const root = repoPath ?? lockRootForSession(services, sessionId);
+    if (!root) {
+      return { success: false, error: { code: 'NOT_FOUND', message: `No repo for session ${sessionId}` } };
+    }
+    return services.lock.releaseFiles(root, sessionId);
   });
 
   // New auto-lock API (repo/file-based)
@@ -169,7 +195,7 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     if (repoPath) {
       return services.lock.getRepoLocks(repoPath);
     }
-    return services.lock.listDeclarations();
+    return { success: true, data: [] };
   });
 
   ipcMain.handle(IPC.LOCK_FORCE_RELEASE, async (_, repoPath: string, filePath: string) => {

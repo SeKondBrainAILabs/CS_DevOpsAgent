@@ -38,7 +38,7 @@ import {
   generateSessionBranchName,
   pickDefaultBaseBranch,
 } from '../../../shared/branch-naming';
-import { isKitWorktreePath } from '../../../shared/worktree-path';
+import { isKitWorktreePath, resolveRepoRootFromWorktree } from '../../../shared/worktree-path';
 import { deriveObserverConfig } from '../../../shared/observer-session';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpSessionBinder } from './session-binder';
@@ -1088,8 +1088,17 @@ export function registerTools(
       }
 
       try {
+        // Locks are keyed by SOURCE REPO ROOT, not by worktree.
+        //
+        // This call used to pass `worktree`, while the watcher's auto-locks
+        // pass the repo root — so the two wrote to different locks.json files
+        // and never saw each other. Cross-session locking was a no-op as a
+        // result: kit_lock_file always reported "no conflicts" regardless of
+        // who actually held the file.
+        const lockRoot = resolveRepoRootFromWorktree(worktree)?.root ?? worktree;
+
         // Check for conflicts first
-        const conflictResult = await deps.lockService.checkConflicts(worktree, files, session_id);
+        const conflictResult = await deps.lockService.checkConflicts(lockRoot, files, session_id);
         const conflicts = conflictResult.success && conflictResult.data?.length > 0
           ? conflictResult.data
           : [];
@@ -1119,7 +1128,7 @@ export function registerTools(
         }
 
         // Declare locks
-        await deps.lockService.declareFiles(session_id, files, 'edit');
+        await deps.lockService.declareFiles(lockRoot, session_id, files, 'edit');
 
         if (deps.activityService) {
           deps.activityService.log(session_id, 'info', `Locked files: ${files.join(', ')}`, {
@@ -1158,15 +1167,18 @@ export function registerTools(
       }
 
       try {
+        // Same repo-root normalisation as kit_lock_file — forceReleaseLock and
+        // releaseFiles both key by repo, so a worktree path would target a
+        // store nothing writes to.
+        const worktree = binder.getWorktreePathForRepo(session_id, repo)!;
+        const lockRoot = resolveRepoRootFromWorktree(worktree)?.root ?? worktree;
+
         if (files && files.length > 0) {
-          // Release specific files by force-releasing each
-          const worktree = binder.getWorktreePathForRepo(session_id, repo)!;
           for (const file of files) {
-            await deps.lockService.forceReleaseLock(worktree, file);
+            await deps.lockService.forceReleaseLock(lockRoot, file);
           }
         } else {
-          // Release all locks for this session
-          await deps.lockService.releaseFiles(session_id);
+          await deps.lockService.releaseFiles(lockRoot, session_id);
         }
 
         const unlockedLabel = files ? files.join(', ') : 'all files';
