@@ -441,6 +441,16 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     binder: mcpServer.sessionBinder,
   });
 
+  // Give the MCP tool layer the same lifecycle funnel the IPC layer uses.
+  mcpServer.setMcpUrlProvider(() => mcpServer.getUrl());
+  mcpServer.setSessionOrchestrator({
+    startSession: (config) => sessionOrchestrator.startSession(config),
+    listSessions: () => sessionOrchestrator.listSessions(),
+    expandSessionAliases: (sessionId) => sessionOrchestrator.expandSessionAliases(sessionId),
+    teardownSession: (sessionId, opts) => sessionOrchestrator.teardownSession(sessionId, opts),
+    resolveSessionId: (id) => sessionOrchestrator.resolveSessionId(id),
+  });
+
   services = {
     session,
     git,

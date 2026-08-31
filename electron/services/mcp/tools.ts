@@ -32,7 +32,12 @@ import {
   actorSessionIdFor,
 } from '../../../shared/mcp-types';
 import { existsSync, realpathSync } from 'fs';
-import { join, basename, relative } from 'path';
+import { join, basename, relative, resolve as resolvePath } from 'path';
+import {
+  generateSessionBranchName,
+  pickDefaultBaseBranch,
+} from '../../../shared/branch-naming';
+import { isKitWorktreePath } from '../../../shared/worktree-path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpSessionBinder } from './session-binder';
 import type { McpServiceDeps, McpCallLogEntry } from '../McpServerService';
@@ -1336,6 +1341,170 @@ export function registerTools(
           success: false,
         }) }] };
       }
+    })
+  );
+
+  // ==========================================================================
+  // Session lifecycle (MCP session-lifecycle epic).
+  //
+  // These go through SessionOrchestrator — the same funnel IPC.INSTANCE_CREATE
+  // uses — so an agent-created session is identical to one the user made in
+  // the UI, watcher and all. Reimplementing the compose step here is exactly
+  // how the two would drift.
+  // ==========================================================================
+
+  /**
+   * Normalise a caller-supplied repo path.
+   *
+   * `getActiveSessionsForRepo` compares repo paths by EXACT STRING, so a
+   * trailing slash or a symlinked path silently creates a second bucket — and
+   * with it a way past both the per-repo cap and Single-Session Mode. Agents
+   * format paths inconsistently, so this is a realistic bypass rather than a
+   * theoretical one.
+   */
+  function normaliseRepoPath(input: string): string {
+    const resolved = resolvePath(input);
+    try {
+      return realpathSync(resolved);
+    } catch {
+      // Path does not exist yet — validation downstream will reject it.
+      return resolved;
+    }
+  }
+
+  srv.tool(
+    'kit_start_session',
+    'Create a new KIT session (its own git branch + worktree, auto-commit watcher, and MCP binding) and return everything a subagent needs to start working in it. Use this to fan out work; close them again with kit_close_session or kit_close_sessions.',
+    {
+      repo_path: z.string().describe('Absolute path to the git repository root the new session works in.'),
+      task: z.string().min(1).describe('What this session is for, in one sentence. Shown in the KIT UI and embedded in the agent prompt.'),
+      session_id: z.string().optional().describe('YOUR own KIT session id. The new session is recorded as its child so you can later close everything you spawned in one kit_close_sessions call.'),
+      agent_type: z.enum(['claude', 'cursor', 'codex', 'copilot', 'aider', 'cline', 'warp', 'custom']).optional().describe('Which coding agent will run in this session. Defaults to claude.'),
+      branch_name: z.string().optional().describe('Branch to create. Omit and KIT derives one in the same shape the UI uses.'),
+      base_branch: z.string().optional().describe('Branch to cut from and merge back into. Omit and KIT uses the repo current branch, falling back to main/master/development.'),
+      auto_commit: z.boolean().optional().describe('Run the KIT file watcher and auto-commit the worktree. Default true.'),
+      rebase_frequency: z.enum(['never', 'daily', 'weekly', 'on-demand']).optional().describe('How often KIT rebases this session on its base branch. Default never.'),
+      system_prompt: z.string().optional().describe('Extra instructions injected into the generated agent prompt — the subagent role.'),
+      include_prompt: z.boolean().optional().describe('Return the full generated agent prompt. Default true; set false to save tokens.'),
+      dry_run: z.boolean().optional().describe('Resolve and return the plan (branch, base, worktree path) WITHOUT creating anything.'),
+    },
+    withCallLog('kit_start_session', async (args: any) => {
+      const fail = (code: string, message: string, extra: Record<string, unknown> = {}) => ({
+        content: [{ type: 'text', text: JSON.stringify({ ok: false, error_code: code, message, ...extra }) }],
+      });
+
+      if (!deps.sessionOrchestrator?.startSession) return notAvailable('sessionOrchestrator');
+
+      const repoPath = normaliseRepoPath(args.repo_path);
+
+      if (!existsSync(repoPath)) {
+        return fail('INVALID_REPO', `No such directory: ${repoPath}`, { retryable: false });
+      }
+
+      // An orchestrator running inside its own KIT worktree will naturally pass
+      // its cwd here. That would nest a KIT-DevOps-<branch>/ directory inside
+      // the parent's worktree, which the parent's watcher would then
+      // auto-commit into the parent's branch.
+      if (isKitWorktreePath(repoPath)) {
+        return fail(
+          'NESTED_WORKTREE_REFUSED',
+          `${repoPath} is itself a KIT session worktree. Pass the SOURCE repository path instead — creating a session inside another session's worktree would nest worktrees and the parent's watcher would commit them.`,
+          { retryable: false, instruction: 'Use kit_get_session_info to find the source repo path for your session.' }
+        );
+      }
+
+      const agentType = args.agent_type ?? 'claude';
+      const branchName = args.branch_name ?? generateSessionBranchName(agentType);
+
+      // Derive the base branch from the repo rather than hard-defaulting to
+      // 'main'. The wizard shows the user its choice; an agent just gets it,
+      // so guessing wrong silently cuts sessions off the wrong base in every
+      // repo that lives on 'development'.
+      let baseBranch = args.base_branch;
+      if (!baseBranch) {
+        let branches: string[] = [];
+        let currentBranch: string | undefined;
+        try {
+          const listed = await deps.gitService?.listBranchesForRepo?.(repoPath);
+          const data: any = listed?.data ?? listed;
+          branches = data?.branches ?? data?.local ?? [];
+          currentBranch = data?.currentBranch ?? data?.current;
+        } catch {
+          // Fall through to the heuristic default.
+        }
+        baseBranch = pickDefaultBaseBranch({ currentBranch, branches });
+      }
+      baseBranch = String(baseBranch).replace(/^origin\//, '');
+
+      const config: any = {
+        repoPath,
+        agentType,
+        taskDescription: args.task,
+        branchName,
+        baseBranch,
+        useWorktree: true,
+        autoCommit: args.auto_commit ?? true,
+        commitInterval: 30,
+        rebaseFrequency: args.rebase_frequency ?? 'never',
+        systemPrompt: args.system_prompt ?? '',
+        contextPreservation: '',
+        createdBy: 'mcp',
+        parentSessionId: args.session_id,
+      };
+
+      if (args.dry_run) {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({
+            ok: true, dry_run: true,
+            plan: { repo_path: repoPath, branch: branchName, base_branch: baseBranch, agent_type: agentType, task: args.task, parent_session_id: args.session_id ?? null },
+          }) }],
+        };
+      }
+
+      const result = await deps.sessionOrchestrator.startSession(config);
+
+      if (!result?.success || !result.data) {
+        const err = result?.error ?? { code: 'INTERNAL', message: 'Session creation failed' };
+        return {
+          content: [{ type: 'text', text: JSON.stringify({
+            ok: false, error_code: err.code, message: err.message,
+            retryable: err.code === 'SESSION_LIMIT_REACHED',
+            details: (err as any).details, instruction: (err as any).instruction,
+          }) }],
+        };
+      }
+
+      const inst = result.data;
+      const mcpUrl = deps.mcpUrl?.() ?? null;
+      return {
+        content: [{ type: 'text', text: JSON.stringify({
+          ok: true,
+          session_id: inst.sessionId,
+          instance_id: inst.id,
+          status: inst.status,
+          created_by: 'mcp',
+          parent_session_id: args.session_id ?? null,
+          repo_path: repoPath,
+          worktree_path: inst.worktreePath ?? repoPath,
+          branch: branchName,
+          base_branch: baseBranch,
+          agent_type: agentType,
+          task: args.task,
+          created_at: inst.createdAt,
+          worktree_status: inst.worktreeStatus ?? null,
+          watcher_started: true,
+          mcp: { url: mcpUrl, config_path: inst.worktreePath ? join(inst.worktreePath, '.mcp.json') : null, tool_prefix: 'kit_' },
+          launch: {
+            cwd: inst.worktreePath ?? repoPath,
+            must_pass_session_id: inst.sessionId,
+            suggested_command: `cd "${inst.worktreePath ?? repoPath}" && ${agentType}`,
+          },
+          ...((args.include_prompt ?? true) ? { prompt: inst.prompt } : {}),
+          // Non-fatal problems provisioning the worktree. These were previously
+          // swallowed to console.warn where no headless caller could see them.
+          warnings: inst.worktreeWarnings ?? [],
+        }) }],
+      };
     })
   );
 

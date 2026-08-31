@@ -81,6 +81,19 @@ export interface McpServiceDeps {
     releaseFiles: (sessionId: string) => Promise<any>;
     forceReleaseLock: (repoPath: string, filePath: string) => Promise<any>;
   };
+  /**
+   * Session lifecycle. Both the IPC layer and this one go through the same
+   * orchestrator, so the MCP tools cannot drift from what the UI does.
+   */
+  /** The server's own public URL, for the launch block kit_start_session returns. */
+  mcpUrl?: () => string | null;
+  sessionOrchestrator?: {
+    startSession: (config: any) => Promise<any>;
+    listSessions: () => any[];
+    expandSessionAliases: (sessionId: string) => string[];
+    teardownSession: (sessionId: string, opts?: { unbindMcp?: boolean }) => Promise<any>;
+    resolveSessionId: (instanceOrSessionId: string) => string | undefined;
+  };
   agentInstanceService?: {
     listInstances: () => { success: boolean; data?: any[] };
     // R1 + C5 additions — count / mode queries per repo path.
@@ -263,6 +276,14 @@ export class McpServerService extends BaseService {
 
   setAgentInstanceService(svc: McpServiceDeps['agentInstanceService']): void {
     this.deps.agentInstanceService = svc;
+  }
+
+  setMcpUrlProvider(fn: () => string | null): void {
+    this.deps.mcpUrl = fn;
+  }
+
+  setSessionOrchestrator(svc: McpServiceDeps['sessionOrchestrator']): void {
+    this.deps.sessionOrchestrator = svc;
   }
 
   setDatabaseService(svc: McpServiceDeps['databaseService']): void {
