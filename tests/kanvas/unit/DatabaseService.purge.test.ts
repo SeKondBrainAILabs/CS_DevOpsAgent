@@ -211,3 +211,145 @@ describe('purgeSessionTelemetry — reported counts', () => {
     });
   });
 });
+
+// ─── sweepOrphanedHistory (KIT-MCP-H4b) ──────────────────────────────────────
+describe('sweepOrphanedHistory', () => {
+  const OLD = new Date(Date.now() - 400 * 86400_000).toISOString();
+  const RECENT = new Date().toISOString();
+
+  /**
+   * Fake handle that records statements and answers COUNT queries, so the
+   * selection can be asserted without a real database — see the header for why
+   * a real one is not reachable under jest.
+   */
+  function sweepDb(counts: Record<string, number> = { commits: 3, session_history: 5 }) {
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    let inTransaction = 0;
+    const db = {
+      prepare(sql: string) {
+        return {
+          get(...params: unknown[]) {
+            statements.push({ sql, params });
+            const table = sql.match(/FROM (\w+)/)?.[1] ?? '';
+            return { n: counts[table] ?? 0 };
+          },
+          run(...params: unknown[]) {
+            statements.push({ sql, params });
+            return { changes: 1 };
+          },
+        };
+      },
+      transaction(fn: () => unknown) {
+        return () => {
+          inTransaction += 1;
+          try {
+            return fn();
+          } finally {
+            inTransaction -= 1;
+          }
+        };
+      },
+    };
+    return { db, statements, depth: () => inTransaction };
+  }
+
+  it('DRY RUNS by default — reports counts and deletes nothing', () => {
+    // History cannot be regenerated. The selection has to be observed against
+    // real installs before it is trusted to delete.
+    const f = sweepDb();
+    (svc as any).db = f.db;
+
+    const r = svc.sweepOrphanedHistory(['sess_live']);
+
+    expect(r).toEqual({ commits: 3, sessionHistory: 5, applied: false });
+    expect(f.statements.every((s) => s.sql.startsWith('SELECT'))).toBe(true);
+    expect(f.statements.some((s) => s.sql.includes('DELETE'))).toBe(false);
+  });
+
+  it('only deletes when explicitly applied', () => {
+    const f = sweepDb();
+    (svc as any).db = f.db;
+
+    const r = svc.sweepOrphanedHistory(['sess_live'], { apply: true });
+
+    expect(r.applied).toBe(true);
+    expect(f.statements.some((s) => s.sql.includes('DELETE FROM commits'))).toBe(true);
+    expect(f.statements.some((s) => s.sql.includes('DELETE FROM session_history'))).toBe(
+      true
+    );
+  });
+
+  it('REFUSES when no live session ids are supplied', () => {
+    // An empty live set makes every row look orphaned. That is reachable — a
+    // fresh store, a failed load — and acting on it would delete all history
+    // irrecoverably.
+    const f = sweepDb();
+    (svc as any).db = f.db;
+
+    const r = svc.sweepOrphanedHistory([], { apply: true });
+
+    expect(r).toEqual({ commits: 0, sessionHistory: 0, applied: false });
+    expect(f.statements).toHaveLength(0);
+  });
+
+  it('excludes every supplied id, which must include predecessors', () => {
+    // The caller passes live ids AND their predecessor chains. A row keyed to a
+    // pre-restart id is not orphaned — purgeInstancesOnBranch removes instance
+    // records on every restart, which is exactly why the naive
+    // "matches no live instance" rule would delete real history.
+    const f = sweepDb();
+    (svc as any).db = f.db;
+
+    svc.sweepOrphanedHistory(['sess_live', 'sess_old', 'sess_older']);
+
+    for (const s of f.statements) {
+      expect(s.sql).toContain('NOT IN (?,?,?)');
+      expect(s.params.slice(1)).toEqual(['sess_live', 'sess_old', 'sess_older']);
+    }
+  });
+
+  it('always constrains by age as well as orphanhood', () => {
+    const f = sweepDb();
+    (svc as any).db = f.db;
+
+    svc.sweepOrphanedHistory(['sess_live']);
+
+    for (const s of f.statements) {
+      expect(s.sql).toContain('timestamp < ?');
+    }
+  });
+
+  it('runs the deletes in one transaction', () => {
+    const f = sweepDb();
+    (svc as any).db = f.db;
+    svc.sweepOrphanedHistory(['sess_live'], { apply: true });
+    expect(f.depth()).toBe(0); // drained
+  });
+
+  it('never touches the telemetry tables — those have their own path', () => {
+    const f = sweepDb();
+    (svc as any).db = f.db;
+    svc.sweepOrphanedHistory(['sess_live'], { apply: true });
+
+    const sql = f.statements.map((s) => s.sql).join(' ');
+    expect(sql).not.toMatch(/activity_logs|terminal_logs|mcp_calls/);
+  });
+
+  it('returns zeros and swallows the error when a statement throws', () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    (svc as any).db = {
+      prepare() {
+        throw new Error('database is locked');
+      },
+      transaction: (fn: () => unknown) => fn,
+    };
+    expect(svc.sweepOrphanedHistory(['sess_live'])).toEqual({
+      commits: 0,
+      sessionHistory: 0,
+      applied: false,
+    });
+  });
+
+  void OLD;
+  void RECENT;
+});

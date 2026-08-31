@@ -1054,6 +1054,103 @@ export class DatabaseService extends BaseService {
   /**
    * Clean up old data (older than specified days)
    */
+  /**
+   * Age out orphaned HISTORY rows — `commits` and `session_history`.
+   *
+   * Deliberately separate from `cleanupOldData`, which sweeps telemetry on a
+   * plain timestamp. History cannot be swept that way:
+   *
+   *   - `commits` is the only KIT-side hash -> session link.
+   *   - `backfillMcpCallsByLineage` exists specifically to RESCUE rows whose
+   *     session id changed across a restart, so a timestamp-only sweep works
+   *     directly against it.
+   *
+   * On an install used for a year, a naive 30-day sweep would delete nearly
+   * everything on the first launch after upgrade. So a row is only a candidate
+   * when it is old AND belongs to no session KIT still knows about — including
+   * predecessor ids, which is exactly the set the naive rule would miss.
+   *
+   * SHIPS IN DRY-RUN MODE. It reports what it would remove and deletes
+   * nothing. The selection needs to be observed against real installs before it
+   * is trusted to delete history that cannot be regenerated; flip `apply` on in
+   * a later release once the logs show it is picking the right rows.
+   */
+  sweepOrphanedHistory(
+    liveSessionIds: string[],
+    opts: { daysToKeep?: number; apply?: boolean } = {}
+  ): { commits: number; sessionHistory: number; applied: boolean } {
+    const empty = { commits: 0, sessionHistory: 0, applied: false };
+    if (!this.db) return empty;
+
+    const daysToKeep = opts.daysToKeep ?? 30;
+    const apply = opts.apply ?? false;
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - daysToKeep);
+    const cutoffStr = cutoff.toISOString();
+
+    try {
+      // An empty live set means every row looks orphaned. That is reachable —
+      // a fresh store, a failed load — and deleting all history on the strength
+      // of it would be catastrophic and unrecoverable. Refuse instead.
+      if (liveSessionIds.length === 0) {
+        console.warn(
+          '[DatabaseService] sweepOrphanedHistory: no live session ids supplied; ' +
+            'refusing to treat every row as orphaned.'
+        );
+        return empty;
+      }
+
+      const placeholders = liveSessionIds.map(() => '?').join(',');
+      const count = (table: string): number =>
+        (
+          this.db!
+            .prepare(
+              `SELECT COUNT(*) AS n FROM ${table} ` +
+                `WHERE timestamp < ? AND session_id NOT IN (${placeholders})`
+            )
+            .get(cutoffStr, ...liveSessionIds) as { n: number }
+        ).n;
+
+      const result = {
+        commits: count('commits'),
+        sessionHistory: count('session_history'),
+        applied: apply,
+      };
+
+      if (!apply) {
+        if (result.commits > 0 || result.sessionHistory > 0) {
+          console.log(
+            `[DatabaseService] sweepOrphanedHistory DRY RUN: would remove ` +
+              `${result.commits} commits and ${result.sessionHistory} session_history ` +
+              `rows older than ${daysToKeep}d belonging to no known session. ` +
+              'Nothing deleted.'
+          );
+        }
+        return result;
+      }
+
+      const del = this.db.transaction(() => {
+        for (const table of ['commits', 'session_history']) {
+          this.db!
+            .prepare(
+              `DELETE FROM ${table} WHERE timestamp < ? AND session_id NOT IN (${placeholders})`
+            )
+            .run(cutoffStr, ...liveSessionIds);
+        }
+      });
+      del();
+      console.log(
+        `[DatabaseService] sweepOrphanedHistory removed ${result.commits} commits ` +
+          `and ${result.sessionHistory} session_history rows.`
+      );
+      return result;
+    } catch (error) {
+      console.error('[DatabaseService] sweepOrphanedHistory failed:', error);
+      return empty;
+    }
+  }
+
   cleanupOldData(daysToKeep = 30): { activitiesDeleted: number; terminalLogsDeleted: number } {
     if (!this.db) return { activitiesDeleted: 0, terminalLogsDeleted: 0 };
 
