@@ -566,3 +566,228 @@ describe('SessionOrchestrator.teardownSession — MCP binder', () => {
     expect(unregisterSession).toHaveBeenCalledWith('sess_ghost');
   });
 });
+
+// ─── closeSession (M2) ───────────────────────────────────────────────────────
+describe('SessionOrchestrator.closeSession', () => {
+  const mine = instance({
+    id: 'inst_child',
+    sessionId: 'sess_child',
+    worktreePath: '/wt/child',
+    config: { ...baseConfig(), createdBy: 'mcp', parentSessionId: 'sess_me' } as any,
+  });
+
+  function closeDeps(over: {
+    instances?: AgentInstance[];
+    safety?: Record<string, unknown>;
+    cleanup?: () => Promise<IpcResult<void>>;
+  } = {}) {
+    const markSessionClosed = jest.fn(() => ({ success: true })) as any;
+    const getDeleteSafetyInfo = jest.fn(async () => ({
+      success: true,
+      data: {
+        hasUncommittedChanges: false,
+        unpushedCommitCount: 0,
+        hasRemoteBranch: true,
+        worktreePath: '/wt/child',
+        branchName: 'feat',
+        ...over.safety,
+      },
+    })) as any;
+    const deleteInstanceWithCleanup = jest.fn(
+      over.cleanup ?? (async () => ({ success: true }))
+    ) as any;
+
+    const base = makeDeps({ instances: over.instances ?? [mine] });
+    return {
+      deps: {
+        ...base.deps,
+        agentInstance: {
+          ...base.deps.agentInstance,
+          markSessionClosed,
+          getDeleteSafetyInfo,
+          deleteInstanceWithCleanup,
+        },
+      },
+      markSessionClosed,
+      getDeleteSafetyInfo,
+      deleteInstanceWithCleanup,
+      stopAll: base.stopAll,
+      unregisterSession: base.unregisterSession,
+    };
+  }
+
+  describe('safe close (the default)', () => {
+    it('tears down, marks closed, and KEEPS the worktree', async () => {
+      const d = closeDeps();
+      const r = await new SessionOrchestrator(d.deps).closeSession('sess_child', {
+        callerSessionId: 'sess_me',
+      });
+
+      expect(r.success).toBe(true);
+      expect(r.data?.actions.statusSet).toBe('closed');
+      expect(r.data?.actions.worktreeDeleted).toBe(false);
+      expect(r.data?.preserved?.worktreePath).toBe('/wt/child');
+      expect(d.deleteInstanceWithCleanup).not.toHaveBeenCalled();
+    });
+
+    it('performs ZERO git or network I/O', async () => {
+      // getDeleteSafetyInfo costs two 15s fetches plus an untimed ls-remote.
+      // An orchestrator closing twenty children must not pay that per child.
+      const d = closeDeps();
+      await new SessionOrchestrator(d.deps).closeSession('sess_child', {
+        callerSessionId: 'sess_me',
+      });
+      expect(d.getDeleteSafetyInfo).not.toHaveBeenCalled();
+    });
+
+    it('still stops the watcher and unbinds MCP', async () => {
+      const d = closeDeps();
+      await new SessionOrchestrator(d.deps).closeSession('sess_child', {
+        callerSessionId: 'sess_me',
+      });
+      expect(d.stopAll).toHaveBeenCalledWith('sess_child');
+      expect(d.unregisterSession).toHaveBeenCalledWith('sess_child');
+    });
+  });
+
+  describe('permission', () => {
+    it('refuses a session created in the KIT UI', async () => {
+      const uiSession = instance({
+        sessionId: 'sess_human',
+        config: { ...baseConfig(), createdBy: 'ui' } as any,
+      });
+      const d = closeDeps({ instances: [uiSession] });
+
+      const r = await new SessionOrchestrator(d.deps).closeSession('sess_human', {
+        callerSessionId: 'sess_me',
+        allowForeign: true,
+      });
+
+      expect(r.success).toBe(false);
+      expect(r.error?.code).toBe('NOT_PERMITTED');
+      expect(d.markSessionClosed).not.toHaveBeenCalled();
+    });
+
+    it('refuses a legacy session with no createdBy', async () => {
+      const legacy = instance({ sessionId: 'sess_legacy', config: baseConfig() as any });
+      const d = closeDeps({ instances: [legacy] });
+
+      const r = await new SessionOrchestrator(d.deps).closeSession('sess_legacy', {
+        callerSessionId: 'sess_me',
+      });
+      expect(r.error?.code).toBe('NOT_PERMITTED');
+    });
+
+    it('allows closing a descendant reached only via a predecessor id', async () => {
+      // The child was spawned before the parent restarted, so it carries the
+      // parent's OLD id. Without alias expansion the parent could not close
+      // what it spawned.
+      const parent = instance({
+        id: 'inst_p',
+        sessionId: 'sess_me_new',
+        predecessorSessionIds: ['sess_me'],
+        config: { ...baseConfig(), createdBy: 'mcp' } as any,
+      });
+      const child = instance({
+        id: 'inst_c',
+        sessionId: 'sess_child',
+        config: { ...baseConfig(), createdBy: 'mcp', parentSessionId: 'sess_me' } as any,
+      });
+      const d = closeDeps({ instances: [parent, child] });
+
+      const r = await new SessionOrchestrator(d.deps).closeSession('sess_child', {
+        callerSessionId: 'sess_me_new',
+      });
+      expect(r.success).toBe(true);
+    });
+  });
+
+  describe('destructive gates', () => {
+    it('refuses to delete a dirty worktree', async () => {
+      const d = closeDeps({ safety: { hasUncommittedChanges: true } });
+      const r = await new SessionOrchestrator(d.deps).closeSession('sess_child', {
+        callerSessionId: 'sess_me',
+        deleteWorktree: true,
+      });
+
+      expect(r.success).toBe(false);
+      expect(r.error?.code).toBe('DIRTY_REFUSED');
+      expect((r.error as any)?.details?.retry_with).toEqual({ force_dirty: true });
+      expect(d.deleteInstanceWithCleanup).not.toHaveBeenCalled();
+    });
+
+    it('proceeds with force_dirty', async () => {
+      const d = closeDeps({ safety: { hasUncommittedChanges: true } });
+      const r = await new SessionOrchestrator(d.deps).closeSession('sess_child', {
+        callerSessionId: 'sess_me',
+        deleteWorktree: true,
+        forceDirty: true,
+      });
+      expect(r.success).toBe(true);
+      expect(d.deleteInstanceWithCleanup).toHaveBeenCalled();
+    });
+
+    it('refuses to delete a branch with unpushed commits', async () => {
+      const d = closeDeps({ safety: { unpushedCommitCount: 3, hasRemoteBranch: true } });
+      const r = await new SessionOrchestrator(d.deps).closeSession('sess_child', {
+        callerSessionId: 'sess_me',
+        deleteLocalBranch: true,
+      });
+      expect(r.error?.code).toBe('UNPUSHED_REFUSED');
+    });
+
+    it('force_dirty does NOT also bypass the unpushed gate', async () => {
+      // Two different risks: discarding edits you can still see, versus
+      // discarding commits that exist nowhere else. One combined flag would
+      // let an agent authorise the second while meaning the first.
+      const d = closeDeps({
+        safety: { hasUncommittedChanges: true, unpushedCommitCount: 3 },
+      });
+      const r = await new SessionOrchestrator(d.deps).closeSession('sess_child', {
+        callerSessionId: 'sess_me',
+        deleteWorktree: true,
+        deleteLocalBranch: true,
+        forceDirty: true,
+      });
+      expect(r.error?.code).toBe('UNPUSHED_REFUSED');
+    });
+
+    it('does NOT refuse on a repo with no remote', async () => {
+      // getDeleteSafetyInfo falls back to `git rev-list --count HEAD` when
+      // neither origin/<branch> nor origin/<base> resolves, so a local-only
+      // repo reports its ENTIRE history as unpushed. Gating on that would make
+      // every destructive close on such a repo impossible.
+      const d = closeDeps({
+        safety: { hasRemoteBranch: false, unpushedCommitCount: 4183 },
+      });
+      const r = await new SessionOrchestrator(d.deps).closeSession('sess_child', {
+        callerSessionId: 'sess_me',
+        deleteLocalBranch: true,
+      });
+
+      expect(r.success).toBe(true);
+      expect(d.deleteInstanceWithCleanup).toHaveBeenCalled();
+    });
+  });
+
+  describe('idempotency', () => {
+    it('reports already_closed rather than NOT_FOUND on a second close', async () => {
+      const closed = instance({
+        sessionId: 'sess_child',
+        status: 'closed' as any,
+        config: { ...baseConfig(), createdBy: 'mcp', parentSessionId: 'sess_me' } as any,
+      });
+      const d = closeDeps({ instances: [closed] });
+
+      const r = await new SessionOrchestrator(d.deps).closeSession('sess_child', {
+        callerSessionId: 'sess_me',
+      });
+
+      expect(r.success).toBe(true);
+      expect(r.data?.alreadyClosed).toBe(true);
+      // Teardown still runs — it reconciles anything that survived the first.
+      expect(d.stopAll).toHaveBeenCalled();
+      expect(d.markSessionClosed).not.toHaveBeenCalled();
+    });
+  });
+});

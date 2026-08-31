@@ -449,6 +449,8 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
     expandSessionAliases: (sessionId) => sessionOrchestrator.expandSessionAliases(sessionId),
     teardownSession: (sessionId, opts) => sessionOrchestrator.teardownSession(sessionId, opts),
     resolveSessionId: (id) => sessionOrchestrator.resolveSessionId(id),
+    closeSession: (sessionId, opts) => sessionOrchestrator.closeSession(sessionId, opts),
+    descendantSessionIds: (id) => sessionOrchestrator.descendantSessionIds(id),
   });
 
   services = {

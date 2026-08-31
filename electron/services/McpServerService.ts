@@ -93,6 +93,8 @@ export interface McpServiceDeps {
     expandSessionAliases: (sessionId: string) => string[];
     teardownSession: (sessionId: string, opts?: { unbindMcp?: boolean }) => Promise<any>;
     resolveSessionId: (instanceOrSessionId: string) => string | undefined;
+    closeSession: (sessionId: string, opts?: any) => Promise<any>;
+    descendantSessionIds: (sessionId: string) => string[];
   };
   agentInstanceService?: {
     listInstances: () => { success: boolean; data?: any[] };

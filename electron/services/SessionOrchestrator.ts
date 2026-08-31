@@ -45,11 +45,60 @@ import type {
   AgentType,
   IpcResult,
 } from '../../shared/types';
+import {
+  evaluateClosePermission,
+  type SessionOrigin,
+} from '../../shared/session-close-permission';
 
 /** The slice of AgentInstanceService the orchestrator needs. */
 export interface OrchestratorAgentInstanceService {
   createInstance(config: AgentInstanceConfig): Promise<IpcResult<AgentInstance>>;
   listInstances(): IpcResult<AgentInstance[]>;
+  markSessionClosed(
+    sessionId: string,
+    opts?: { reason?: string; closedBy?: string }
+  ): IpcResult<void>;
+  getDeleteSafetyInfo(sessionId: string, hints?: unknown): Promise<IpcResult<any>>;
+  deleteInstanceWithCleanup(
+    sessionId: string,
+    options: {
+      deleteWorktree?: boolean;
+      deleteLocalBranch?: boolean;
+      deleteRemoteBranch?: boolean;
+    },
+    hints?: unknown
+  ): Promise<IpcResult<void>>;
+}
+
+export interface CloseSessionOptions {
+  reason?: string;
+  deleteWorktree?: boolean;
+  deleteLocalBranch?: boolean;
+  deleteRemoteBranch?: boolean;
+  /** Proceed despite uncommitted changes. Destroys work. */
+  forceDirty?: boolean;
+  /** Proceed despite commits not present on the remote. Destroys work. */
+  forceUnpushed?: boolean;
+  allowForeign?: boolean;
+  callerSessionId?: string;
+}
+
+export interface CloseResult {
+  sessionId: string;
+  alreadyClosed: boolean;
+  previousStatus?: string;
+  actions: TeardownActions & {
+    statusSet?: string;
+    worktreeDeleted: boolean;
+    localBranchDeleted: boolean;
+    remoteBranchDeleted: boolean;
+  };
+  preserved?: {
+    worktreePath?: string;
+    branch?: string;
+    uncommittedChanges?: boolean;
+    unpushedCommits?: number;
+  };
 }
 
 /** The slice of WatcherService the orchestrator needs. */
@@ -264,6 +313,196 @@ export class SessionOrchestrator {
         inst.id === instanceOrSessionId || inst.sessionId === instanceOrSessionId
     );
     return match?.sessionId;
+  }
+
+  /**
+   * Close a session. SAFE by default.
+   *
+   * A safe close stops everything running, unbinds MCP, marks the record
+   * closed, and KEEPS the worktree and branch. It performs zero git or network
+   * I/O — the safety check that costs two 15s fetches plus an untimed
+   * `ls-remote` only runs when a destructive flag is actually set.
+   *
+   * Destructive flags are gated separately: `forceDirty` covers uncommitted
+   * changes, `forceUnpushed` covers commits missing from the remote. One
+   * combined `force` would be too blunt, because those are different risks —
+   * discarding edits you can still see versus discarding commits you cannot.
+   */
+  async closeSession(
+    sessionId: string,
+    opts: CloseSessionOptions = {}
+  ): Promise<IpcResult<CloseResult>> {
+    const destructive = Boolean(
+      opts.deleteWorktree || opts.deleteLocalBranch || opts.deleteRemoteBranch
+    );
+
+    const instance = this.listSessions().find(
+      (i) =>
+        i.sessionId === sessionId ||
+        (Array.isArray(i.predecessorSessionIds) &&
+          i.predecessorSessionIds.includes(sessionId))
+    );
+
+    // Permission is evaluated even for an unknown session: a caller must not be
+    // able to probe for ids it has no business touching.
+    const permission = evaluateClosePermission({
+      target: {
+        sessionId: instance?.sessionId ?? sessionId,
+        createdBy: (instance?.config as { createdBy?: SessionOrigin })?.createdBy,
+      },
+      callerSessionId: opts.callerSessionId,
+      callerDescendantIds: opts.callerSessionId
+        ? this.descendantSessionIds(opts.callerSessionId)
+        : [],
+      allowForeign: opts.allowForeign,
+      destructive,
+    });
+    if (!permission.allowed) {
+      return { success: false, error: permission.error };
+    }
+
+    const previousStatus = instance?.status as string | undefined;
+    const alreadyClosed = previousStatus === 'closed';
+
+    // Teardown is idempotent, so a second close still reconciles anything that
+    // survived the first — a stray watcher, a binder alias.
+    const teardown = await this.teardownSession(instance?.sessionId ?? sessionId);
+
+    const actions = {
+      ...teardown,
+      statusSet: undefined as string | undefined,
+      worktreeDeleted: false,
+      localBranchDeleted: false,
+      remoteBranchDeleted: false,
+    };
+
+    if (instance && !alreadyClosed) {
+      const marked = this.deps.agentInstance.markSessionClosed(instance.sessionId!, {
+        reason: opts.reason,
+        closedBy: opts.callerSessionId,
+      });
+      if (marked.success) actions.statusSet = 'closed';
+      else actions.errors.push({ step: 'markClosed', message: marked.error?.message ?? 'failed' });
+    }
+
+    const preserved = {
+      worktreePath: instance?.worktreePath,
+      branch: instance?.config?.branchName,
+    } as CloseResult['preserved'];
+
+    if (!destructive) {
+      return {
+        success: true,
+        data: {
+          sessionId: instance?.sessionId ?? sessionId,
+          alreadyClosed,
+          previousStatus,
+          actions,
+          preserved,
+        },
+      };
+    }
+
+    // ── Destructive path: gate on real work before removing anything ──────
+    const safety = await this.deps.agentInstance.getDeleteSafetyInfo(
+      instance?.sessionId ?? sessionId
+    );
+    const info: any = safety?.data ?? {};
+
+    if (info.hasUncommittedChanges && opts.deleteWorktree && !opts.forceDirty) {
+      return {
+        success: false,
+        error: {
+          code: 'DIRTY_REFUSED',
+          message:
+            'The worktree has uncommitted changes. Commit them with kit_commit, or ' +
+            'retry with force_dirty: true to discard them.',
+          details: { ...info, retry_with: { force_dirty: true } },
+        } as any,
+      };
+    }
+
+    // A repo with no remote reports its ENTIRE history as unpushed:
+    // getDeleteSafetyInfo falls back to `git rev-list --count HEAD` when
+    // neither origin/<branch> nor origin/<base> resolves. Gating on that would
+    // make every destructive close on a local-only repo impossible.
+    const hasRemote = info.hasRemoteBranch !== false || info.unpushedCommitCount === 0;
+    const unpushed = Number(info.unpushedCommitCount ?? 0);
+    const gateUnpushed = opts.deleteLocalBranch || opts.deleteRemoteBranch;
+
+    if (hasRemote && gateUnpushed && unpushed > 0 && !opts.forceUnpushed) {
+      return {
+        success: false,
+        error: {
+          code: 'UNPUSHED_REFUSED',
+          message:
+            `The branch has ${unpushed} commit(s) not present on the remote. ` +
+            'Push them first, or retry with force_unpushed: true to discard them.',
+          details: { ...info, retry_with: { force_unpushed: true } },
+        } as any,
+      };
+    }
+
+    const cleanup = await this.deps.agentInstance.deleteInstanceWithCleanup(
+      instance?.sessionId ?? sessionId,
+      {
+        deleteWorktree: opts.deleteWorktree,
+        deleteLocalBranch: opts.deleteLocalBranch,
+        deleteRemoteBranch: opts.deleteRemoteBranch,
+      }
+    );
+
+    if (cleanup?.success) {
+      actions.worktreeDeleted = Boolean(opts.deleteWorktree);
+      actions.localBranchDeleted = Boolean(opts.deleteLocalBranch);
+      actions.remoteBranchDeleted = Boolean(opts.deleteRemoteBranch);
+    } else {
+      actions.errors.push({
+        step: 'cleanup',
+        message: cleanup?.error?.message ?? 'cleanup failed',
+      });
+    }
+
+    return {
+      success: true,
+      data: {
+        sessionId: instance?.sessionId ?? sessionId,
+        alreadyClosed,
+        previousStatus,
+        actions,
+        preserved,
+      },
+    };
+  }
+
+  /**
+   * Every session id descended from `sessionId`, alias-expanded at each hop.
+   *
+   * Alias expansion is what keeps this working across a restart: a child
+   * created before its parent restarted still carries the parent's OLD id, so
+   * matching on the live id alone would miss it.
+   */
+  descendantSessionIds(sessionId: string): string[] {
+    const roots = new Set(this.expandSessionAliases(sessionId));
+    const sessions = this.listSessions();
+    const found = new Set<string>();
+
+    let frontier = [...roots];
+    while (frontier.length > 0) {
+      const next: string[] = [];
+      for (const session of sessions) {
+        const parent = (session.config as { parentSessionId?: string })?.parentSessionId;
+        if (!parent || !session.sessionId) continue;
+        if (!frontier.includes(parent) || found.has(session.sessionId)) continue;
+        for (const alias of this.expandSessionAliases(session.sessionId)) {
+          found.add(alias);
+          next.push(alias);
+        }
+      }
+      frontier = next;
+    }
+
+    return [...found];
   }
 
   /** Every live instance. Empty when the underlying service reports failure. */

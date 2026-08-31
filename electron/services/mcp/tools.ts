@@ -1508,6 +1508,70 @@ export function registerTools(
     })
   );
 
+  srv.tool(
+    'kit_close_session',
+    'Close a KIT session. SAFE by default: stops the watcher, unbinds MCP, marks the session closed, and KEEPS the worktree and branch. Deleting the worktree or branches requires explicit flags and is refused when there is uncommitted or unpushed work unless forced.',
+    {
+      session_id: z.string().describe('The session to close. This is the TARGET — pass your own id as caller_session_id.'),
+      caller_session_id: z.string().optional().describe('YOUR session id. Used for the ownership check: you may always close yourself or a session you spawned.'),
+      reason: z.string().optional().describe('Why it is being closed. Recorded on the session and shown in KIT.'),
+      delete_worktree: z.boolean().optional().describe('DESTRUCTIVE. Also remove the worktree directory. Refused if it has uncommitted changes unless force_dirty is set.'),
+      delete_local_branch: z.boolean().optional().describe('DESTRUCTIVE. Also delete the local branch. Refused if it has unpushed commits unless force_unpushed is set.'),
+      delete_remote_branch: z.boolean().optional().describe('DESTRUCTIVE. Also delete the branch on origin. Only when the work is merged or abandoned.'),
+      force_dirty: z.boolean().optional().describe('DISCARDS UNCOMMITTED WORK. Only set after the user explicitly authorised it.'),
+      force_unpushed: z.boolean().optional().describe('DISCARDS COMMITS THAT EXIST NOWHERE ELSE. Only set after the user explicitly authorised it.'),
+      allow_foreign: z.boolean().optional().describe("Permit closing another agent's session. Never permits closing a session a human created in the KIT UI."),
+    },
+    withCallLog('kit_close_session', async (args: any) => {
+      if (!deps.sessionOrchestrator?.closeSession) return notAvailable('sessionOrchestrator');
+
+      const result = await deps.sessionOrchestrator.closeSession(args.session_id, {
+        reason: args.reason,
+        deleteWorktree: args.delete_worktree,
+        deleteLocalBranch: args.delete_local_branch,
+        deleteRemoteBranch: args.delete_remote_branch,
+        forceDirty: args.force_dirty,
+        forceUnpushed: args.force_unpushed,
+        allowForeign: args.allow_foreign,
+        callerSessionId: args.caller_session_id,
+      });
+
+      if (!result?.success) {
+        const err = result?.error ?? { code: 'INTERNAL', message: 'Close failed' };
+        return {
+          content: [{ type: 'text', text: JSON.stringify({
+            ok: false, error_code: err.code, message: err.message,
+            retryable: false, details: err.details,
+            instruction: err.instruction,
+            retry_with: err.details?.retry_with,
+          }) }],
+        };
+      }
+
+      const d = result.data;
+      return {
+        content: [{ type: 'text', text: JSON.stringify({
+          ok: true,
+          session_id: d.sessionId,
+          already_closed: d.alreadyClosed,
+          previous_status: d.previousStatus ?? null,
+          actions: {
+            watcher_stopped: d.actions.watchersStopped,
+            rebase_watcher_stopped: d.actions.rebaseWatcherStopped,
+            mcp_unregistered: d.actions.mcpUnregistered,
+            aliases_unregistered: d.actions.aliasesUnregistered,
+            status_set: d.actions.statusSet ?? null,
+            worktree_deleted: d.actions.worktreeDeleted,
+            local_branch_deleted: d.actions.localBranchDeleted,
+            remote_branch_deleted: d.actions.remoteBranchDeleted,
+          },
+          preserved: d.preserved ?? null,
+          warnings: d.actions.errors ?? [],
+        }) }],
+      };
+    })
+  );
+
   // ==========================================================================
   // v2.5 additions (merged in at v2.7.0 from origin/main track) —
   // Workspace / repo state / auto-commit guard. Read-heavy tools that let

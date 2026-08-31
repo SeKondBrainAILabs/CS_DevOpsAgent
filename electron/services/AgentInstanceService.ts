@@ -62,6 +62,7 @@ import type {
   IpcResult,
   RepoEntry,
   RepoRole,
+  SessionStatus,
 } from '../../shared/types';
 
 function generateAgentPrompt(agentType: AgentType, vars: InstructionVars): string | undefined {
@@ -70,7 +71,7 @@ function generateAgentPrompt(agentType: AgentType, vars: InstructionVars): strin
   return undefined;
 }
 import { generateSecondaryBranchName } from '../../shared/types';
-import { isActiveInstance, isRunningInstance } from '../../shared/instance-status';
+import { isActiveInstance, isRunningInstance, INACTIVE_INSTANCE_STATUSES } from '../../shared/instance-status';
 import { planEnvSymlink } from '../../shared/env-symlink-plan';
 import { symlink, lstat } from 'fs/promises';
 import type { TerminalLogService } from './TerminalLogService';
@@ -3459,6 +3460,47 @@ ${DEVOPS_KIT_DIR}/
    * (e.g. running → completed), we recalc `RecentRepo.agentCount` so the
    * repo-picker session count stays accurate without restarting the app.
    */
+  /**
+   * Mark a session closed WITHOUT deleting it (story KIT-MCP-M2).
+   *
+   * There was no such path before: 'closed' was only ever set by internal
+   * reapers, and every user-facing route deleted instead. A safe close has to
+   * leave the record — and the worktree and branch — in place.
+   *
+   * Deliberately does NOT emit `session:closed`; the renderer treats that as a
+   * deletion and drops the row. It emits a status change, and
+   * `emitStoredSessions` now reports terminal statuses honestly rather than
+   * flattening everything to 'idle'.
+   */
+  markSessionClosed(
+    sessionId: string,
+    opts: { reason?: string; closedBy?: string } = {}
+  ): IpcResult<void> {
+    const instance = Array.from(this.instances.values()).find(
+      (i) =>
+        i.sessionId === sessionId ||
+        (Array.isArray(i.predecessorSessionIds) &&
+          i.predecessorSessionIds.includes(sessionId))
+    );
+    if (!instance) {
+      return { success: false, error: { code: 'NOT_FOUND', message: `No session ${sessionId}` } };
+    }
+
+    const wasActive = isActiveInstance(instance);
+    instance.status = 'closed' as AgentInstance['status'];
+    instance.closedAt = new Date().toISOString();
+    if (opts.reason) instance.closeReason = opts.reason;
+
+    this.saveInstances();
+    this.emitStatusChange(instance);
+    if (wasActive) this.recalculateRepoAgentCounts();
+
+    // Refresh the dashboard's view so the row reflects the new status rather
+    // than waiting for the next window load.
+    this.emitStoredSessions();
+    return { success: true, data: undefined };
+  }
+
   updateInstanceStatus(instanceId: string, status: AgentInstance['status'], error?: string): void {
     const instance = this.instances.get(instanceId);
     if (instance) {
@@ -3652,7 +3694,15 @@ ${DEVOPS_KIT_DIR}/
           ? instance.worktreePath
           : undefined,
         repoPath: instance.config.repoPath,
-        status: instance.status === 'running' ? 'active' as const : 'idle' as const,
+        // Report terminal statuses honestly. This used to flatten EVERY status
+        // to 'active' or 'idle', so a closed session was re-emitted as 'idle'
+        // and looked alive — at fan-out the sidebar filled with sessions that
+        // had already been torn down.
+        status: (INACTIVE_INSTANCE_STATUSES.has(instance.status as string)
+          ? 'closed'
+          : instance.status === 'running'
+            ? 'active'
+            : 'idle') as SessionStatus,
         created: instance.createdAt,
         updated: now,
         commitCount: 0,
