@@ -2300,6 +2300,32 @@ ${DEVOPS_KIT_DIR}/
    * refs; the refs are pure crash-recovery. Runs on startup only for now —
    * a daily timer would be nicer but 7-day TTL doesn't need it.
    */
+  /**
+   * Whether a snapshot ref older than the TTL may actually be deleted.
+   *
+   * The obvious rule — "drop refs whose sessionId matches no live instance" —
+   * is WRONG here, and dangerously so. `purgeInstancesOnBranch` deliberately
+   * removes instance records on every restart, so a large set of
+   * `refs/kit-autosave/<old-id>` legitimately match no instance while still
+   * being the only copy of a crashed agent's uncommitted work. Applying that
+   * rule would delete real work on the first launch after upgrade.
+   *
+   * So an unmatched ref is collectable only when it is unmatched by ANY id the
+   * session ever had — live or predecessor. Age is already checked by the
+   * caller; a ref belonging to a session KIT still knows about is left alone
+   * regardless, because that session may yet be restarted.
+   */
+  private snapshotRefIsCollectable(ref: string): boolean {
+    const sessionId = ref.split('/').pop();
+    if (!sessionId) return false;
+
+    for (const inst of this.instances.values()) {
+      if (inst.sessionId === sessionId) return false;
+      if (inst.predecessorSessionIds?.includes(sessionId)) return false;
+    }
+    return true;
+  }
+
   async gcOldSnapshots(): Promise<number> {
     const SNAPSHOT_TTL_DAYS = 7;
     const cutoffSec = Math.floor(Date.now() / 1000) - SNAPSHOT_TTL_DAYS * 86400;
@@ -2320,13 +2346,17 @@ ${DEVOPS_KIT_DIR}/
         const listed = await execaCmd('git', [
           'for-each-ref',
           '--format=%(objectname)%09%(committerdate:unix)%09%(refname)',
+          // refs/kit-idle-end/ was never scanned before, so idle-end snapshots
+          // accumulated forever while autosave ones were pruned at 7 days.
           'refs/kit-autosave/',
+          'refs/kit-idle-end/',
         ], { cwd: repoPath });
         const lines = listed.stdout.split('\n').filter(Boolean);
         for (const line of lines) {
           const [, tsStr, ref] = line.split('\t');
           const ts = parseInt(tsStr, 10);
           if (!Number.isFinite(ts) || ts >= cutoffSec) continue;
+          if (!this.snapshotRefIsCollectable(ref)) continue;
           try {
             await execaCmd('git', ['update-ref', '-d', ref], { cwd: repoPath });
             pruned++;
@@ -2814,6 +2844,34 @@ ${DEVOPS_KIT_DIR}/
         console.log(`[AgentInstanceService] Removed worktree at ${worktreePath}`);
       } catch (err) {
         console.warn(`[AgentInstanceService] Failed to remove worktree: ${err}`);
+      }
+
+      // Drop this session's crash-recovery snapshot refs.
+      //
+      // GATED on deleteWorktree AND deleteLocalBranch, deliberately. These refs
+      // (`refs/kit-autosave/<id>`, `refs/kit-idle-end/<id>`) are the ONLY copy
+      // of work an agent had uncommitted when it died — a safe close, or a
+      // close that keeps the branch, must leave them alone. Only when the
+      // worktree AND the branch are both going does the snapshot have nothing
+      // left to protect.
+      //
+      // Predecessor ids are included: a session restarted twice has refs under
+      // every id it ever had, and clearing only the live one orphans the rest
+      // for gcOldSnapshots to find later with no instance attached.
+      if (options.deleteWorktree && options.deleteLocalBranch) {
+        const ids = [
+          sessionId,
+          ...(resolved?.instance.predecessorSessionIds ?? []),
+        ];
+        for (const ns of ['refs/kit-autosave/', 'refs/kit-idle-end/']) {
+          for (const id of ids) {
+            try {
+              await execaCmd('git', ['update-ref', '-d', `${ns}${id}`], { cwd: repoPath });
+            } catch {
+              // No such ref — the common case. Never fatal.
+            }
+          }
+        }
       }
 
       // Prune the worktree registry. Without this, `git worktree list` keeps
