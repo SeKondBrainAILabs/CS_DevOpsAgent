@@ -26,6 +26,11 @@
  */
 
 import { z } from 'zod';
+import {
+  MCP_STATE_CHANGING_TOOLS,
+  MCP_TOOL_LOG_TYPE,
+  actorSessionIdFor,
+} from '../../../shared/mcp-types';
 import { existsSync, realpathSync } from 'fs';
 import { join, basename, relative } from 'path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -198,12 +203,10 @@ export function registerTools(
     );
   };
 
-  // Tools that change state — their calls are logged to the session activity feed
-  const STATE_CHANGING_TOOLS = new Set([
-    'kit_commit', 'kit_commit_all', 'kit_lock_file', 'kit_unlock_file', 'kit_request_review',
-    'kit_workspace_add', 'kit_workspace_scan', 'kit_project_group_add',
-    'kit_set_repo_worktree_mode',
-  ]);
+  // Tools that change state — their calls are logged to the session activity
+  // feed. Owned by shared/mcp-types.ts so the set cannot drift from the
+  // registry the way MCP_TOOLS itself did (it listed 8 of 22 live tools).
+  const STATE_CHANGING_TOOLS = MCP_STATE_CHANGING_TOOLS;
 
   // ===========================================================================
   // Pre-commit sanity gate
@@ -507,7 +510,12 @@ export function registerTools(
   ): (args: T) => Promise<any> {
     return async (args: T) => {
       const start = Date.now();
-      const sessionId = (args as any).session_id || 'unknown';
+      // The CALLER, which is not always `session_id`: on the close tools
+      // `session_id` is the TARGET and `caller_session_id` is the actor. Using
+      // the target here would flip the closed session's status to 'idle', file
+      // the activity entry in its feed rather than the caller's, and drift-check
+      // a worktree that may have just been removed.
+      const sessionId = actorSessionIdFor(toolName, args as Record<string, unknown>);
 
       // First MCP call from an agent flips the instance status from 'waiting'
       // (the post-create / post-restart default) to 'idle' so the
@@ -531,7 +539,11 @@ export function registerTools(
 
       // Log state-changing tool calls to the activity feed so they're visible in KIT
       if (STATE_CHANGING_TOOLS.has(toolName) && sessionId !== 'unknown') {
-        deps.activityService?.log(sessionId, 'git', `MCP › ${toolName}`, { source: 'mcp', toolName });
+        // Not everything state-changing is a git operation — starting or
+        // closing a session is not a commit, and filing it under 'git' makes
+        // the feed read as though the repo had been touched.
+        const logType = MCP_TOOL_LOG_TYPE[toolName] ?? 'git';
+        deps.activityService?.log(sessionId, logType, `MCP › ${toolName}`, { source: 'mcp', toolName });
       }
 
       try {
