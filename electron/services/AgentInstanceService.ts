@@ -77,7 +77,7 @@ import { symlink, lstat } from 'fs/promises';
 import type { TerminalLogService } from './TerminalLogService';
 import type { ConfigService } from './ConfigService';
 import { MCP_CONFIG_FILE, CONTRACTS_PATHS } from '../../shared/agent-protocol';
-import { getWorktreeBaseDir } from '../../shared/worktree-path';
+import { getWorktreeBaseDir, resolveRepoRootFromWorktree } from '../../shared/worktree-path';
 import { KeyedMutex } from '../../shared/async-mutex';
 import { reserveSession } from './SessionReservation';
 import {
@@ -115,6 +115,15 @@ export { getWorktreeBaseDir };
  * — see the note at its call site.
  */
 const sessionMutex = new KeyedMutex();
+
+/**
+ * Serialises every read-modify-write of the user's ~/.claude.json.
+ *
+ * Separate from sessionMutex because it is keyed on a file path rather than on
+ * session admission, and because the seed runs INSIDE the create path that
+ * sessionMutex has already released by then.
+ */
+const claudeConfigMutex = new KeyedMutex();
 
 interface SessionState {
   sessionId: string;
@@ -1409,6 +1418,13 @@ ${DEVOPS_KIT_DIR}/
    * projects, settings); we only add/extend this worktree's entry.
    */
   private async seedClaudeMcpApproval(worktreePath: string): Promise<void> {
+    // Serialised with the unseed on the config path. Read-modify-write is NOT
+    // made safe by the atomic rename below: rename only stops a crash
+    // truncating the file, it does nothing about two concurrent writers each
+    // reading, editing and writing back — the later write silently discards
+    // the earlier one's project entry. At agent fan-out that is N concurrent
+    // creates racing on one file.
+    return claudeConfigMutex.runExclusive(join(homedir(), '.claude.json'), async () => {
     try {
       const claudeConfigPath = join(homedir(), '.claude.json');
 
@@ -1451,6 +1467,106 @@ ${DEVOPS_KIT_DIR}/
       // Non-fatal: the session still launches; the agent just falls back to git/file locks.
       console.warn(`[AgentInstanceService] Could not pre-seed ~/.claude.json MCP approval: ${error}`);
     }
+    });
+  }
+
+  /**
+   * Remove a worktree's entry from ~/.claude.json (story KIT-MCP-H5).
+   *
+   * `seedClaudeMcpApproval` adds `projects[<worktreePath>]` on every session
+   * create and nothing ever removed it, so the user's Claude config grew an
+   * entry per session forever.
+   *
+   * This is the riskiest cleanup in the epic, because the file belongs to the
+   * USER, not to KIT: it holds their Claude history and trust decisions for
+   * every project they have ever opened. Three guards, all load-bearing:
+   *
+   *   1. Only ever called when the worktree directory was ACTUALLY removed.
+   *   2. Only for paths that are demonstrably KIT worktrees, and only when the
+   *      layout resolves with 'exact' confidence. The current layout
+   *      RECONSTRUCTS a repo root from a directory name, so a renamed source
+   *      repo yields a plausible-looking path that is not what it claims —
+   *      never enough to authorise deleting one of the user's entries.
+   *   3. Never the user's own repo path. That entry is theirs.
+   */
+  private async unseedClaudeMcpApproval(worktreePath: string): Promise<void> {
+    if (!worktreePath) return;
+
+    // Guard 2: must be a KIT worktree, resolved exactly.
+    const resolved = resolveRepoRootFromWorktree(worktreePath);
+    if (!resolved) {
+      console.log(
+        `[AgentInstanceService] Not unseeding ~/.claude.json for ${worktreePath}: not a KIT worktree.`
+      );
+      return;
+    }
+    if (resolved.confidence !== 'exact') {
+      // The current layout is always 'derived'. Verify against git before
+      // treating a reconstructed path as authority to delete.
+      let verified = false;
+      try {
+        const out = await execaCmd('git', ['rev-parse', '--git-common-dir'], {
+          cwd: resolved.root,
+        });
+        verified = Boolean(out.stdout.trim());
+      } catch {
+        verified = false;
+      }
+      if (!verified) {
+        console.warn(
+          `[AgentInstanceService] Not unseeding ~/.claude.json for ${worktreePath}: ` +
+            `derived repo root ${resolved.root} could not be verified.`
+        );
+        return;
+      }
+    }
+
+    // Guard 3: never the source repo itself.
+    if (worktreePath === resolved.root) {
+      console.warn(
+        `[AgentInstanceService] Refusing to unseed ~/.claude.json for ${worktreePath}: ` +
+          "that is the user's own repository entry."
+      );
+      return;
+    }
+
+    return claudeConfigMutex.runExclusive(join(homedir(), '.claude.json'), async () => {
+      try {
+        const claudeConfigPath = join(homedir(), '.claude.json');
+        if (!existsSync(claudeConfigPath)) return;
+
+        let config: Record<string, any>;
+        try {
+          config = JSON.parse(await readFile(claudeConfigPath, 'utf-8')) || {};
+        } catch (parseErr) {
+          // Same rule as the seed: never rewrite a file we could not parse.
+          console.warn(
+            `[AgentInstanceService] ~/.claude.json unparseable, skipping unseed: ${parseErr}`
+          );
+          return;
+        }
+
+        if (
+          typeof config.projects !== 'object' ||
+          config.projects === null ||
+          !(worktreePath in config.projects)
+        ) {
+          return;
+        }
+
+        delete config.projects[worktreePath];
+
+        const tmpPath = `${claudeConfigPath}.kit-tmp-${Date.now()}`;
+        await writeFile(tmpPath, JSON.stringify(config, null, 2));
+        const { rename } = await import('fs/promises');
+        await rename(tmpPath, claudeConfigPath);
+        console.log(
+          `[AgentInstanceService] Removed ~/.claude.json entry for ${worktreePath}`
+        );
+      } catch (error) {
+        console.warn(`[AgentInstanceService] Could not unseed ~/.claude.json: ${error}`);
+      }
+    });
   }
 
   /**
@@ -2845,6 +2961,15 @@ ${DEVOPS_KIT_DIR}/
       } catch (err) {
         console.warn(`[AgentInstanceService] Failed to remove worktree: ${err}`);
       }
+
+      // Remove this worktree's entry from the user's ~/.claude.json.
+      //
+      // Only here, inside the `options.deleteWorktree && worktreePath` branch,
+      // because the entry describes a directory — leaving it behind for a
+      // worktree that still exists would break the agent's MCP pre-approval
+      // for a session that is merely closed. Observers never reach this branch
+      // at all; their path belongs to someone else.
+      await this.unseedClaudeMcpApproval(worktreePath);
 
       // Drop this session's crash-recovery snapshot refs.
       //
