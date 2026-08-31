@@ -2562,6 +2562,18 @@ ${DEVOPS_KIT_DIR}/
       } catch (err) {
         console.warn(`[AgentInstanceService] Failed to remove worktree: ${err}`);
       }
+
+      // Prune the worktree registry. Without this, `git worktree list` keeps
+      // reporting the removed entry as prunable, so kit_list_worktrees shows
+      // ghosts to any agent that inspects the repo after a cleanup. Matches
+      // what MergeService already does after its own worktree removal
+      // (MergeService.ts:1416). Separate try/catch so a prune failure cannot
+      // abort the branch deletions below.
+      try {
+        await execaCmd('git', ['worktree', 'prune'], { cwd: repoPath });
+      } catch (err) {
+        console.warn(`[AgentInstanceService] Failed to prune worktrees: ${err}`);
+      }
     }
 
     // 2. Delete local branch

@@ -60,11 +60,30 @@ export interface OrchestratorWatcherService {
     agentType?: AgentType,
     branchName?: string
   ): Promise<IpcResult<void>>;
+  /**
+   * Stops every watcher for a session, including the multi-repo compound keys
+   * `<sessionId>:<repoName>`. Always prefer this over `stop()` — it already
+   * handles the single-key case, so there is no conditional to get wrong.
+   */
+  stopAll(sessionId: string, releaseLocks?: boolean): Promise<IpcResult<void>>;
+}
+
+/** The slice of RebaseWatcherService the orchestrator needs. */
+export interface OrchestratorRebaseWatcherService {
+  stopWatching(sessionId: string): Promise<IpcResult<void>>;
 }
 
 export interface SessionOrchestratorDeps {
   agentInstance: OrchestratorAgentInstanceService;
   watcher: OrchestratorWatcherService;
+  rebaseWatcher: OrchestratorRebaseWatcherService;
+}
+
+/** What a teardown actually managed to do. */
+export interface TeardownActions {
+  watchersStopped: boolean;
+  rebaseWatcherStopped: boolean;
+  errors: Array<{ step: string; message: string }>;
 }
 
 export class SessionOrchestrator {
@@ -110,6 +129,93 @@ export class SessionOrchestrator {
     }
 
     return result;
+  }
+
+  /**
+   * Stop every per-session background resource. Best-effort and idempotent.
+   *
+   * Three leaks are closed by having exactly one implementation of this:
+   *
+   *   - The delete paths called the exact-key `watcher.stop()`, which does not
+   *     match the multi-repo compound keys `<sessionId>:<repoName>`, so an
+   *     N-repo session leaked N-1 chokidar watchers on every close.
+   *     `stopAll` matches both shapes.
+   *   - No delete path stopped `RebaseWatcherService`, so every deleted
+   *     session left a 60-second `setInterval` polling git for the life of the
+   *     process. At fan-out that is the CPU leak that gets noticed first.
+   *   - Doing it in four places meant a fifth caller (the MCP close path) would
+   *     have had to remember all of it.
+   *
+   * Each step is caught individually: a session whose rebase watcher throws
+   * must still get its file watchers stopped. Failures are reported rather
+   * than swallowed, so `kit_close_session` (M2) can tell the calling agent what
+   * actually happened instead of claiming a clean teardown that never was.
+   *
+   * NOTE: file locks are released as a side effect of `watcher.stop()`, but
+   * only when a watcher is actually running — `stop()` returns early at
+   * `WatcherService:383` when the session has none. Releasing locks for a
+   * watcher-less session is leak 8c and belongs to H6, not here.
+   */
+  async teardownSession(sessionId: string): Promise<TeardownActions> {
+    const actions: TeardownActions = {
+      watchersStopped: false,
+      rebaseWatcherStopped: false,
+      errors: [],
+    };
+
+    const step = async (
+      name: string,
+      run: () => Promise<IpcResult<void>>
+    ): Promise<boolean> => {
+      try {
+        const result = await run();
+        // The services wrap everything and return IpcResult rather than
+        // throwing, so a falsy `success` is the common failure shape.
+        if (result && result.success === false) {
+          actions.errors.push({
+            step: name,
+            message: result.error?.message ?? 'unknown error',
+          });
+          return false;
+        }
+        return true;
+      } catch (err) {
+        actions.errors.push({
+          step: name,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return false;
+      }
+    };
+
+    actions.watchersStopped = await step('watchers', () =>
+      this.deps.watcher.stopAll(sessionId)
+    );
+    actions.rebaseWatcherStopped = await step('rebaseWatcher', () =>
+      this.deps.rebaseWatcher.stopWatching(sessionId)
+    );
+
+    return actions;
+  }
+
+  /**
+   * Map an instance id OR a session id to the session id.
+   *
+   * `IPC.INSTANCE_DELETE` receives an `instanceId` and passed it straight to
+   * `watcher.stop()`, but watchers are keyed by `sessionId` and the two id
+   * spaces can never collide (`inst_…` vs `sess_…`,
+   * `AgentInstanceService:590-591`). That call has therefore always matched
+   * nothing, and every session deleted by instance id leaked its watcher.
+   *
+   * Returns `undefined` when the id matches no live instance, so callers can
+   * distinguish "nothing to tear down" from "tear down the wrong thing".
+   */
+  resolveSessionId(instanceOrSessionId: string): string | undefined {
+    const match = this.listSessions().find(
+      (inst) =>
+        inst.id === instanceOrSessionId || inst.sessionId === instanceOrSessionId
+    );
+    return match?.sessionId;
   }
 
   /** Every live instance. Empty when the underlying service reports failure. */

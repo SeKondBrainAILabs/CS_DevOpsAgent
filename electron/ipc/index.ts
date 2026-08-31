@@ -436,14 +436,19 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
   });
 
   ipcMain.handle(IPC.INSTANCE_DELETE, async (_, instanceId: string) => {
-    // Stop watcher before deleting
-    await services.watcher.stop(instanceId).catch(() => {});
+    // NOTE: this handler receives an INSTANCE id, but watchers are keyed by
+    // SESSION id and the two id spaces never collide (`inst_…` vs `sess_…`).
+    // The previous `watcher.stop(instanceId)` therefore always matched
+    // nothing, and every session deleted this way leaked its watcher.
+    const sessionId = services.sessionOrchestrator.resolveSessionId(instanceId);
+    if (sessionId) {
+      await services.sessionOrchestrator.teardownSession(sessionId);
+    }
     return await services.agentInstance.deleteInstance(instanceId);
   });
 
   ipcMain.handle(IPC.INSTANCE_DELETE_SESSION, async (_, sessionId: string, repoPath?: string) => {
-    // Stop watcher before deleting
-    await services.watcher.stop(sessionId).catch(() => {});
+    await services.sessionOrchestrator.teardownSession(sessionId);
     return await services.agentInstance.deleteSessionById(sessionId, repoPath);
   });
 
@@ -465,8 +470,7 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     },
     hints?: { repoPath?: string; branchName?: string; worktreePath?: string }
   ) => {
-    // Stop watcher before deleting
-    await services.watcher.stop(sessionId).catch(() => {});
+    await services.sessionOrchestrator.teardownSession(sessionId);
     return await services.agentInstance.deleteInstanceWithCleanup(sessionId, options, hints);
   });
 
@@ -493,8 +497,10 @@ export function registerIpcHandlers(services: Services, mainWindow: BrowserWindo
     // Until M5 lands, this is the only place other than the orchestrator and
     // the startup rehydration loop that starts a watcher.
 
-    // Stop old watcher
-    await services.watcher.stop(sessionId).catch(() => {});
+    // Tear down the outgoing session's background resources. Note this stops
+    // the rebase watcher too, which the old inline `watcher.stop()` did not —
+    // a restarted session used to leave its previous rebase interval running.
+    await services.sessionOrchestrator.teardownSession(sessionId);
 
     const result = await services.agentInstance.restartInstance(sessionId, sessionData, commitChanges);
 

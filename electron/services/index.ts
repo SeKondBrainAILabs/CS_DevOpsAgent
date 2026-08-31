@@ -147,12 +147,6 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
   // For creating new agent instances from Kanvas dashboard
   const agentInstance = new AgentInstanceService();
 
-  // Single funnel for session lifecycle. Both the IPC layer and the MCP tool
-  // layer go through this so neither reimplements the compose step —
-  // createInstance() does not start the file watcher, and three separate IPC
-  // sites did it inline. See SessionOrchestrator's header.
-  const sessionOrchestrator = new SessionOrchestrator({ agentInstance, watcher });
-
   // Initialize Session Recovery service
   // For recovering orphaned sessions from repository .kanvas directories
   const sessionRecovery = new SessionRecoveryService();
@@ -184,6 +178,18 @@ export async function initializeServices(mainWindow: BrowserWindow): Promise<Ser
 
   // Connect rebaseWatcher to watcher for post-commit rebase
   watcher.setRebaseWatcher(rebaseWatcher);
+
+  // Single funnel for session lifecycle. Both the IPC layer and the MCP tool
+  // layer go through this so neither reimplements the compose step —
+  // createInstance() does not start the file watcher, and the delete paths
+  // each tore down a different subset of a session's background resources.
+  // Constructed here rather than beside agentInstance because it composes
+  // rebaseWatcher, which is created above. See SessionOrchestrator's header.
+  const sessionOrchestrator = new SessionOrchestrator({
+    agentInstance,
+    watcher,
+    rebaseWatcher,
+  });
 
   // Connect terminalLog to watcher for terminal view logging
   watcher.setTerminalLogService(terminalLog);

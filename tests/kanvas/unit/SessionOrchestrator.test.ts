@@ -60,12 +60,18 @@ function makeDeps(over: {
   createInstance?: (c: AgentInstanceConfig) => Promise<IpcResult<AgentInstance>>;
   instances?: AgentInstance[];
   startWithPath?: (...a: unknown[]) => Promise<IpcResult<void>>;
+  stopAll?: (...a: unknown[]) => Promise<IpcResult<void>>;
+  stopWatching?: (...a: unknown[]) => Promise<IpcResult<void>>;
 } = {}) {
   const createInstance = jest.fn(
     over.createInstance ?? (async () => ok(instance()))
   ) as any;
   const startWithPath = jest.fn(
     over.startWithPath ?? (async () => ({ success: true }))
+  ) as any;
+  const stopAll = jest.fn(over.stopAll ?? (async () => ({ success: true }))) as any;
+  const stopWatching = jest.fn(
+    over.stopWatching ?? (async () => ({ success: true }))
   ) as any;
   const listInstances = jest.fn(() => ({
     success: true,
@@ -75,10 +81,13 @@ function makeDeps(over: {
   return {
     deps: {
       agentInstance: { createInstance, listInstances },
-      watcher: { startWithPath },
+      watcher: { startWithPath, stopAll },
+      rebaseWatcher: { stopWatching },
     },
     createInstance,
     startWithPath,
+    stopAll,
+    stopWatching,
     listInstances,
   };
 }
@@ -293,5 +302,157 @@ describe('SessionOrchestrator.listSessions', () => {
       watcher: { startWithPath: jest.fn() as any },
     };
     expect(new SessionOrchestrator(deps).listSessions()).toEqual([]);
+  });
+});
+
+// ─── teardownSession ─────────────────────────────────────────────────────────
+describe('SessionOrchestrator.teardownSession', () => {
+  it('uses stopAll, not stop — only stopAll matches multi-repo compound keys', async () => {
+    // Multi-repo watchers are keyed `<sessionId>:<repoName>` (WatcherService:449).
+    // The delete paths called the exact-key stop(), so a 3-repo session leaked
+    // 2 chokidar watchers on every close. stopAll (:462) already handles the
+    // single-key case too, so there is no conditional to get wrong.
+    const { deps, stopAll } = makeDeps();
+
+    await new SessionOrchestrator(deps).teardownSession('sess_1');
+
+    expect(stopAll).toHaveBeenCalledTimes(1);
+    expect(stopAll).toHaveBeenCalledWith('sess_1');
+  });
+
+  it('stops the rebase watcher — no delete path did this before', async () => {
+    // Leak 2: stopWatching was only ever called from the IPC stop handler, so
+    // every deleted session left a 60s setInterval polling git forever.
+    const { deps, stopWatching } = makeDeps();
+
+    await new SessionOrchestrator(deps).teardownSession('sess_1');
+
+    expect(stopWatching).toHaveBeenCalledTimes(1);
+    expect(stopWatching).toHaveBeenCalledWith('sess_1');
+  });
+
+  it('reports what it actually did', async () => {
+    const { deps } = makeDeps();
+    const actions = await new SessionOrchestrator(deps).teardownSession('sess_1');
+
+    expect(actions.watchersStopped).toBe(true);
+    expect(actions.rebaseWatcherStopped).toBe(true);
+    expect(actions.errors).toEqual([]);
+  });
+
+  describe('best-effort: one failing step must not abort the others', () => {
+    it('still stops the rebase watcher when stopAll throws', async () => {
+      const { deps, stopWatching } = makeDeps({
+        stopAll: async () => {
+          throw new Error('chokidar close failed');
+        },
+      });
+
+      const actions = await new SessionOrchestrator(deps).teardownSession('sess_1');
+
+      expect(stopWatching).toHaveBeenCalledWith('sess_1');
+      expect(actions.watchersStopped).toBe(false);
+      expect(actions.rebaseWatcherStopped).toBe(true);
+    });
+
+    it('still stops watchers when the rebase watcher throws', async () => {
+      const { deps, stopAll } = makeDeps({
+        stopWatching: async () => {
+          throw new Error('interval clear failed');
+        },
+      });
+
+      const actions = await new SessionOrchestrator(deps).teardownSession('sess_1');
+
+      expect(stopAll).toHaveBeenCalledWith('sess_1');
+      expect(actions.watchersStopped).toBe(true);
+      expect(actions.rebaseWatcherStopped).toBe(false);
+    });
+
+    it('never rejects, even when every step fails', async () => {
+      const boom = async () => {
+        throw new Error('boom');
+      };
+      const { deps } = makeDeps({ stopAll: boom, stopWatching: boom });
+
+      await expect(
+        new SessionOrchestrator(deps).teardownSession('sess_1')
+      ).resolves.toBeDefined();
+    });
+
+    it('records each failure rather than swallowing it silently', async () => {
+      // M2's kit_close_session reports an `actions` block to the calling agent.
+      // Silent swallowing would let it claim a clean teardown that never happened.
+      const { deps } = makeDeps({
+        stopAll: async () => {
+          throw new Error('chokidar close failed');
+        },
+      });
+
+      const actions = await new SessionOrchestrator(deps).teardownSession('sess_1');
+
+      expect(actions.errors).toHaveLength(1);
+      expect(actions.errors[0].step).toBe('watchers');
+      expect(actions.errors[0].message).toMatch(/chokidar close failed/);
+    });
+
+    it('treats a failure result (not a throw) as a failed step', async () => {
+      // The underlying services wrap everything and return IpcResult rather
+      // than throwing, so a rejected promise is the rarer path.
+      const { deps } = makeDeps({
+        stopWatching: async () => ({
+          success: false,
+          error: { code: 'REBASE_WATCH_STOP_FAILED', message: 'nope' },
+        }),
+      });
+
+      const actions = await new SessionOrchestrator(deps).teardownSession('sess_1');
+
+      expect(actions.rebaseWatcherStopped).toBe(false);
+      expect(actions.errors.some((e) => e.step === 'rebaseWatcher')).toBe(true);
+    });
+  });
+
+  it('is a no-op success for a session that was never started', async () => {
+    const { deps } = makeDeps();
+    const actions = await new SessionOrchestrator(deps).teardownSession('sess_never');
+    expect(actions.errors).toEqual([]);
+  });
+
+  it('is idempotent — a second teardown is safe', async () => {
+    const { deps, stopAll, stopWatching } = makeDeps();
+    const orch = new SessionOrchestrator(deps);
+
+    await orch.teardownSession('sess_1');
+    const second = await orch.teardownSession('sess_1');
+
+    expect(stopAll).toHaveBeenCalledTimes(2);
+    expect(stopWatching).toHaveBeenCalledTimes(2);
+    expect(second.errors).toEqual([]);
+  });
+});
+
+// ─── resolveSessionId ────────────────────────────────────────────────────────
+describe('SessionOrchestrator.resolveSessionId', () => {
+  // Regression guard for a latent bug: IPC.INSTANCE_DELETE passed an
+  // instanceId to watcher.stop, but watchers key on sessionId. The id spaces
+  // can never collide (`inst_…` vs `sess_…`, AgentInstanceService:590-591), so
+  // that call has always matched nothing and every deleted-by-instance session
+  // leaked its watcher.
+  const inst = instance({ id: 'inst_abc', sessionId: 'sess_abc' });
+
+  it('maps an instanceId to its sessionId', () => {
+    const { deps } = makeDeps({ instances: [inst] });
+    expect(new SessionOrchestrator(deps).resolveSessionId('inst_abc')).toBe('sess_abc');
+  });
+
+  it('passes a sessionId through unchanged', () => {
+    const { deps } = makeDeps({ instances: [inst] });
+    expect(new SessionOrchestrator(deps).resolveSessionId('sess_abc')).toBe('sess_abc');
+  });
+
+  it('returns undefined for an id it cannot place', () => {
+    const { deps } = makeDeps({ instances: [inst] });
+    expect(new SessionOrchestrator(deps).resolveSessionId('inst_gone')).toBeUndefined();
   });
 });
